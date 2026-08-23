@@ -121,48 +121,66 @@ class SearchIndex {
             if (loaded.length === 0 || !this.fuse) return [];
         }
 
-        // Clean query
         const raw = query.trim();
+        if (!raw) return [];
         const q = raw.toUpperCase();
         const qDigits = raw.replace(/\D/g, '');
         const qDigitsNoLead = qDigits ? this.stripLeadingZeros(qDigits) : '';
-        if (!q) return [];
-
         const max = Math.max(1, Math.min(20, limit));
-        const byTickerExact = this.data!.filter((item) => item.ticker.toUpperCase() === q);
-        const byTickerPrefix = this.data!.filter((item) => item.ticker.toUpperCase().startsWith(q) && item.ticker.toUpperCase() !== q);
-        const byCikExact = qDigits
-            ? this.data!.filter((item) => {
-                const cik = this.formatCik(item.cik_str);
-                return cik === qDigits || this.stripLeadingZeros(cik) === qDigitsNoLead;
-            })
-            : [];
-        const byCikPrefix = qDigits
-            ? this.data!.filter((item) => {
-                const cik = this.formatCik(item.cik_str);
-                if (cik === qDigits || this.stripLeadingZeros(cik) === qDigitsNoLead) return false;
-                return cik.startsWith(qDigits) || this.stripLeadingZeros(cik).startsWith(qDigitsNoLead);
-            })
-            : [];
-        const byNamePrefix = this.data!.filter(
-            (item) =>
-                !item.ticker.toUpperCase().startsWith(q) &&
-                item.title.toUpperCase().startsWith(q)
-        );
-        const byNameContains = this.data!.filter(
-            (item) =>
-                !item.title.toUpperCase().startsWith(q) &&
-                item.title.toUpperCase().includes(q)
-        );
-        const fuzzy = this.fuse.search(q, { limit: max * 3 }).map((r) => r.item);
+
+        // Single-pass bucket sort: O(n) instead of 7×O(n) filters
+        const buckets: { tickerExact: TickerResult[]; cikExact: TickerResult[]; tickerPrefix: TickerResult[]; cikPrefix: TickerResult[]; namePrefix: TickerResult[]; nameContains: TickerResult[] } = {
+            tickerExact: [],
+            cikExact: [],
+            tickerPrefix: [],
+            cikPrefix: [],
+            namePrefix: [],
+            nameContains: [],
+        };
+
+        const hasDigits = Boolean(qDigits);
+        for (const item of this.data!) {
+            const tu = item.ticker.toUpperCase();
+            const titleUp = item.title.toUpperCase();
+            const cik = this.formatCik(item.cik_str);
+            const cikNoLead = this.stripLeadingZeros(cik);
+
+            if (tu === q) {
+                buckets.tickerExact.push(item);
+                continue;
+            }
+            if (hasDigits && (cik === qDigits || cikNoLead === qDigitsNoLead)) {
+                buckets.cikExact.push(item);
+                continue;
+            }
+            if (tu.startsWith(q)) {
+                buckets.tickerPrefix.push(item);
+                continue;
+            }
+            if (hasDigits && (cik.startsWith(qDigits) || cikNoLead.startsWith(qDigitsNoLead))) {
+                buckets.cikPrefix.push(item);
+                continue;
+            }
+            if (titleUp.startsWith(q)) {
+                buckets.namePrefix.push(item);
+                continue;
+            }
+            if (titleUp.includes(q)) {
+                buckets.nameContains.push(item);
+            }
+        }
+
+        // Cap total candidates before fuse to keep it fast; if we already have enough exact/prefix hits, skip fuzzy
+        const preFuseCount = buckets.tickerExact.length + buckets.cikExact.length + buckets.tickerPrefix.length + buckets.cikPrefix.length + buckets.namePrefix.length;
+        const fuzzy: TickerResult[] = preFuseCount >= max ? [] : this.fuse.search(q, { limit: max * 3 }).map((r) => r.item);
 
         const merged = [
-            ...byTickerExact,
-            ...byCikExact,
-            ...byTickerPrefix,
-            ...byCikPrefix,
-            ...byNamePrefix,
-            ...byNameContains,
+            ...buckets.tickerExact,
+            ...buckets.cikExact,
+            ...buckets.tickerPrefix,
+            ...buckets.cikPrefix,
+            ...buckets.namePrefix,
+            ...buckets.nameContains,
             ...fuzzy,
         ];
         const seen = new Set<string>();

@@ -407,8 +407,8 @@ async function fetchMarketDataInternal(ticker: string, isDeep = true): Promise<M
               beta: val(result.defaultKeyStatistics?.beta),
               trailingPE: val(result.defaultKeyStatistics?.trailingPE),
               dividendYield: val(result.defaultKeyStatistics?.dividendYield),
-              fiftyTwoWeekHigh: val(p.regularMarketDayHigh), // Use daily high as fallback if 52w missing
-              fiftyTwoWeekLow: val(p.regularMarketDayLow),
+              fiftyTwoWeekHigh: val(p.fiftyTwoWeekHigh) ?? val(p.regularMarketDayHigh),
+              fiftyTwoWeekLow: val(p.fiftyTwoWeekLow) ?? val(p.regularMarketDayLow),
             } as YahooQuote;
 
             // Success - break loop

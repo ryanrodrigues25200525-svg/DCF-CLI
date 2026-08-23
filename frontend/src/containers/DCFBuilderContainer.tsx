@@ -3,7 +3,21 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useDCFModel } from '@/hooks/useDCFModel';
 import { ValuationDashboard } from '@/components/features/valuation/ValuationDashboard';
+import { OfflineBadge } from '@/components/ui/OfflineBadge';
 import { buildExportPayload } from '@/services/exporters/excel';
+
+/** Scenario cycle order for keyboard shortcut toggling */
+const SCENARIO_CYCLE: Array<'base' | 'conservative' | 'aggressive'> = ['base', 'conservative', 'aggressive'];
+
+/** Returns true when the user is actively typing in an input field */
+function isTypingElement(e: Event): boolean {
+    const target = e.target as HTMLElement;
+    if (!target) return false;
+    const tag = target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+    if (target.isContentEditable) return true;
+    return false;
+}
 
 function readRouteParams() {
     if (typeof window === 'undefined') {
@@ -180,10 +194,22 @@ export function DCFBuilderContainer() {
         const handleKeyDown = (e: KeyboardEvent) => {
             const isCmdOrCtrl = e.metaKey || e.ctrlKey;
 
+            // Cmd/Ctrl + K → Focus Search Bar
+            if (isCmdOrCtrl && e.key === 'k' && !e.shiftKey) {
+                e.preventDefault();
+                const searchInput = document.getElementById('dcf-search-input');
+                if (searchInput) {
+                    searchInput.focus();
+                    (searchInput as HTMLInputElement).select();
+                }
+                return;
+            }
+
             // Cmd/Ctrl + E → Export Excel
             if (isCmdOrCtrl && e.key === 'e' && !e.shiftKey) {
                 e.preventDefault();
                 handleExcelExport();
+                return;
             }
 
             // Cmd/Ctrl + R → Reset assumptions
@@ -191,18 +217,41 @@ export function DCFBuilderContainer() {
                 e.preventDefault();
                 actions.resetToDefaults();
                 setToast({ msg: 'Assumptions reset to defaults', type: 'success' });
+                return;
             }
 
             // Cmd/Ctrl + D → Toggle Dark Mode
             if (isCmdOrCtrl && e.key === 'd' && !e.shiftKey) {
                 e.preventDefault();
                 toggleDarkMode();
+                return;
+            }
+
+            // Skip single-key shortcuts when typing in a text field
+            if (isTypingElement(e)) return;
+
+            // / → Cycle scenario: base → conservative → aggressive → base
+            if (e.key === '/') {
+                e.preventDefault();
+                const currentIdx = SCENARIO_CYCLE.indexOf(state.activeScenario);
+                const nextIdx = (currentIdx + 1) % SCENARIO_CYCLE.length;
+                const nextScenario = SCENARIO_CYCLE[nextIdx];
+                actions.applyScenario(nextScenario);
+                setToast({ msg: `Scenario: ${nextScenario}`, type: 'success' });
+                return;
+            }
+
+            // E → Trigger Excel Export
+            if (e.key === 'e' && !e.shiftKey) {
+                e.preventDefault();
+                handleExcelExport();
+                return;
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleExcelExport, actions, toggleDarkMode]);
+    }, [handleExcelExport, actions, toggleDarkMode, state.activeScenario]);
 
     // Handle search submission
     const handleSearch = useCallback((ticker: string) => {
@@ -259,6 +308,7 @@ export function DCFBuilderContainer() {
     };
 
     return (
+        <>
         <ValuationDashboard
             state={state}
             actions={dashboardActions}
@@ -278,5 +328,7 @@ export function DCFBuilderContainer() {
              initialView={initialView}
              onViewChange={handleViewChange}
         />
+        <OfflineBadge />
+        </>
     );
 }

@@ -42,10 +42,16 @@ export function useValuationAssumptions(companyData: UnifiedResponse | null, cur
     const initialPeerMedian = useMemo(() => calculatePeerMedian(companyData?.peers || [], 100), [companyData?.peers]);
 
     useEffect(() => {
-        if (!companyData || !currentTicker) return;
+        if (!companyData || !currentTicker) {
+            initializedTickerRef.current = null;
+            return;
+        }
 
         const loadedTicker = companyData.profile?.ticker?.trim().toUpperCase() || null;
-        if (!loadedTicker || loadedTicker !== currentTicker) return;
+        if (!loadedTicker || loadedTicker !== currentTicker) {
+            initializedTickerRef.current = null;
+            return;
+        }
         if (initializedTickerRef.current === loadedTicker) return;
 
         initializedTickerRef.current = loadedTicker;
@@ -224,6 +230,7 @@ export function useValuationAssumptions(companyData: UnifiedResponse | null, cur
         company,
         historicals,
         financialsNative,
+        modelEligibility: companyData?.modelEligibility,
         assumptions,
         overrides,
         comparableCompanies,

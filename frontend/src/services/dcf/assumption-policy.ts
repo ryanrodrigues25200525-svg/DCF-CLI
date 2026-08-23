@@ -140,7 +140,7 @@ export function normalizeAssumptions(
     return reconcileDiscountRates(next, historicals);
 }
 
-export function applyDetectedTemplate(base: Assumptions, profile?: Pick<CompanyProfile, 'ticker' | 'sector' | 'industry'> | null): Assumptions {
+function applyDetectedTemplate(base: Assumptions, profile?: Pick<CompanyProfile, 'ticker' | 'sector' | 'industry'> | null): Assumptions {
     const templateKey = detectIndustryTemplate(profile?.ticker, profile?.sector, profile?.industry);
     return applyIndustryTemplateAssumptions(base, templateKey);
 }

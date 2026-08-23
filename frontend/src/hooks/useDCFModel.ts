@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { calculateDCF } from '@/services/dcf/engine';
+import { calculateRoutedValuation } from '@/services/valuation/router';
 import { useCompanyWorkspace } from '@/hooks/dcf/useCompanyWorkspace';
 import { useValuationAssumptions } from '@/hooks/dcf/useValuationAssumptions';
 import { useScenarioControls } from '@/hooks/dcf/useScenarioControls';
@@ -19,8 +19,8 @@ export function useDCFModel() {
 
     const results = useMemo(() => {
         if (!valuation.historicals || !valuation.assumptions) return null;
-        return calculateDCF(valuation.historicals, valuation.assumptions, valuation.overrides);
-    }, [valuation.historicals, valuation.assumptions, valuation.overrides]);
+        return calculateRoutedValuation(valuation.historicals, valuation.assumptions, valuation.overrides, valuation.company, valuation.modelEligibility);
+    }, [valuation.historicals, valuation.assumptions, valuation.overrides, valuation.company, valuation.modelEligibility]);
 
     const diagnostics = useDiagnostics(valuation.assumptions, results, valuation.historicals);
 
@@ -39,6 +39,7 @@ export function useDCFModel() {
             company: valuation.company,
             historicals: valuation.historicals,
             financialsNative: valuation.financialsNative,
+            modelEligibility: valuation.modelEligibility,
             valuationContext: workspace.companyData?.valuationContext ?? null,
             dataQuality: workspace.companyData?.dataQuality ?? null,
             completeness: workspace.companyData?.completeness ?? null,

@@ -1,20 +1,22 @@
 from __future__ import annotations
-from __future__ import annotations
-from __future__ import annotations
+
 import re
-from copy import copy, deepcopy
+from copy import deepcopy
 from functools import lru_cache
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
+
 from defusedxml import ElementTree as ET
 from lxml import etree as LET
-from openpyxl import load_workbook
+
 from app.services.excel_export.mappers import (
-    SHEET_COVER, SHEET_DCF_BASE, SHEET_DCF_BULL, SHEET_DCF_BEAR,
-    SHEET_COMPS, SHEET_OUTPUTS, SHEET_OUTPUTS_LEGACY,
-    SHEET_DATA_RECALCULATED, SHEET_DATA_ORIGINAL, SHEET_WACC
+    SHEET_DCF_BASE,
+    SHEET_DCF_BEAR,
+    SHEET_DCF_BULL,
+    SHEET_OUTPUTS,
+    SHEET_OUTPUTS_LEGACY,
 )
-from app.services.excel_export.template import load_template_artifact
+
 from .xml_utils import _sheet_name_by_path, _template_cell_styles_by_sheet
 
 _TEMPLATE_SHEET_NAME_ALIASES = {

@@ -35,12 +35,12 @@ fi
 # Check if backend virtual environment exists
 echo ""
 echo "Checking Python virtual environment..."
-if [ -d "backend/venv" ]; then
+if [ -d "backend/.venv" ]; then
     echo -e "${GREEN}✓${NC} Virtual environment exists"
 else
     echo -e "${YELLOW}⚠${NC} Virtual environment not found. Creating..."
     cd backend
-    python3 -m venv venv
+    python3 -m venv .venv
     cd ..
     echo -e "${GREEN}✓${NC} Virtual environment created"
 fi
@@ -49,7 +49,7 @@ fi
 echo ""
 echo "Checking Python dependencies..."
 cd backend
-source venv/bin/activate
+source .venv/bin/activate
 if pip show edgartools &> /dev/null; then
     echo -e "${GREEN}✓${NC} edgartools installed"
 else
@@ -78,7 +78,7 @@ if curl -s http://localhost:8000/health > /dev/null; then
 else
     echo -e "${YELLOW}⚠${NC} Python SEC service is not running"
     echo "   To start it, run:"
-    echo "   cd backend && source venv/bin/activate && uvicorn main:app --reload"
+    echo "   cd backend && source .venv/bin/activate && uvicorn main:app --reload"
 fi
 
 # Test DCF Builder
@@ -101,7 +101,7 @@ echo ""
 echo "Quick start commands:"
 echo ""
 echo "Terminal 1 (Python SEC Service):"
-echo "  cd backend && source venv/bin/activate && uvicorn main:app --reload"
+echo "  cd backend && source .venv/bin/activate && uvicorn main:app --reload"
 echo ""
 echo "Terminal 2 (DCF Builder):"
 echo "  export NEXT_PUBLIC_SEC_SERVICE_URL=http://localhost:8000"

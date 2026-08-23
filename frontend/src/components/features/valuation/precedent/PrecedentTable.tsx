@@ -5,14 +5,12 @@ import { motion } from 'framer-motion';
 import { formatDate, formatMoney, formatMult, formatPct } from './utils';
 
 interface PrecedentTableProps {
-    isDarkMode: boolean;
     transactions: PrecedentTransaction[];
     onToggle: (id: string) => void;
     onDelete: (id: string) => void;
 }
 
 export const PrecedentTable = ({
-    isDarkMode,
     transactions,
     onToggle,
     onDelete,

@@ -40,6 +40,7 @@ export interface NativeFinancialsPayload {
     key_metrics: NativeKeyMetrics;
     shares_outstanding?: number | null;
     public_float?: number | null;
+    is_financial_institution?: boolean | null;
     fiscal_year_end?: string | null;
     fetched_at_ms: number;
 }
@@ -102,6 +103,14 @@ export interface NativeValuationContextPayload {
 export interface NativeUnifiedPayload {
     profile: NativeProfilePayload;
     financials_native: NativeFinancialsPayload;
+    canonical_financials?: Record<string, unknown>;
+    model_eligibility?: {
+        company_type?: string;
+        preferred_model?: string;
+        allowed_models?: string[];
+        blocked_models?: Array<{ model?: string; reason?: string }>;
+        supported_by_current_engine?: boolean;
+    };
     market?: Record<string, unknown>;
     market_context?: NativeMarketContextPayload;
     valuation_context?: NativeValuationContextPayload;

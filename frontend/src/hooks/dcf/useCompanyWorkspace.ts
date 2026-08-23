@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useCompanyData } from '@/hooks/useCompanyData';
 
 export function useCompanyWorkspace() {
@@ -9,15 +9,15 @@ export function useCompanyWorkspace() {
     const error = companyQuery.error && !hasUsableCompanyData ? (companyQuery.error as Error).message : null;
     const isRefreshingCompany = Boolean((companyQuery.isRefreshing || companyQuery.isFetching) && hasUsableCompanyData);
 
-    const loadCompany = (ticker: string) => {
+    const loadCompany = useCallback((ticker: string) => {
         const normalizedTicker = ticker.trim().toUpperCase();
         if (!normalizedTicker) return;
         setCurrentTicker((prev) => (prev === normalizedTicker ? prev : normalizedTicker));
-    };
+    }, []);
 
-    const clearCompany = () => {
+    const clearCompany = useCallback(() => {
         setCurrentTicker(null);
-    };
+    }, []);
 
     return {
         currentTicker,

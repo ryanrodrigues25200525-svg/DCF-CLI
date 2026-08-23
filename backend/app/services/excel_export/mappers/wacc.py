@@ -1,12 +1,22 @@
 from __future__ import annotations
+
 from copy import copy
 from typing import Any
+
 from openpyxl.worksheet.worksheet import Worksheet
+
 from .utils import (
-    _to_float, _force_set, _safe_set_or_clear, _safe_set, _scale, SHEET_WACC,
-    _scenario_assumption_value, SCENARIO_BASE, SCENARIO_BULL, SCENARIO_BEAR,
-    resolve_wacc_loop_mode, WACC_LOOP_MODE_ITERATIVE, DCF_HELPER_DEBT_CELL
+    DCF_HELPER_DEBT_CELL,
+    SCENARIO_BEAR,
+    SCENARIO_BULL,
+    WACC_LOOP_MODE_ITERATIVE,
+    _force_set,
+    _safe_set,
+    _scenario_assumption_value,
+    _to_float,
+    resolve_wacc_loop_mode,
 )
+
 
 def _map_wacc_inputs(wacc: Worksheet, payload: dict[str, Any]) -> None:
     assumptions = payload.get("assumptions", {})

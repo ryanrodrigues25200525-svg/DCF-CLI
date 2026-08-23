@@ -1,5 +1,4 @@
 from __future__ import annotations
-from __future__ import annotations
 
 import asyncio
 import re
@@ -164,26 +163,20 @@ def _normalize_peer(comp: dict[str, Any]) -> dict[str, Any] | None:
     if beta is None or beta <= 0:
         beta = 1.0
 
-    if not (
-        price and price > 0
-        and shares and shares > 0
-        and ev and ev > 0
-        and ebitda and ebitda > 0
-        and revenue and revenue > 0
-    ):
+    if not ticker:
         return None
 
     normalized = {
         "company": company,
         "ticker": ticker,
-        "price": price,
-        "sharesOutstanding": shares,
+        "price": price if price is not None and price > 0 else None,
+        "sharesOutstanding": shares if shares is not None and shares > 0 else None,
         "beta": beta,
-        "ev": ev,
+        "ev": ev if ev is not None and ev > 0 else None,
         "debtToEquity": de_ratio if de_ratio is not None and de_ratio >= 0 else 0.0,
         "ebitda": ebitda,
         "revenue": revenue,
-        "marketCap": market_cap if market_cap is not None and market_cap > 0 else shares * price,
+        "marketCap": market_cap if market_cap is not None and market_cap > 0 else (shares * price if (shares and price) else None),
         "totalDebt": total_debt if total_debt is not None and total_debt >= 0 else None,
         "cash": cash if cash is not None and cash >= 0 else None,
     }

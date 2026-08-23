@@ -141,6 +141,21 @@ describe('DCF Engine Validation', () => {
         expect(resultGap.terminalValueGordon).toBeGreaterThan(0);
     });
 
+    it('uses current EBIT margin when advanced steady-state margin is stale or invalid', () => {
+        const staleAdvancedAssumptions: Assumptions = {
+            ...mockAssumptions,
+            advancedMode: true,
+            ebitMargin: 0.2,
+            ebitMarginSteadyState: -0.05,
+            ebitMarginConvergenceYears: 5,
+        };
+
+        const result = calculateDCF(mockHistoricals, staleAdvancedAssumptions, overrides);
+
+        expect(result.forecasts[0].ebitMargin).toBeGreaterThan(0);
+        expect(result.impliedSharePrice).toBeGreaterThan(0);
+    });
+
     it('should maintain balance sheet equilibrium', () => {
         const result = calculateDCF(mockHistoricals, mockAssumptions, overrides);
         const f1 = result.forecasts[0];

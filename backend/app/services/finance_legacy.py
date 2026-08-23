@@ -451,7 +451,7 @@ async def fetch_market_data(ticker: str) -> Dict[str, Any]:
 async def _fetch_and_cache_market_data(normalized_ticker: str, cache_key: str) -> Dict[str, Any]:
     stockdex_result = _derive_market_fields(await StockdexService.fetch_market_data(normalized_ticker) or {})
     now_ms = int(time.time() * 1000)
-    
+
     if _has_usable_market_snapshot(stockdex_result):
         stockdex_result["fetched_at_ms"] = now_ms
         await cache.set_to_cache(cache_key, stockdex_result, ttl_seconds=MARKET_TTL_SECONDS)
@@ -459,7 +459,7 @@ async def _fetch_and_cache_market_data(normalized_ticker: str, cache_key: str) -
 
     logger.info("Stockdex market snapshot incomplete for %s, falling back to Yahoo Finance", normalized_ticker)
     ticker_obj = yf.Ticker(normalized_ticker)
-    
+
     # Fetch info and fast_info in parallel to maximize chance of getting price/mcap quickly
     async def get_info():
         try:
@@ -477,11 +477,11 @@ async def _fetch_and_cache_market_data(normalized_ticker: str, cache_key: str) -
 
     info_task = asyncio.create_task(get_info())
     fast_info_task = asyncio.create_task(get_fast_info())
-    
+
     info, fast_info = await asyncio.gather(info_task, fast_info_task)
 
     yahoo_result: Dict[str, Any] = {}
-    
+
     # 1. Try to build from info (most complete metadata)
     if info:
         yahoo_result = _derive_market_fields(

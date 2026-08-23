@@ -75,19 +75,22 @@ export async function POST(request: NextRequest) {
 
         if (!backendResponse.ok) {
             let errorMessage = 'Failed to generate Excel file';
-            try {
-                const maybeJson = await backendResponse.json() as { error?: { message?: string } | string; message?: string };
-                if (typeof maybeJson.error === 'string') {
-                    errorMessage = maybeJson.error;
-                } else if (maybeJson.error && typeof maybeJson.error === 'object' && typeof maybeJson.error.message === 'string') {
-                    errorMessage = maybeJson.error.message;
-                } else if (typeof maybeJson.message === 'string') {
-                    errorMessage = maybeJson.message;
-                }
-            } catch {
-                const fallbackText = await backendResponse.text();
-                if (fallbackText.trim()) {
-                    errorMessage = fallbackText;
+            // Read as text first to avoid consuming body twice
+            const rawBody = await backendResponse.text();
+            if (rawBody.trim()) {
+                try {
+                    const maybeJson = JSON.parse(rawBody) as { error?: { message?: string } | string; message?: string };
+                    if (typeof maybeJson.error === 'string') {
+                        errorMessage = maybeJson.error;
+                    } else if (maybeJson.error && typeof maybeJson.error === 'object' && typeof maybeJson.error.message === 'string') {
+                        errorMessage = maybeJson.error.message;
+                    } else if (typeof maybeJson.message === 'string') {
+                        errorMessage = maybeJson.message;
+                    } else {
+                        errorMessage = rawBody.slice(0, 500);
+                    }
+                } catch {
+                    errorMessage = rawBody.slice(0, 500);
                 }
             }
 

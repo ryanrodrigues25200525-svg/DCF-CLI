@@ -1,23 +1,39 @@
 from __future__ import annotations
+
 from copy import copy
 from typing import Any
+
 from openpyxl.cell.cell import MergedCell
 from openpyxl.comments import Comment
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+
+from .compatibility import MockWorksheet
+
 from .constants import (
-    DCF_TIMELINE_COLUMNS, RECALC_COLUMNS, SHEET_DATA_RECALCULATED,
-    SHEET_DCF_BASE, SHEET_DCF_BULL, SHEET_DCF_BEAR,
-    DCF_HELPER_CASH_CELL, DCF_HELPER_DEBT_CELL, DCF_HELPER_NON_OP_CELL,
-    DCF_HELPER_CASH_CELL_ABS, DCF_HELPER_DEBT_CELL_ABS, DCF_HELPER_NON_OP_CELL_ABS
+    DCF_HELPER_CASH_CELL,
+    DCF_HELPER_CASH_CELL_ABS,
+    DCF_HELPER_DEBT_CELL,
+    DCF_HELPER_DEBT_CELL_ABS,
+    DCF_HELPER_NON_OP_CELL,
+    DCF_HELPER_NON_OP_CELL_ABS,
+    DCF_TIMELINE_COLUMNS,
+    RECALC_COLUMNS,
+    SHEET_DATA_RECALCULATED,
+    SHEET_DCF_BASE,
+    SHEET_DCF_BEAR,
+    SHEET_DCF_BULL,
 )
-from .core import (
-    _to_float, _first_float, _scale
-)
+from .core import _first_float, _scale, _to_float
 from .financial import (
-    _sanitize_wacc_rate, _sanitize_terminal_growth_rate, _scenario_assumptions,
-    _forecast_map, _scenario_first_projection_forecast, _infer_revenue_growth_rate
+    _forecast_map,
+    _infer_revenue_growth_rate,
+    _sanitize_terminal_growth_rate,
+    _sanitize_wacc_rate,
+    _scenario_assumptions,
+    _scenario_first_projection_forecast,
 )
+
 
 def _set_comment(worksheet: Worksheet, cell_ref: str, text: str, *, author: str = "DCF Builder") -> None:
     cell = worksheet[cell_ref]
@@ -40,6 +56,12 @@ def _safe_set_with_options(
     *,
     clear_if_none: bool,
 ) -> None:
+    if isinstance(worksheet, MockWorksheet):
+        if value is None and not clear_if_none:
+            return
+        worksheet._record_set(cell_ref, value)
+        return
+
     cell = worksheet[cell_ref]
     if isinstance(cell, MergedCell):
         return
@@ -54,6 +76,10 @@ def _safe_set_with_options(
     cell.value = value
 
 def _force_set(worksheet: Worksheet, cell_ref: str, value: Any) -> None:
+    if isinstance(worksheet, MockWorksheet):
+        worksheet._record_set(cell_ref, value)
+        return
+
     cell = worksheet[cell_ref]
     if isinstance(cell, MergedCell):
         return
@@ -391,8 +417,8 @@ def _enforce_outputs_bridge_formulas(outputs: Worksheet) -> None:
 
     _safe_set(outputs, "B37", "(+) Non-Operating Assets")
     _safe_set(outputs, "F37", "(+) Non-Operating Assets")
-    _force_set(outputs, "D33", "=D32/(1+D27)^Q20")
-    _force_set(outputs, "H33", "=H32/(1+H27)^Q20")
+    _force_set(outputs, "D33", "=D32/(1+D27)^J20")
+    _force_set(outputs, "H33", "=H32/(1+H27)^J20")
     _force_set(outputs, "D36", f"=-{_scenario_choose_formula(DCF_HELPER_DEBT_CELL_ABS)[1:]}")
     _force_set(outputs, "H36", "=D36")
     _force_set(outputs, "D37", _scenario_choose_formula(DCF_HELPER_NON_OP_CELL_ABS))

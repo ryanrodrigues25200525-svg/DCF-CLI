@@ -82,14 +82,6 @@ export const solveOptionColorMap: Record<
   },
 };
 
-export const solvedAssumptionKeyMap: Partial<Record<ReverseDCFKey, keyof Assumptions>> = {
-  revenueGrowth: "revenueGrowth",
-  ebitMargin: "ebitMargin",
-  terminalGrowthRate: "terminalGrowthRate",
-  wacc: "wacc",
-  terminalExitMultiple: "terminalExitMultiple",
-};
-
 export function formatSolveValue(key: ReverseDCFKey, value: number) {
   if (!Number.isFinite(value)) return "—";
   if (key === "terminalExitMultiple") return `${value.toFixed(1)}x`;
@@ -125,10 +117,6 @@ export function getAssumptionNote(label: string, readOnly: boolean) {
   }
 }
 
-export function midpointDiscountExponent(index: number) {
-  return index + 0.5;
-}
-
 export function buildWorksheetRows(
   impliedResults: DCFResults | null,
   impliedAssumptions: Assumptions | null,
@@ -143,7 +131,7 @@ export function buildWorksheetRows(
     capex: forecast.capex,
     nwcChange: forecast.nwcChange,
     fcff: forecast.fcff,
-    discountExponent: midpointDiscountExponent(index),
+    discountExponent: index + 0.5,
     pvFcff: forecast.pvFcff,
   }));
 }

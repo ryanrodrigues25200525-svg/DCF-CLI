@@ -52,13 +52,13 @@ echo -e "${BLUE}Step 2: Starting Python SEC Service...${NC}"
 cd "$PROJECT_ROOT/backend"
 
 # Check if venv exists
-if [ ! -d "venv" ]; then
+if [ ! -d ".venv" ]; then
     echo -e "${YELLOW}Creating Python virtual environment...${NC}"
-    python3 -m venv venv
+    python3 -m venv .venv
 fi
 
 # Activate venv and start service
-source venv/bin/activate
+source .venv/bin/activate
 
 # Check if edgartools is installed
 if ! pip show edgartools >/dev/null 2>&1; then

@@ -13,6 +13,7 @@ function FinancialsContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { state, actions } = useDCFModel();
+    const { loadCompany } = actions;
     const [isDarkMode, setIsDarkMode] = useState(true);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const themeAnimationTimeoutRef = useRef<number | null>(null);
@@ -20,9 +21,8 @@ function FinancialsContent() {
 
     // Initial load based on URL ticker
     useEffect(() => {
-        actions.loadCompany(tickerParam);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tickerParam]); // Re-run only when the actual ticker changes
+        loadCompany(tickerParam);
+    }, [loadCompany, tickerParam]);
 
     useEffect(() => {
         const saved = localStorage.getItem('dcf-dark-mode');
@@ -56,9 +56,9 @@ function FinancialsContent() {
     const handleSearch = useCallback((ticker: string) => {
         const normalizedTicker = ticker.trim().toUpperCase();
         if (!normalizedTicker) return;
-        actions.loadCompany(normalizedTicker);
+        loadCompany(normalizedTicker);
         router.replace(`/financials?ticker=${encodeURIComponent(normalizedTicker)}`);
-    }, [actions, router]);
+    }, [loadCompany, router]);
 
     useEffect(() => {
         return () => {

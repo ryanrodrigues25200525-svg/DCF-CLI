@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
-from openpyxl.worksheet.worksheet import Worksheet
+
 from openpyxl.worksheet.datavalidation import DataValidation
-from .utils import (
-    _safe_set, _display_company_label, _safe_set_or_clear
-)
+from openpyxl.worksheet.worksheet import Worksheet
+
+from .utils import _display_company_label, _safe_set, _safe_set_or_clear
+
 
 def _map_cover_sheet(cover: Worksheet, payload: dict[str, Any], ticker: str, company_name: str | None) -> None:
     company = payload.get("company", {})

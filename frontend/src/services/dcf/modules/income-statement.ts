@@ -62,11 +62,16 @@ export function projectIncomeStatement(
     const sgaExpense = revenue * (assumptions.sgaMargin || 0.15);
 
     // 4. EBIT
-    let ebitMargin = ov.ebitMargin || assumptions.ebitMargin;
+    const baseEbitMargin = Number.isFinite(assumptions.ebitMargin) ? assumptions.ebitMargin : 0;
+    const steadyStateEbitMargin =
+        Number.isFinite(assumptions.ebitMarginSteadyState) && assumptions.ebitMarginSteadyState > 0
+            ? assumptions.ebitMarginSteadyState
+            : baseEbitMargin;
+    let ebitMargin = ov.ebitMargin ?? baseEbitMargin;
     if (assumptions.advancedMode && index <= (assumptions.ebitMarginConvergenceYears || 5)) {
         const convergenceProgress = index / (assumptions.ebitMarginConvergenceYears || 5);
         ebitMargin = previousEbitMargin +
-            (assumptions.ebitMarginSteadyState - previousEbitMargin) * convergenceProgress;
+            (steadyStateEbitMargin - previousEbitMargin) * convergenceProgress;
     }
 
     const ebit = revenue * ebitMargin;

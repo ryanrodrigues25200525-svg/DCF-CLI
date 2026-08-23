@@ -109,6 +109,7 @@ export function DealDashboard({ diagnostics, results, assumptions }: DealDashboa
   const confidenceOutOf100 = confidenceRaw <= 1 ? confidenceRaw * 100 : confidenceRaw;
   const diagnosticAlerts = diagnostics.filter((d) => d.status !== 'pass');
   const systemAlerts = [
+    results?.modelWarning ? { type: results.isValuationSupported === false ? 'error' as const : 'warning' as const, message: results.modelWarning } : null,
     results?.sectorWarning ? { type: 'warning' as const, message: results.sectorWarning } : null,
     results?.terminalGrowthWarning ? { type: 'warning' as const, message: results.terminalGrowthWarning } : null,
     results?.negativeCashFlowWarning ? { type: 'error' as const, message: results.negativeCashFlowWarning } : null,
@@ -177,7 +178,7 @@ export function DealDashboard({ diagnostics, results, assumptions }: DealDashboa
                 <div className="px-4 pb-3">
                   <MetricRow
                     label="Upside"
-                    value={`${(upside * 100).toFixed(1)}%`}
+                    value={results.isValuationSupported === false ? 'N/A' : `${(upside * 100).toFixed(1)}%`}
                     trend={upsideTrend}
                     status={upsideStatus}
                     icon={<Target size={12} />}

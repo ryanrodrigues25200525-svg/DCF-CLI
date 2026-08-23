@@ -1,30 +1,45 @@
 from __future__ import annotations
-import re
+
 from copy import copy
 from datetime import date, datetime
 from typing import Any
+
 from openpyxl.cell.cell import MergedCell
-from openpyxl.comments import Comment
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.workbook import Workbook
-from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
+
 from .utils import (
-    _sheet, _to_float, _safe_set, _safe_set_or_clear, _display_company_label,
-    _sanitize_wacc_rate, _sanitize_terminal_growth_rate, _force_set, _scale, _safe_date,
-    _fiscal_year_end_date, _historical_value_for_year, _axis_from_bounds, _numeric_list,
-    _matrix_values, _fallback_wacc_terminal_matrix, _fallback_revenue_ebit_matrix,
-    _set_percent_axis_row, _set_percent_axis_column, _clear_sensitivity_blocks,
-    _scenario_snapshot, _apply_scenario_snapshot_to_sheet, _metric_series,
-    _split_cost_of_revenue_components, _opex_component_series, _safe_year_end_date,
-    _scenario_assumption_value, _infer_revenue_growth_rate, _link_dcf_income_statement_to_recalculated_data,
-    _normalize_public_dcf_assumption_block, _enforce_core_public_dcf_formulas,
-    _enforce_outputs_bridge_formulas, _set_comment,
-    SHEET_WACC, TEN_YEAR_COLUMNS, RECALC_COLUMNS, DCF_TIMELINE_COLUMNS,
-    MAX_TERMINAL_GROWTH_RATE, MIN_TERMINAL_WACC_SPREAD,
-    DCF_HELPER_CASH_CELL, DCF_HELPER_DEBT_CELL, DCF_HELPER_NON_OP_CELL,
-    DCF_HELPER_CASH_CELL_ABS, DCF_HELPER_DEBT_CELL_ABS, DCF_HELPER_NON_OP_CELL_ABS,
-    SHEET_OUTPUTS, SHEET_ASSUMPTION_BREAKDOWN, SHEET_DATA_ORIGINAL
+    DCF_TIMELINE_COLUMNS,
+    SHEET_ASSUMPTION_BREAKDOWN,
+    SHEET_DATA_ORIGINAL,
+    SHEET_OUTPUTS,
+    _apply_scenario_snapshot_to_sheet,
+    _axis_from_bounds,
+    _clear_sensitivity_blocks,
+    _enforce_core_public_dcf_formulas,
+    _enforce_outputs_bridge_formulas,
+    _fallback_revenue_ebit_matrix,
+    _fallback_wacc_terminal_matrix,
+    _fiscal_year_end_date,
+    _force_set,
+    _historical_value_for_year,
+    _infer_revenue_growth_rate,
+    _link_dcf_income_statement_to_recalculated_data,
+    _matrix_values,
+    _normalize_public_dcf_assumption_block,
+    _numeric_list,
+    _safe_date,
+    _safe_set,
+    _safe_set_or_clear,
+    _sanitize_terminal_growth_rate,
+    _sanitize_wacc_rate,
+    _scale,
+    _scenario_snapshot,
+    _set_comment,
+    _set_percent_axis_column,
+    _set_percent_axis_row,
+    _to_float,
 )
 
 SCENARIO_BASE = "base"

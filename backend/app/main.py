@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
-from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,12 +68,24 @@ async def security_headers_middleware(request: Request, call_next):
     request.state.request_id = request_id
     started_at = time.perf_counter()
 
+    def _get_client_ip(req: Request) -> str:
+        # Trust X-Forwarded-For (Vercel/Docker/Nginx) — take first IP
+        xff = req.headers.get("x-forwarded-for")
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        xri = req.headers.get("x-real-ip")
+        if xri and xri.strip():
+            return xri.strip()
+        return req.client.host if req.client else "unknown"
+
     if (
         settings.RATE_LIMIT_ENABLED
         and request.url.path not in settings.rate_limit_exempt_paths_list
         and request.url.path.startswith("/api/")
     ):
-        client_host = request.client.host if request.client else "unknown"
+        client_host = _get_client_ip(request)
         decision = await rate_limiter.check(f"{client_host}:{request.url.path}")
         if not decision.allowed:
             return JSONResponse(

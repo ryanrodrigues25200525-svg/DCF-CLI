@@ -173,6 +173,7 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
       return;
     }
     const nextPrice = results?.impliedSharePrice;
+    if (results?.isValuationSupported === false) return;
     if (!Number.isFinite(nextPrice ?? NaN) || !nextPrice) return;
 
     const previousPrice = previousImpliedSharePriceRef.current;
@@ -186,7 +187,7 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
     const deltaPct = previousPrice !== 0 ? ((nextPrice - previousPrice) / previousPrice) * 100 : 0;
     setValuationChange({ from: previousPrice, to: nextPrice, deltaPct });
     previousImpliedSharePriceRef.current = nextPrice;
-  }, [company, results?.impliedSharePrice]);
+  }, [company, results?.impliedSharePrice, results?.isValuationSupported]);
 
   const revenuePoints = useMemo(() => {
     return buildRevenuePoints(historicals);
@@ -285,7 +286,7 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
                       "mt-1 text-[22px] leading-none font-black tabular-nums sm:text-[23px]",
                       "text-white"
                     )}>
-                      ${results.impliedSharePrice.toFixed(2)}
+                      {results.isValuationSupported === false ? 'N/A' : `$${results.impliedSharePrice.toFixed(2)}`}
                     </p>
                   </div>
                   <div className="min-w-0">
@@ -307,9 +308,9 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
                     )}>Implied Potential</p>
                     <p className={cn(
                       "mt-1 text-[22px] leading-none font-black tabular-nums sm:text-[23px]",
-                      results.upside >= 0 ? "text-emerald-500" : "text-rose-500"
+                      results.isValuationSupported === false ? "text-amber-300" : results.upside >= 0 ? "text-emerald-500" : "text-rose-500"
                     )}>
-                      {results.upside >= 0 ? '+' : ''}{(results.upside * 100).toFixed(1)}%
+                      {results.isValuationSupported === false ? 'N/A' : `${results.upside >= 0 ? '+' : ''}${(results.upside * 100).toFixed(1)}%`}
                     </p>
                   </div>
                   <div className="min-w-0">
@@ -321,7 +322,7 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
                       "mt-1 text-[16px] leading-none font-black uppercase tracking-widest sm:text-[17px]",
                       "text-white"
                     )}>
-                      {assumptions?.modelType === 'ddm' ? 'DDM' : assumptions?.modelType === 'levered' ? 'Levered DCF' : 'Unlevered DCF'}
+                      {results.preferredModel ? results.preferredModel.replace(/_/g, ' ') : assumptions?.modelType === 'ddm' ? 'DDM' : assumptions?.modelType === 'levered' ? 'Levered DCF' : 'Unlevered DCF'}
                     </p>
                   </div>
                 </div>
@@ -329,11 +330,13 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
                   <div className="flex flex-wrap gap-2 rounded-full bg-[#0b3b91] px-3 py-2 shadow-[0_14px_32px_rgba(11,59,145,0.24)] xl:justify-end">
                     <span className={cn(
                       "inline-flex items-center rounded-full px-4 py-2 text-[11px] font-black uppercase tracking-[0.16em]",
-                      results.upside >= 0
+                      results.isValuationSupported === false
+                        ? "bg-amber-500 text-white shadow-[0_10px_24px_rgba(245,158,11,0.3)]"
+                        : results.upside >= 0
                         ? "bg-emerald-500 text-white shadow-[0_10px_24px_rgba(16,185,129,0.3)]"
                         : "bg-rose-500 text-white shadow-[0_10px_24px_rgba(244,63,94,0.28)]"
                     )}>
-                      {results.upside >= 0 ? 'Undervalued' : 'Overvalued'}
+                      {results.isValuationSupported === false ? 'Model Required' : results.upside >= 0 ? 'Undervalued' : 'Overvalued'}
                     </span>
                     <span className={cn(
                       "inline-flex items-center rounded-full px-4 py-2 text-[11px] font-black uppercase tracking-[0.16em]",
@@ -526,6 +529,7 @@ export function ValuationDashboard({ state, actions, ui, onSearch, onExcelExport
                               historicals={historicals}
                               assumptions={assumptions}
                               overrides={overrides}
+                              disabledReason={results?.isSensitivitySupported === false ? results.modelWarning || results.sectorWarning : undefined}
                             />
                           </div>
                         )}

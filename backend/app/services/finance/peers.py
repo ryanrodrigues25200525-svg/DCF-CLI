@@ -302,7 +302,7 @@ async def fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
 async def _fetch_peer_details(symbols: List[str], low_memory: bool = False) -> List[Dict[str, Any]]:
     async def fetch_single_peer(symbol: str) -> Optional[Dict[str, Any]]:
         try:
-            ticker_obj = yf.Ticker(symbol)
+            ticker_obj = await asyncio.to_thread(yf.Ticker, symbol)
             yf_info_timeout = 2.0 if low_memory else 3.0
             stockdex_timeout = 1.5 if low_memory else 2.5
             yf_info_task = asyncio.wait_for(asyncio.to_thread(lambda: ticker_obj.info), timeout=yf_info_timeout)

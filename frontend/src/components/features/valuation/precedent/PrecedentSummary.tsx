@@ -1,17 +1,14 @@
-import { cn } from '@/core/utils/cn';
 import { formatMult, formatPct, formatMoney } from './utils';
 import { PrecedentTransaction } from '@/core/types';
 import { PrecedentStats } from './types';
 import { GlassCard } from '@/components/ui/primitives/GlassCard';
 
 interface PrecedentSummaryProps {
-    isDarkMode: boolean;
     stats: PrecedentStats;
     baseTransactions: PrecedentTransaction[];
 }
 
 export const PrecedentSummary = ({
-    isDarkMode,
     stats,
     baseTransactions,
 }: PrecedentSummaryProps) => {
@@ -79,4 +76,3 @@ export const PrecedentSummary = ({
         </div>
     );
 };
-

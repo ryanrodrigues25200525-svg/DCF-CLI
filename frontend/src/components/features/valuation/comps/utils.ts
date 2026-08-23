@@ -73,7 +73,7 @@ export const generateSparklineData = (ticker: string): number[] => {
     return data;
 };
 
-export const normalizeSector = (raw?: string) => {
+const normalizeSector = (raw?: string) => {
     if (!raw) return '';
     const key = raw.trim().toLowerCase();
     if (key.includes('tech')) return 'Information Technology';

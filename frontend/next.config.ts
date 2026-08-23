@@ -12,13 +12,26 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingRoot: process.cwd(),
   poweredByHeader: false,
+  compress: true,
   devIndicators: { buildActivity: false },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  // Tree-shake large libs
+  experimental: {
+    optimizePackageImports: ["lucide-react", "recharts", "fuse.js", "framer-motion"],
+  },
   async headers() {
     return [
       {
         source: "/:path*",
         headers: securityHeaders,
+      },
+      {
+        source: "/_next/static/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
       },
     ];
   },

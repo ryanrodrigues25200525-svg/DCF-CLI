@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import math
@@ -6,8 +7,6 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-
-from app.core.config import settings
 
 from app.core.cache_versions import (
     FINANCIALS_TTL_SECONDS,
@@ -20,10 +19,12 @@ from app.core.cache_versions import (
     peers_key,
     profile_key,
 )
+from app.core.config import settings
 from app.infrastructure.repository import FinancialRepository, get_repository
 from app.models.schemas import CompanyProfile
 from app.services import cache, edgar, finance
 from app.services.peer_universe import CURATED_PEERS
+from app.services.valuation import build_canonical_financials, classify_company
 
 router = APIRouter()
 logger = logging.getLogger("sec-service")
@@ -309,7 +310,7 @@ async def _build_native_unified_payload(
         valuation_status = "live"
 
     financials_ok = _has_usable_financials(native_financials)
-    
+
     if not financials_ok and not settings.edgar_identity_configured:
         raise HTTPException(
             status_code=403,
@@ -318,6 +319,8 @@ async def _build_native_unified_payload(
 
     market_ok = bool(market)
     peers_ok = len(peers) > 0
+    canonical_financials = build_canonical_financials(native_financials, market)
+    model_eligibility = classify_company(profile, canonical_financials)
 
     data_quality = {
         "financials": _build_data_quality_entry(
@@ -377,6 +380,8 @@ async def _build_native_unified_payload(
         "profile": profile,
         "financials_native": native_financials,
         "market": market,
+        "canonical_financials": canonical_financials,
+        "model_eligibility": model_eligibility,
         "market_context": valuation_context,
         "valuation_context": valuation_context,
         "peers": peers,

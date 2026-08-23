@@ -209,13 +209,15 @@ export function applyIndustryTemplateAssumptions(base: Assumptions, templateKey:
   if (!preset) return base;
   const p = preset.assumptions;
   const revenueGrowth = p.revenueCagr / 100;
+  const ebitMargin = p.ebitMargin / 100;
   return {
     ...base,
     revenueGrowth,
     revenueGrowthStage1: revenueGrowth,
     terminalGrowthRate: p.terminalGrowth / 100,
     grossMargin: p.grossMargin / 100,
-    ebitMargin: p.ebitMargin / 100,
+    ebitMargin,
+    ebitMarginSteadyState: ebitMargin,
     taxRate: p.taxRate / 100,
     capexRatio: p.capexPercent / 100,
     deaRatio: p.daPercent / 100,

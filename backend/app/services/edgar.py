@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import logging
 import math
@@ -11,9 +12,6 @@ import pandas as pd
 from edgar import Company, set_identity
 from edgar.entity.search import find_company
 from edgar.reference.tickers import get_company_tickers
-from edgar.xbrl.standardization import initialize_default_mappings
-_mapping_store = initialize_default_mappings()
-get_standard_concept = _mapping_store.get_standard_concept
 
 from app.core.cache_versions import profile_key
 from app.core.config import settings
@@ -227,9 +225,8 @@ def _records_from_statement(statement_obj: Any, statement_type: str = "BalanceSh
     out = df.reset_index(drop=False)
     out.columns = [str(col) for col in out.columns]
     records = out.where(pd.notna(out), None).to_dict(orient="records")
-    enriched = _enrich_standard_concepts(records, statement_type=statement_type)
     normalized: List[Dict[str, Any]] = []
-    for idx, row in enumerate(enriched):
+    for idx, row in enumerate(records):
         if not isinstance(row, dict):
             continue
         concept_key = str(row.get("standard_concept") or row.get("concept") or row.get("label") or idx)
@@ -238,47 +235,6 @@ def _records_from_statement(statement_obj: Any, statement_type: str = "BalanceSh
         row["is_missing"] = False
         normalized.append(row)
     return _sanitize_json_value(normalized)
-
-
-def _enrich_standard_concepts(records: List[Dict[str, Any]], statement_type: str = "BalanceSheet") -> List[Dict[str, Any]]:
-    """Backfill missing standard_concept values using edgartools reverse index."""
-    def _as_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return value != 0
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "y"}
-        return False
-
-    enriched: List[Dict[str, Any]] = []
-    for row in records:
-        if not isinstance(row, dict):
-            enriched.append(row)
-            continue
-        std = row.get("standard_concept")
-        concept = row.get("concept")
-        if concept:
-            try:
-                mapped = get_standard_concept(
-                    str(concept),
-                    context={
-                        "statement_type": statement_type,
-                        "section": row.get("section"),
-                        "is_total": _as_bool(row.get("is_total")),
-                        "label": row.get("label"),
-                    },
-                )
-                if mapped and (std is None or std == ""):
-                    row["standard_concept"] = str(mapped)
-            except Exception:
-                # Keep original row if concept cannot be standardized.
-                pass
-        if (row.get("standard_concept") is None or row.get("standard_concept") == "") and concept:
-            # Ensure every line item has a stable canonical key even when reverse index has no mapping.
-            row["standard_concept"] = str(concept)
-        enriched.append(row)
-    return enriched
 
 
 def _sanitize_json_value(value: Any) -> Any:
@@ -309,7 +265,29 @@ async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[s
 
     periods = max(1, min(int(years or 5), 10))
 
-    income_df, balance_df, cashflow_df = await asyncio.gather(
+    # Parallelize all SEC fetches: statements + key metrics + institution check
+    async def _get_financials_safe():
+        try:
+            financials_obj = await asyncio.to_thread(company.get_financials)
+            if not financials_obj:
+                return {}
+            return {
+                "revenue": financials_obj.get_revenue(),
+                "net_income": financials_obj.get_net_income(),
+                "operating_income": financials_obj.get_operating_income(),
+                "total_assets": financials_obj.get_total_assets(),
+                "total_liabilities": financials_obj.get_total_liabilities(),
+                "stockholders_equity": financials_obj.get_stockholders_equity(),
+                "operating_cash_flow": financials_obj.get_operating_cash_flow(),
+                "capital_expenditures": financials_obj.get_capital_expenditures(),
+                "free_cash_flow": financials_obj.get_free_cash_flow(),
+                "shares_outstanding_basic": financials_obj.get_shares_outstanding_basic(),
+                "shares_outstanding_diluted": financials_obj.get_shares_outstanding_diluted(),
+            }
+        except Exception:
+            return {}
+
+    income_df, balance_df, cashflow_df, key_metrics, is_fin = await asyncio.gather(
         asyncio.to_thread(
             company.income_statement,
             periods=periods,
@@ -328,27 +306,9 @@ async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[s
             period="annual",
             as_dataframe=False,
         ),
+        _get_financials_safe(),
+        asyncio.to_thread(company.is_financial_institution),
     )
-
-    key_metrics: Dict[str, Any] = {}
-    try:
-        financials_obj = await asyncio.to_thread(company.get_financials)
-        if financials_obj:
-            key_metrics = {
-                "revenue": financials_obj.get_revenue(),
-                "net_income": financials_obj.get_net_income(),
-                "operating_income": financials_obj.get_operating_income(),
-                "total_assets": financials_obj.get_total_assets(),
-                "total_liabilities": financials_obj.get_total_liabilities(),
-                "stockholders_equity": financials_obj.get_stockholders_equity(),
-                "operating_cash_flow": financials_obj.get_operating_cash_flow(),
-                "capital_expenditures": financials_obj.get_capital_expenditures(),
-                "free_cash_flow": financials_obj.get_free_cash_flow(),
-                "shares_outstanding_basic": financials_obj.get_shares_outstanding_basic(),
-                "shares_outstanding_diluted": financials_obj.get_shares_outstanding_diluted(),
-            }
-    except Exception:
-        key_metrics = {}
 
     return _sanitize_json_value(
         {
@@ -365,6 +325,7 @@ async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[s
         "key_metrics": key_metrics,
         "shares_outstanding": getattr(company, "shares_outstanding", None),
         "public_float": getattr(company, "public_float", None),
+        "is_financial_institution": is_fin,
         "fiscal_year_end": getattr(company, "fiscal_year_end", None),
         "fetched_at_ms": int(time.time() * 1000),
         }

@@ -11,8 +11,16 @@ const SEC_SERVICE_URL =
     "http://localhost:8000";
 const BACKEND_TIMEOUT_MS = 10_000;
 const BACKEND_RETRY_TIMEOUT_MS = 22_000;
-const EDGE_CACHE_CONTROL = "no-cache, no-store, must-revalidate";
 const inFlightRequests = new Map<string, Promise<NativeUnifiedPayload>>();
+const MAX_INFLIGHT = 100;
+
+function setInflight(ticker: string, promise: Promise<NativeUnifiedPayload>) {
+  if (inFlightRequests.size >= MAX_INFLIGHT) {
+    const firstKey = inFlightRequests.keys().next().value;
+    if (firstKey) inFlightRequests.delete(firstKey);
+  }
+  inFlightRequests.set(ticker, promise);
+}
 
 class UpstreamError extends Error {
     status: number;
@@ -95,7 +103,7 @@ export async function GET(req: NextRequest) {
     const isDeduped = Boolean(dataPromise);
     if (!dataPromise) {
         dataPromise = fetchUnifiedFromBackend(ticker);
-        inFlightRequests.set(ticker, dataPromise);
+        setInflight(ticker, dataPromise);
     }
 
     try {
@@ -106,11 +114,13 @@ export async function GET(req: NextRequest) {
                 "X-Data-Source": isDeduped ? "deduped" : "fresh",
                 "X-Upstream-Time-Ms": String(Math.max(0, Date.now() - t0)),
                 "X-Cache-Hit": "false",
-                "Cache-Control": EDGE_CACHE_CONTROL,
+                "Cache-Control": "no-store",
             },
         });
     } catch (error) {
-        console.error("[API /sec/company] Unified data fetch error:", error);
+        if (!(error instanceof UpstreamError)) {
+            console.error("[API /sec/company] Unified data fetch error:", error);
+        }
 
         const errorMessage = error instanceof Error ? error.message : "Failed to fetch company data";
         const status =

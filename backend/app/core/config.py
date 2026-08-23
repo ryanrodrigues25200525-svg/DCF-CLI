@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     APP_TITLE: str = "SEC Data Service"
     APP_DESCRIPTION: str = "REST API for SEC Edgar data using edgartools"
-    APP_VERSION: str = "1.2.0"
+    APP_VERSION: str = "1.3.0"
     LOG_LEVEL: str = "INFO"
     REQUEST_LOG_ENABLED: bool = True
 

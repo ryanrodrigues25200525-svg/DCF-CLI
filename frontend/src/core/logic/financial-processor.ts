@@ -4,7 +4,7 @@ import { HistoricalData, DCFResults, ForecastYear } from '@/core/types';
  * Robust Accessor for Historical Arrays
  * Safely retrieves value at index, handles missing arrays, returns null if invalid.
  */
-export const getHistVal = (arr: number[] | undefined, idx: number): number | null => {
+const getHistVal = (arr: number[] | undefined, idx: number): number | null => {
     if (!arr || idx < 0 || idx >= arr.length) return null;
     const v = arr[idx];
     return (v === undefined || Number.isNaN(v)) ? null : v;
@@ -65,8 +65,7 @@ const historicalCalculators: Record<string, CalculatorFn> = {
         return capex * 0.7;
     },
     // EBITDA - calculate from EBIT + Depreciation if not directly available
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ebitda: (year, hIdx, h, r) => {
+    ebitda: (_year, hIdx, h, _r) => {
         const ebitdaVal = getHistVal(h.ebitda, hIdx);
         if (ebitdaVal !== null && ebitdaVal > 0) return ebitdaVal;
         // Calculate as EBIT + Depreciation

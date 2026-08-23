@@ -2,6 +2,7 @@
 
 import { useMemo, useState, memo, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { SlidersHorizontal, StretchHorizontal } from 'lucide-react';
+import { FileX2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ParametersSidebar } from '@/components/layout/ParametersSidebar';
 import { cn } from '@/core/utils/cn';
@@ -12,6 +13,8 @@ import { FinancialStatementsToolbar } from './FinancialStatementsToolbar';
 import { DcfBridgeTable } from './DcfBridgeTable';
 import { StatementRow } from './StatementRow';
 import { NativeStatementTable } from './NativeStatementTable';
+import { BankStatementView } from './BankStatementView';
+import { EmptyState } from './EmptyState';
 
 interface Props {
     historicals: HistoricalData;
@@ -73,6 +76,22 @@ export const FinancialStatements = memo(function FinancialStatements({
     const incomeRows = useMemo(() => nativeStatements?.income_statement || [], [nativeStatements]);
     const balanceRows = useMemo(() => nativeStatements?.balance_sheet || [], [nativeStatements]);
     const cashflowRows = useMemo(() => nativeStatements?.cashflow_statement || [], [nativeStatements]);
+
+    const isFinancialInstitution = useMemo(() => {
+        if (financialsNative?.is_financial_institution === true) return true;
+        const industry = (historicals.industry || '').toLowerCase();
+        const sector = (historicals.sector || '').toLowerCase();
+        const bankKeywords = ['bank', 'depository', 'savings institution', 'credit services', 'commercial bank', 'thrift', 'credit union'];
+        const insuranceKeywords = ['insurance', 'life insurance', 'property & casualty', 'reinsurance', 'health insurance'];
+        if (bankKeywords.some((k) => industry.includes(k) || sector.includes(k))) return true;
+        if (insuranceKeywords.some((k) => industry.includes(k) || sector.includes(k))) return true;
+        return false;
+    }, [financialsNative?.is_financial_institution, historicals.industry, historicals.sector]);
+
+    const hasNativeStatements = useMemo(
+        () => (incomeRows.length > 0 || balanceRows.length > 0 || cashflowRows.length > 0),
+        [incomeRows.length, balanceRows.length, cashflowRows.length],
+    );
 
     const actualYears = useMemo(() => allYears.filter((year) => !foreYears.includes(year)), [allYears, foreYears]);
     const statementLabel = useMemo(() => tabs.find((tab) => tab.value === activeTab)?.label || 'Income Statement', [activeTab, tabs]);
@@ -466,9 +485,27 @@ export const FinancialStatements = memo(function FinancialStatements({
                         </thead>
                         <tbody className="divide-y divide-[var(--border-subtle)]/50">
                             {activeTab === 'IS' && (
-                                incomeRows.length > 0
-                                    ? <NativeStatementTable rows={incomeRows} years={displayedYears} foreYears={foreYears} headerTitle="Income Statement" headerColor="#0A84FF" statementKind="income" displayMode={displayMode} valueScale={valueScale} getForecastValueForRow={getForecastValueForNativeRow} />
-                                    : renderConfigRows(INCOME_STATEMENT_ROWS, 'Performance Matrix', '#0A84FF')
+                                isFinancialInstitution && incomeRows.length > 0
+                                    ? <BankStatementView rows={incomeRows} years={displayedYears} foreYears={foreYears} isDarkMode={isDarkMode} />
+                                    : incomeRows.length > 0
+                                        ? <NativeStatementTable rows={incomeRows} years={displayedYears} foreYears={foreYears} headerTitle="Income Statement" headerColor="#0A84FF" statementKind="income" displayMode={displayMode} valueScale={valueScale} getForecastValueForRow={getForecastValueForNativeRow} />
+                                        : !hasNativeStatements
+                                            ? (
+                                                <tr>
+                                                    <td colSpan={displayedYears.length + 1}>
+                                                        <EmptyState
+                                                            title="No financials available"
+                                                            message={`No income statement data could be loaded for ${historicals.symbol}. This may be due to a data provider limitation or filing delay.`}
+                                                            icon={<FileX2 size={28} strokeWidth={1.5} />}
+                                                            ctaLabel="Try another ticker"
+                                                            onCtaClick={() => window.location.reload()}
+                                                            isDarkMode={isDarkMode}
+                                                            secondaryMessage="Click above to switch tabs, or try a different company."
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            )
+                                            : renderConfigRows(INCOME_STATEMENT_ROWS, 'Performance Matrix', '#0A84FF')
                             )}
                             {activeTab === 'BS' && (
                                 balanceRows.length > 0 ? (
@@ -498,6 +535,19 @@ export const FinancialStatements = memo(function FinancialStatements({
                                             })}
                                         </tr>
                                     </>
+                                ) : !hasNativeStatements ? (
+                                    <tr>
+                                        <td colSpan={displayedYears.length + 1}>
+                                            <EmptyState
+                                                title="No financials available"
+                                                message={`No balance sheet data could be loaded for ${historicals.symbol}.`}
+                                                icon={<FileX2 size={28} strokeWidth={1.5} />}
+                                                ctaLabel="Try another ticker"
+                                                onCtaClick={() => window.location.reload()}
+                                                isDarkMode={isDarkMode}
+                                            />
+                                        </td>
+                                    </tr>
                                 ) : (
                                     <>
                                         {renderConfigRows(BALANCE_SHEET_ROWS, 'Asset Repository', '#AF52DE')}
@@ -530,7 +580,22 @@ export const FinancialStatements = memo(function FinancialStatements({
                             {activeTab === 'CFS' && (
                                 cashflowRows.length > 0
                                     ? <NativeStatementTable rows={cashflowRows} years={displayedYears} foreYears={foreYears} headerTitle="Cash Flow Statement" headerColor="#30D158" statementKind="cashflow" displayMode={displayMode} valueScale={valueScale} getForecastValueForRow={getForecastValueForNativeRow} />
-                                    : renderConfigRows(CASH_FLOW_ROWS, 'Capital Velocity', '#30D158')
+                                    : !hasNativeStatements
+                                        ? (
+                                            <tr>
+                                                <td colSpan={displayedYears.length + 1}>
+                                                    <EmptyState
+                                                        title="No financials available"
+                                                        message={`No cash flow data could be loaded for ${historicals.symbol}.`}
+                                                        icon={<FileX2 size={28} strokeWidth={1.5} />}
+                                                        ctaLabel="Try another ticker"
+                                                        onCtaClick={() => window.location.reload()}
+                                                        isDarkMode={isDarkMode}
+                                                    />
+                                                </td>
+                                            </tr>
+                                        )
+                                        : renderConfigRows(CASH_FLOW_ROWS, 'Capital Velocity', '#30D158')
                             )}
                             {activeTab === 'DCF' && (
                                 <DcfBridgeTable

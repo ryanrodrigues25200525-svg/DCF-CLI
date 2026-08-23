@@ -161,6 +161,11 @@ export interface DCFResults {
     terminalGrowthWarning?: string;
     bsImbalanceWarning?: string;
     negativeCashFlowWarning?: string;
+    companyType?: 'operating' | 'bank' | 'insurance' | 'reit' | 'utility' | 'high_growth' | 'distressed';
+    preferredModel?: 'unlevered_dcf' | 'levered_dcf' | 'ddm' | 'residual_income' | 'reit_affo' | 'utility_dcf' | 'revenue_multiple' | 'ev_ebitda';
+    isValuationSupported?: boolean;
+    isSensitivitySupported?: boolean;
+    modelWarning?: string;
 }
 
 export interface ModelDiagnostic {

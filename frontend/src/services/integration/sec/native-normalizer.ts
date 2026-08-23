@@ -11,6 +11,8 @@ type AnyRecord = Record<string, unknown>;
 
 const YEAR_IN_KEY_RE = /(?:19|20)\d{2}/;
 
+type NormRow = NativeStatementRow & { _std: string; _concept: string; _label: string; _isAbstract: boolean };
+
 const asRecord = (value: unknown): AnyRecord =>
     value && typeof value === "object" ? (value as AnyRecord) : {};
 
@@ -37,6 +39,12 @@ const toNumber = (value: unknown): number => {
 const toPositiveNumber = (value: unknown): number => {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const deriveSharesFromMarketValue = (marketRaw: AnyRecord, profileRaw: AnyRecord): number => {
+    const price = toPositiveNumber(marketRaw.current_price ?? profileRaw.currentPrice ?? profileRaw.current_price);
+    const marketCap = toPositiveNumber(marketRaw.market_cap ?? profileRaw.marketCap ?? profileRaw.market_cap);
+    return price > 0 && marketCap > 0 ? marketCap / price : 0;
 };
 
 const toBoolean = (value: unknown): boolean => {
@@ -179,7 +187,13 @@ export function mapNativeFinancialsToHistoricals(
         revenue: { standard: ["revenue", "contractrevenue", "productrevenue", "servicerevenue", "subscriptionrevenue"] },
         costOfRevenue: { standard: ["costofrevenue", "costofgoodssold", "costofsales", "costofgoodsandservicessold"] },
         grossProfit: { standard: ["grossprofit"] },
-        ebit: { standard: ["operatingincome"] },
+        ebit: {
+            exactStandard: ["operatingincome", "operatingincomeloss"],
+            exactConcept: ["operatingincome", "operatingincomeloss"],
+            exactLabel: ["operating income", "operating income (loss)", "income from operations"],
+            excludeConcept: ["nonoperating", "nonoperatingincomeexpense"],
+            excludeLabel: ["non-operating", "nonoperating"],
+        },
         interestExpense: { standard: ["interestexpense"] },
         incomeTaxExpense: { standard: ["incometaxexpense"] },
         netIncome: { standard: ["netincome", "netincomefromcontinuingoperations", "profitorloss"] },
@@ -276,7 +290,7 @@ export function mapNativeFinancialsToHistoricals(
     };
 
     const rowMatchesField = (
-        row: NativeStatementRow,
+        row: NativeStatementRow & { _std?: string; _concept?: string; _label?: string; _isAbstract?: boolean },
         rule: {
             standard?: string[];
             concept?: string[];
@@ -288,26 +302,51 @@ export function mapNativeFinancialsToHistoricals(
             excludeLabel?: string[];
         }
     ): boolean => {
-        if (toBoolean(row.is_abstract)) return false;
-        const std = normalizeKey(row.standard_concept);
-        const concept = normalizeKey(row.concept);
-        const label = normalizeKey(row.label);
+        if (row._isAbstract) return false;
+        const std = row._std ?? "";
+        const concept = row._concept ?? "";
+        const label = row._label ?? "";
 
         if (rule.excludeConcept?.some((needle) => concept.includes(needle))) return false;
-        if (rule.excludeLabel?.some((needle) => label.includes(normalizeKey(needle)))) return false;
+        if (rule.excludeLabel?.some((needle) => label.includes(needle))) return false;
 
         if (rule.exactStandard?.some((needle) => std === needle)) return true;
         if (rule.exactConcept?.some((needle) => concept === needle)) return true;
-        if (rule.exactLabel?.some((needle) => label === normalizeKey(needle))) return true;
+        if (rule.exactLabel?.some((needle) => label === needle)) return true;
 
         // edgartools may omit `standard_concept`; use the same tokens against concept/label by default.
         if (rule.standard?.some((needle) =>
             std.includes(needle) || concept.includes(needle) || label.includes(needle)
         )) return true;
         if (rule.concept?.some((needle) => concept.includes(needle))) return true;
-        if (rule.label?.some((needle) => label.includes(normalizeKey(needle)))) return true;
+        if (rule.label?.some((needle) => label.includes(needle))) return true;
         return false;
     };
+
+    // Precompute normalized row keys once and normalized field rules once to avoid repeated regex work
+    const normalizedRows: NormRow[] = allRows.map((row) => ({
+        ...row,
+        _std: normalizeKey(row.standard_concept),
+        _concept: normalizeKey(row.concept),
+        _label: normalizeKey(row.label),
+        _isAbstract: toBoolean(row.is_abstract),
+    } as unknown as NormRow));
+
+    // Normalize all rule needles upfront (excludeLabel/label need normalize too)
+    const normalizedFieldRules = Object.fromEntries(
+        Object.entries(fieldRules).map(([field, rule]) => {
+            const norm: typeof rule = {};
+            if (rule.standard) norm.standard = rule.standard.map((s) => normalizeKey(s));
+            if (rule.concept) norm.concept = rule.concept.map((s) => normalizeKey(s));
+            if (rule.label) norm.label = rule.label.map((s) => normalizeKey(s));
+            if (rule.exactStandard) norm.exactStandard = rule.exactStandard.map((s) => normalizeKey(s));
+            if (rule.exactConcept) norm.exactConcept = rule.exactConcept.map((s) => normalizeKey(s));
+            if (rule.exactLabel) norm.exactLabel = rule.exactLabel.map((s) => normalizeKey(s));
+            if (rule.excludeConcept) norm.excludeConcept = rule.excludeConcept.map((s) => normalizeKey(s));
+            if (rule.excludeLabel) norm.excludeLabel = rule.excludeLabel.map((s) => normalizeKey(s));
+            return [field, norm];
+        })
+    ) as typeof fieldRules;
 
     const isTotalField = (field: string): boolean =>
         [
@@ -319,10 +358,10 @@ export function mapNativeFinancialsToHistoricals(
         ].includes(field);
 
     const byFieldByYear = new Map<string, Map<number, number>>();
-    for (const [field, rule] of Object.entries(fieldRules)) {
-        const matchedRows = allRows.filter((row) => rowMatchesField(row, rule));
+    for (const [field, rule] of Object.entries(normalizedFieldRules)) {
+        const matchedRows = normalizedRows.filter((row) => rowMatchesField(row, rule));
         const prioritizedRows = isTotalField(field)
-            ? [...matchedRows].sort((a, b) => Number(toBoolean(b.is_total)) - Number(toBoolean(a.is_total)))
+            ? [...matchedRows].sort((a, b) => Number(toBoolean((a as AnyRecord).is_total)) - Number(toBoolean((b as AnyRecord).is_total)))
             : matchedRows;
         const valuesByYear = new Map<number, number>();
 
@@ -331,17 +370,17 @@ export function mapNativeFinancialsToHistoricals(
                 let sum = 0;
                 const seenConcepts = new Set<string>();
                 for (const row of prioritizedRows) {
-                    const conceptKey = normalizeKey(row.concept) || normalizeKey(row.label);
+                    const conceptKey = (row as NormRow)._concept || normalizeKey(row.label);
                     if (conceptKey && seenConcepts.has(conceptKey)) continue;
                     if (conceptKey) seenConcepts.add(conceptKey);
-                    sum += toNumber(rowValueForYear(row, year));
+                    sum += toNumber(rowValueForYear(row as NativeStatementRow, year));
                 }
                 valuesByYear.set(year, sum);
             } else {
                 let picked = 0;
                 let found = false;
                 for (const row of prioritizedRows) {
-                    const value = toNumber(rowValueForYear(row, year));
+                    const value = toNumber(rowValueForYear(row as NativeStatementRow, year));
                     if (!found || Math.abs(value) > Math.abs(picked)) {
                         picked = value;
                         found = true;
@@ -366,7 +405,18 @@ export function mapNativeFinancialsToHistoricals(
     };
 
     const revenue = series("revenue");
-    const ebit = series("ebit");
+    const ebitRaw = series("ebit");
+    const interestExpense = series("interestExpense");
+    const netIncome = series("netIncome");
+    const incomeTaxExpense = series("incomeTaxExpense");
+    const ebit = years.map((_, i) => {
+        const raw = ebitRaw[i] || 0;
+        const pretax = (netIncome[i] || 0) + (incomeTaxExpense[i] || 0);
+        const interest = Math.abs(interestExpense[i] || 0);
+        const derived = pretax > 0 ? pretax + interest : 0;
+        if (raw !== 0) return raw;
+        return derived || raw;
+    });
     const depreciationBase = series("depreciation");
     const ebitda = years.map((_, i) => {
         const rev = revenue[i] || 0;
@@ -407,8 +457,6 @@ export function mapNativeFinancialsToHistoricals(
     const capex = series("capex").map((v) => Math.abs(v));
     const fcff = years.map((_, i) => (cfo[i] || 0) - Math.abs(capex[i] || 0));
 
-    const netIncome = series("netIncome");
-    const incomeTaxExpense = series("incomeTaxExpense");
     const taxRate = years.map((_, i) => {
         const ni = netIncome[i] || 0;
         const tax = incomeTaxExpense[i] || 0;
@@ -422,7 +470,8 @@ export function mapNativeFinancialsToHistoricals(
     const sharesOutstanding =
         toPositiveNumber(nativeFinancials.shares_outstanding) ||
         toPositiveNumber(keyMetrics.shares_outstanding_diluted) ||
-        toPositiveNumber(keyMetrics.shares_outstanding_basic);
+        toPositiveNumber(keyMetrics.shares_outstanding_basic) ||
+        deriveSharesFromMarketValue(market, profile);
 
     const normalizedProfile = asRecord(profileRaw);
     const price = toPositiveNumber(market.current_price ?? normalizedProfile.currentPrice ?? normalizedProfile.current_price);
@@ -584,7 +633,7 @@ export function mapNativeFinancialsToHistoricals(
         grossProfit: series("grossProfit"),
         ebitda,
         ebit,
-        interestExpense: series("interestExpense"),
+        interestExpense,
         incomeTaxExpense,
         netIncome,
         depreciation: depreciationBase,

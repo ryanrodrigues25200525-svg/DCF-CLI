@@ -1,5 +1,4 @@
 from __future__ import annotations
-from __future__ import annotations
 
 NATIVE_FINANCIALS_CACHE_VERSION = "v1"
 NATIVE_UNIFIED_CACHE_VERSION = "v1"

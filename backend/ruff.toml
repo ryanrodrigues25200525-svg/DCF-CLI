@@ -1,6 +1,6 @@
 
 # Ruff configuration
-target-version = "py310"
+target-version = "py312"
 line-length = 88
 exclude = ["tests", "scripts", "data"]
 
@@ -15,3 +15,6 @@ select = ["F", "E", "W", "I", "T20"]
 # Ignore:
 # E501 (line too long) - let black handle formatting
 ignore = ["E501"]
+
+[lint.per-file-ignores]
+"**/__init__.py" = ["F401"]

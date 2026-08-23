@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Curated peer fallback lists used by comps-related services."""
 
 CURATED_PEERS = {

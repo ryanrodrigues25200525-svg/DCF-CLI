@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 from typing import Any
+
 from openpyxl.worksheet.worksheet import Worksheet
-from .utils import (
-    _to_float, _force_set, _safe_set_or_clear, _scale, _first_float
-)
+
+from .utils import _first_float, _force_set, _safe_set_or_clear, _scale, _to_float
+
 
 def _normalize_comp_name(comp: dict[str, Any]) -> str | None:
     company = comp.get("company")

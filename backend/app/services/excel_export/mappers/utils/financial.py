@@ -1,12 +1,18 @@
 from __future__ import annotations
+
 from typing import Any
+
 from openpyxl.worksheet.worksheet import Worksheet
-from .constants import (
-    MAX_TERMINAL_GROWTH_RATE, MIN_TERMINAL_WACC_SPREAD
-)
+
+from .constants import MAX_TERMINAL_GROWTH_RATE, MIN_TERMINAL_WACC_SPREAD
 from .core import (
-    _to_float, _series, _historical_index_by_year, _forecast_by_year, _first_float
+    _first_float,
+    _forecast_by_year,
+    _historical_index_by_year,
+    _series,
+    _to_float,
 )
+
 
 def _sanitize_wacc_rate(value: Any) -> float | None:
     parsed = _to_float(value)

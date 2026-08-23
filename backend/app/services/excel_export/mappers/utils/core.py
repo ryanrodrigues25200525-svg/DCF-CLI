@@ -1,15 +1,31 @@
 from __future__ import annotations
+
 import re
 from datetime import date, datetime
 from typing import Any
+
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+
 from .constants import (
-    SHEET_OUTPUTS, SHEET_OUTPUTS_LEGACY,
-    WACC_LOOP_MODE_CURRENT_EQUITY, WACC_LOOP_MODE_ITERATIVE
+    SHEET_OUTPUTS,
+    SHEET_OUTPUTS_LEGACY,
+    WACC_LOOP_MODE_CURRENT_EQUITY,
+    WACC_LOOP_MODE_ITERATIVE,
 )
+from .compatibility import MockWorkbook, MockWorksheet
+
 
 def _sheet(workbook: Workbook, name: str) -> Worksheet:
+    if isinstance(workbook, MockWorkbook):
+        if name in workbook._sheets:
+            return workbook._sheets[name]
+        if name == SHEET_OUTPUTS and SHEET_OUTPUTS_LEGACY in workbook._sheets:
+            ws = workbook._sheets[SHEET_OUTPUTS_LEGACY]
+            ws.title = SHEET_OUTPUTS
+            return ws
+        raise KeyError(f"Missing required sheet: {name}")
+
     if name in workbook.sheetnames:
         return workbook[name]
     if name == SHEET_OUTPUTS and SHEET_OUTPUTS_LEGACY in workbook.sheetnames:

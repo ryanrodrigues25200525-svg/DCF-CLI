@@ -46,25 +46,36 @@ function MeasuredChartContainer({
     const node = containerRef.current;
     if (!node) return;
 
+    let raf = 0;
     const updateSize = () => {
       const nextWidth = Math.max(node.clientWidth, 0);
       const nextHeight = Math.max(node.clientHeight, minHeight);
-      setSize((prev) => (
+      setSize((prev) =>
         prev.width === nextWidth && prev.height === nextHeight
           ? prev
           : { width: nextWidth, height: nextHeight }
-      ));
+      );
     };
 
+    const scheduleUpdate = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        updateSize();
+      });
+    };
+
+    // Initial measure (sync, so first paint is correct)
     updateSize();
 
-    const observer = new ResizeObserver(() => updateSize());
+    const observer = new ResizeObserver(scheduleUpdate);
     observer.observe(node);
-    window.addEventListener("resize", updateSize);
+    window.addEventListener("resize", scheduleUpdate);
 
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
-      window.removeEventListener("resize", updateSize);
+      window.removeEventListener("resize", scheduleUpdate);
     };
   }, [minHeight]);
 
@@ -319,6 +330,11 @@ export const CompanyOverviewPage = memo(function CompanyOverviewPage({
   };
 
   const handleMarkdownExport = () => {
+    if (onMarkdownExport) {
+      onMarkdownExport();
+      return;
+    }
+
     if (!company || !historicals) return;
     
     const markdown = generateMarkdownExport(company, historicals, results);

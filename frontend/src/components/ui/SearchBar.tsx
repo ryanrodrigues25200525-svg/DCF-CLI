@@ -140,6 +140,8 @@ export function SearchBar({ onSelect, isLoading, value, onChange, onSearch }: Se
             {/* Input comes first for sibling selectors to work */}
             <input
                 type="text"
+                id="dcf-search-input"
+                data-search-input
                 className={styles.searchField}
                 placeholder="Search ticker, company name, or CIK..."
                 value={value}

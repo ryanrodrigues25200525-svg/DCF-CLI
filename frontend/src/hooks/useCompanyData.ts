@@ -18,11 +18,19 @@ import {
     mapNativeFinancialsToHistoricals,
     mapNativeProfile,
 } from "@/services/integration/sec/native-normalizer";
+import {
+    cacheCompanyResponse,
+    getCachedCompanyResponse,
+    enqueueOfflineTicker,
+} from "@/hooks/useOfflineSync";
+import { Logger } from "@/core/logger";
 
 export interface UnifiedResponse {
     rawNative: NativeUnifiedPayload;
     profile: CompanyProfile;
     financialsNative: NativeFinancialsPayload;
+    canonicalFinancials?: Record<string, unknown>;
+    modelEligibility?: NativeUnifiedPayload["model_eligibility"];
     financials: HistoricalData;
     peers: ComparableCompany[];
     marketContext?: {
@@ -161,6 +169,8 @@ function mapNativeUnifiedToCompanyData(rawPayload: unknown): UnifiedResponse {
         rawNative: payload,
         profile,
         financialsNative: nativeFinancials,
+        canonicalFinancials: payload.canonical_financials,
+        modelEligibility: payload.model_eligibility,
         financials,
         peers: normalizePeers(payload.peers),
         marketContext: {
@@ -190,17 +200,21 @@ export function useCompanyData(ticker: string | null) {
 
     const query = useQuery({
         queryKey: ["company-v2", normalizedTicker],
-        queryFn: async () => {
+        queryFn: async ({ signal }) => {
             if (!normalizedTicker) return null;
+            requestStartedAtRef.current = Date.now();
             try {
-                requestStartedAtRef.current = Date.now();
                 const response = await fetch(`/api/sec/company?ticker=${normalizedTicker}`, {
                     cache: 'no-store',
                     headers: {
                         'Cache-Control': 'no-cache',
                         Pragma: 'no-cache'
-                    }
+                    },
+                    signal,
                 });
+                // Capture X-Request-ID for correlation with backend logs
+                const requestId = response.headers.get("X-Request-ID") || undefined;
+
                 const upstreamTimeMs = Number(response.headers.get("X-Upstream-Time-Ms") || "0");
                 const cacheHit = response.headers.get("X-Cache-Hit") === "true";
                 const dataSource = response.headers.get("X-Data-Source") || "unknown";
@@ -210,8 +224,19 @@ export function useCompanyData(ticker: string | null) {
                     dataSource
                 };
                 if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.error || "Failed to fetch company data");
+                    let message = "Failed to fetch company data";
+                    try {
+                        const data = await response.json();
+                        message = data.error || message;
+                    } catch {
+                        message = `${response.status} ${response.statusText}`;
+                    }
+                    Logger.error(`Company data fetch failed for ${normalizedTicker}: ${message}`, undefined, {
+                        "x-request-id": requestId || "",
+                        ticker: normalizedTicker,
+                        status: String(response.status),
+                    });
+                    throw new Error(message);
                 }
                 const nativePayload = await response.json();
                 if (
@@ -219,17 +244,35 @@ export function useCompanyData(ticker: string | null) {
                 ) {
                     throw new Error("Upstream payload did not include usable native financials");
                 }
-                return mapNativeUnifiedToCompanyData(nativePayload);
-            } catch (error) {
-                throw error;
+                const mapped = mapNativeUnifiedToCompanyData(nativePayload);
+                // Cache successful response for offline fallback
+                cacheCompanyResponse(normalizedTicker, mapped);
+                return mapped;
+            } catch (err) {
+                // Network failure or server unreachable – try localStorage cache
+                if (!navigator.onLine) {
+                    const cached = getCachedCompanyResponse<UnifiedResponse>(normalizedTicker);
+                    if (cached) {
+                        Logger.info(`Offline cache hit for ${normalizedTicker}`);
+                        enqueueOfflineTicker(normalizedTicker);
+                        return cached;
+                    }
+                }
+                enqueueOfflineTicker(normalizedTicker);
+                throw err;
             }
         },
         enabled: !!normalizedTicker,
-        staleTime: 0,
-        gcTime: 0,
-        refetchOnMount: "always",
+        staleTime: 5 * 60 * 1000,
+        gcTime: 30 * 60 * 1000,
+        refetchOnMount: false,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
+        retry: (failureCount, error) => {
+            const msg = error instanceof Error ? error.message : "";
+            if (/not found|404/i.test(msg)) return false;
+            return failureCount < 1;
+        },
     });
 
     useEffect(() => {

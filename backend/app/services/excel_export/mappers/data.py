@@ -1,13 +1,29 @@
 from __future__ import annotations
-from datetime import datetime, date
+
+from datetime import date, datetime
 from typing import Any
+
 from openpyxl.worksheet.worksheet import Worksheet
+
 from .utils import (
-    _to_float, _force_set, _scale, _safe_set_or_clear, _safe_set, _safe_date,
-    _fiscal_year_end_date, _safe_year_end_date, _metric_series, _split_cost_of_revenue_components,
-    _opex_component_series, _sanitize_wacc_rate, _sanitize_terminal_growth_rate,
-    TEN_YEAR_COLUMNS, RECALC_COLUMNS, DCF_TIMELINE_COLUMNS
+    DCF_TIMELINE_COLUMNS,
+    RECALC_COLUMNS,
+    TEN_YEAR_COLUMNS,
+    _fiscal_year_end_date,
+    _force_set,
+    _metric_series,
+    _opex_component_series,
+    _safe_date,
+    _safe_set,
+    _safe_set_or_clear,
+    _safe_year_end_date,
+    _sanitize_terminal_growth_rate,
+    _sanitize_wacc_rate,
+    _scale,
+    _split_cost_of_revenue_components,
+    _to_float,
 )
+
 
 def _map_data_sheets(
     data_original: Worksheet,

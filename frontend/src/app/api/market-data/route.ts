@@ -60,7 +60,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const singleTicker = searchParams.get('ticker');
     const multiTickers = searchParams.get('tickers');
-    const period = searchParams.get('period') || '2y';
+    const rawPeriod = searchParams.get('period') || '2y';
+    const validPeriods = new Set(['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']);
+    const period = validPeriods.has(rawPeriod) ? rawPeriod : '2y';
     const type = searchParams.get('type') || 'quote';
 
     // Handle single ticker with historical data

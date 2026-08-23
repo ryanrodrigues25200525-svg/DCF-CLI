@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from typing import Any, Optional
 
@@ -15,6 +16,18 @@ logger = logging.getLogger("app.infrastructure.repository")
 BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(BACKEND_ROOT, "data", "financial_cache.db")
 CACHE_TTL_DAYS = 90
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _parse_dt(value: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 class FinancialRepository:
     def __init__(self, db_path: str = DB_PATH):
@@ -30,6 +43,12 @@ class FinancialRepository:
             db_exists = os.path.exists(self.db_path)
 
             async with aiosqlite.connect(self.db_path) as db:
+                # Performance pragmas: WAL allows concurrent reads, NORMAL sync is safe for cache
+                await db.execute("PRAGMA journal_mode=WAL;")
+                await db.execute("PRAGMA synchronous=NORMAL;")
+                await db.execute("PRAGMA busy_timeout=5000;")
+                await db.execute("PRAGMA cache_size=-64000;")  # 64MB
+                await db.execute("PRAGMA temp_store=MEMORY;")
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS financials (
                         key TEXT PRIMARY KEY,
@@ -38,6 +57,9 @@ class FinancialRepository:
                         expires_at TIMESTAMP
                     )
                 ''')
+                # Index for expiry sweep and prefix scans
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_financials_expires ON financials(expires_at);")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_financials_key ON financials(key);")
                 await db.commit()
 
             if not self._initialized or not db_exists:
@@ -69,8 +91,8 @@ class FinancialRepository:
 
                         # Check expiry
                         if expires_at_str:
-                            expires_at = datetime.fromisoformat(expires_at_str)
-                            if datetime.now() > expires_at:
+                            expires_at = _parse_dt(expires_at_str)
+                            if _now_utc() > expires_at:
                                 # Opportunistic cleanup on read path
                                 await db.execute("DELETE FROM financials WHERE key = ?", (key,))
                                 await db.commit()
@@ -99,8 +121,8 @@ class FinancialRepository:
             else:
                 data_str = str(data)
 
-            expires_at = (datetime.now() + timedelta(seconds=ttl_seconds)).isoformat()
-            updated_at = datetime.now().isoformat()
+            expires_at = (_now_utc() + timedelta(seconds=ttl_seconds)).isoformat()
+            updated_at = _now_utc().isoformat()
 
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute('''
@@ -152,7 +174,7 @@ class FinancialRepository:
         """Clean up expired entries."""
         try:
             await self._ensure_ready()
-            now = datetime.now().isoformat()
+            now = _now_utc().isoformat()
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("DELETE FROM financials WHERE expires_at < ?", (now,))
                 await db.commit()

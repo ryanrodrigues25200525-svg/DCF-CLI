@@ -87,6 +87,7 @@ describe("reverse DCF", () => {
       .find((item) => item.status === "solved");
 
     expect(result).toBeDefined();
+    if (!result) throw new Error("Expected at least one solved reverse DCF result");
     expect(result.status).toBe("solved");
     expect(result.impliedValue).not.toBeNull();
     expect(result.impliedPrice).not.toBeNull();

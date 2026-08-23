@@ -28,7 +28,7 @@ type ReverseAxisDef = {
   write: (assumptions: Assumptions, value: number) => Assumptions;
 };
 
-export const reverseAxisDefs: Record<ReverseDCFKey, ReverseAxisDef> = {
+const reverseAxisDefs: Record<ReverseDCFKey, ReverseAxisDef> = {
   revenueGrowth: {
     label: "Revenue Growth",
     min: -0.5,
@@ -80,7 +80,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-export function normalizeAssumptionsForReverse(input: Assumptions): Assumptions {
+function normalizeAssumptionsForReverse(input: Assumptions): Assumptions {
   const riskFreeRate = input.riskFreeRate ?? 0.046;
   const equityRiskPremium = input.equityRiskPremium ?? 0.052;
   const beta = input.beta ?? 1;
@@ -168,7 +168,7 @@ export function solveReverseDCF(
       key,
       label: axisDef.label,
       baseValue,
-      impliedValue: lo,
+      impliedValue: null,
       impliedPrice: null,
       currentPrice,
       status: "no_solution",
@@ -185,7 +185,7 @@ export function solveReverseDCF(
       key,
       label: axisDef.label,
       baseValue,
-      impliedValue: targetPrice < Math.min(priceAtLo, priceAtHi) ? lo : hi,
+      impliedValue: null,
       impliedPrice: null,
       currentPrice,
       status: "no_solution",

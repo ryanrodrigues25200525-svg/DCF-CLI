@@ -182,7 +182,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('will-quit', async () => {
-  await stopFrontend(log);
-  await stopBackend(log);
+let isQuitting = false;
+app.on('before-quit', async (event) => {
+  if (isQuitting) return;
+  isQuitting = true;
+  event.preventDefault();
+  try {
+    await stopFrontend(log);
+    await stopBackend(log);
+  } catch (e) {
+    log('Error during shutdown: ' + (e && e.message ? e.message : String(e)));
+  } finally {
+    app.exit(0);
+  }
 });

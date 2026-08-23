@@ -10,6 +10,14 @@ export function useDiagnostics(
         if (!assumptions || !results || !historicals) return [];
         const checks: ModelDiagnostic[] = [];
 
+        if (results.isValuationSupported === false) {
+            checks.push({
+                status: 'fail',
+                msg: results.modelWarning || 'Selected company requires a model that is not implemented yet.',
+            });
+            return checks;
+        }
+
         if (assumptions.valuationMethod === 'growth') {
             if (assumptions.wacc > assumptions.terminalGrowthRate) {
                 checks.push({ status: 'pass', msg: 'WACC > Terminal Growth' });

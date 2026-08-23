@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { Assumptions, HistoricalData, Overrides } from "@/core/types";
 import { ReverseDCFKey, solveReverseDCF, applyReverseDCFValue } from "@/services/dcf/reverse-dcf";
 import { calculateDCF } from "@/services/dcf/engine";
-import { buildWorksheetRows, buildReverseBridge, solvedAssumptionKeyMap, formatEditableValue } from "./utils";
+import { buildWorksheetRows, buildReverseBridge, formatEditableValue } from "./utils";
 
 interface UseReverseDCFEngineProps {
   historicals: HistoricalData;
@@ -35,7 +35,7 @@ export function useReverseDCFEngine({ historicals, assumptions, overrides }: Use
     if (lastRev) {
       setLocalBaseRevenue(formatEditableValue(lastRev));
     }
-  }, [historicals.price, historicals.revenue]);
+  }, [historicals.price, historicals.revenue, targetPriceInput]);
 
   const targetPrice = parseFloat(targetPriceInput) || 0;
 

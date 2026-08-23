@@ -11,6 +11,7 @@ interface Props {
   historicals: HistoricalData;
   assumptions: Assumptions;
   overrides: Overrides;
+  disabledReason?: string;
 }
 
 type AxisKey =
@@ -78,7 +79,7 @@ const axisDefs: Record<AxisKey, AxisDef> = {
     max: 0.5,
     kind: "percent",
     read: (a) => a.revenueGrowth,
-    write: (a, v) => ({ ...a, revenueGrowth: v }),
+    write: (a, v) => ({ ...a, revenueGrowth: v, revenueGrowthStage1: v }),
   },
   terminalGrowthRate: {
     label: "Terminal Growth",
@@ -108,7 +109,7 @@ const axisDefs: Record<AxisKey, AxisDef> = {
     max: 0.6,
     kind: "percent",
     read: (a) => a.ebitMargin,
-    write: (a, v) => ({ ...a, ebitMargin: v }),
+    write: (a, v) => ({ ...a, ebitMargin: v, ebitMarginSteadyState: v }),
   },
   taxRate: {
     label: "Tax Rate",
@@ -362,7 +363,7 @@ function isWaccDerivedDriver(key: AxisKey) {
   return key === "beta" || key === "equityRiskPremium" || key === "costOfDebt" || key === "leverageTarget";
 }
 
-export const SensitivityAnalysis = memo(function SensitivityAnalysis({ historicals, assumptions, overrides }: Props) {
+export const SensitivityAnalysis = memo(function SensitivityAnalysis({ historicals, assumptions, overrides, disabledReason }: Props) {
   const sensitivityPalette = {
     red: { r: 255, g: 59, b: 48 },
     yellow: { r: 255, g: 214, b: 10 },
@@ -588,6 +589,18 @@ export const SensitivityAnalysis = memo(function SensitivityAnalysis({ historica
       .map((k) => ({ key: k, value: solve(k) }))
       .filter((x): x is { key: AxisKey; value: number } => x.value !== null);
   }, [historicals, overrides, effectiveBaseAssumptions, currentPrice]);
+
+  if (disabledReason) {
+    return (
+      <div className="sensitivity-theme-scope flex h-full items-center justify-center rounded-2xl border border-(--border-default) bg-[var(--bg-app)] p-8">
+        <div className="max-w-xl rounded-2xl border border-amber-500/25 bg-amber-500/10 p-6 text-center">
+          <AlertTriangle size={28} className="mx-auto text-amber-300" />
+          <h3 className="mt-3 text-[20px] font-black uppercase tracking-[0.12em] text-(--text-primary)">Sensitivity Unavailable</h3>
+          <p className="mt-3 text-[15px] leading-6 text-(--text-secondary)">{disabledReason}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="sensitivity-theme-scope flex h-full bg-[var(--bg-app)] relative overflow-hidden rounded-2xl border border-(--border-default)">

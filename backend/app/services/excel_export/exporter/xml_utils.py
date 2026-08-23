@@ -1,9 +1,11 @@
 from __future__ import annotations
-from io import BytesIO
-from zipfile import ZIP_DEFLATED, ZipFile
-from openpyxl import load_workbook
-from defusedxml import ElementTree as ET
+
 from copy import copy
+from io import BytesIO
+from zipfile import ZipFile
+
+from defusedxml import ElementTree as ET
+from openpyxl import load_workbook
 
 _NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 

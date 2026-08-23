@@ -1,4 +1,4 @@
-
+import { describe, expect, test } from 'vitest';
 import { buildExportPayload, validateExportData } from './index';
 import type { CompanyProfile, HistoricalData, Assumptions, DCFResults, Overrides } from '@/core/types';
 import type { ScenarioConfig } from './types';

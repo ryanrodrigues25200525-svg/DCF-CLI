@@ -76,3 +76,4 @@ backend/scratch/
 backend/scripts/*_output*.txt
 frontend/test_output.txt
 frontend/eslint_report.json
+dcf_export_test.xlsx

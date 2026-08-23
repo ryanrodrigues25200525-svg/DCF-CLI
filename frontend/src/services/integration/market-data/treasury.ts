@@ -34,6 +34,7 @@ export interface YieldCurve {
 const CACHE_DURATION = 1000 * 60 * 60; // 1 hour
 let cachedYields: YieldCurve | null = null;
 let cacheTimestamp: number = 0;
+let inFlightTreasuryPromise: Promise<YieldCurve> | null = null;
 
 // Hard fallbacks if both API and DefaultYields (which is January 2025) are missing
 const FALLBACK_RATES = {
@@ -78,10 +79,20 @@ export async function fetchTreasuryYields(): Promise<YieldCurve> {
   // Check cache
   const now = Date.now();
   if (cachedYields && (now - cacheTimestamp) < CACHE_DURATION) {
-    console.warn('[Treasury Service] Using cached yields');
     return cachedYields;
   }
 
+  // Deduplicate concurrent fetches
+  if (inFlightTreasuryPromise) return inFlightTreasuryPromise;
+  inFlightTreasuryPromise = fetchTreasuryYieldsInternal(now);
+  try {
+    return await inFlightTreasuryPromise;
+  } finally {
+    inFlightTreasuryPromise = null;
+  }
+}
+
+async function fetchTreasuryYieldsInternal(now: number): Promise<YieldCurve> {
   try {
     // Primary endpoint: Treasury API for daily treasury rates
     const url = `https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/avg_interest_rates?fields=record_date,security_desc,avg_interest_rate_amt&filter=record_date:gte:2024-01-01&sort=-record_date&page[size]=100`;
@@ -90,7 +101,10 @@ export async function fetchTreasuryYields(): Promise<YieldCurve> {
       headers: {
         'Accept': 'application/json',
       },
-    });
+      // Cache 1 hour on Next.js fetch layer when running server-side
+      next: { revalidate: 3600 } as unknown as RequestInit["cache"],
+      signal: AbortSignal.timeout(8000),
+    } as RequestInit);
 
     if (!response.ok) {
       throw new Error(`Treasury API error: ${response.status}`);

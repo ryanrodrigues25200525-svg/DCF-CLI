@@ -32,10 +32,17 @@ export async function POST(
     }
 
     try {
-        const unifiedRes = await fetch(
-            `${BACKEND_BASE_URL}/api/company/${normalizedTicker}/unified/native?years=5`,
-            { cache: "no-store" }
-        );
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15_000);
+        let unifiedRes: Response;
+        try {
+            unifiedRes = await fetch(
+                `${BACKEND_BASE_URL}/api/company/${normalizedTicker}/unified/native?years=5`,
+                { cache: "no-store", signal: controller.signal }
+            );
+        } finally {
+            clearTimeout(timeoutId);
+        }
         if (!unifiedRes.ok) {
             return NextResponse.json(
                 { error: `Failed to fetch upstream native data (${unifiedRes.status})` },

@@ -295,11 +295,17 @@ describe('DCF Builder - Comprehensive Scenarios', () => {
             const base = createAssumptions();
             const financials = applyIndustryTemplateAssumptions(base, 'financials');
             const reit = applyIndustryTemplateAssumptions(base, 'real-estate');
+            const healthcare = applyIndustryTemplateAssumptions(
+                { ...base, advancedMode: true, ebitMarginSteadyState: -0.01 },
+                'healthcare'
+            );
 
             expect(financials.terminalGrowthRate).toBeCloseTo(0.02, 8);
             expect(financials.terminalExitMultiple).toBe(9);
             expect(reit.taxRate).toBe(0);
             expect(reit.terminalExitMultiple).toBe(14);
+            expect(healthcare.ebitMargin).toBeCloseTo(0.25, 8);
+            expect(healthcare.ebitMarginSteadyState).toBeCloseTo(0.25, 8);
         });
     });
 

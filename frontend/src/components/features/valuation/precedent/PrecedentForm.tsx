@@ -6,14 +6,12 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { formatInputNumberWithCommas, parseIsoDate, toIsoDate } from './utils';
 
 interface PrecedentFormProps {
-    isDarkMode: boolean;
     onAdd: (txn: PrecedentTransaction) => void;
     onCancel: () => void;
     normalizedSector: string;
 }
 
 export const PrecedentForm = ({
-    isDarkMode,
     onAdd,
     onCancel,
     normalizedSector,

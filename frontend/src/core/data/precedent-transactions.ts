@@ -6,7 +6,7 @@
 
 import { PrecedentTransaction } from '@/core/types';
 
-export const PRECEDENT_TRANSACTIONS_DATABASE: Record<string, PrecedentTransaction[]> = {
+const PRECEDENT_TRANSACTIONS_DATABASE: Record<string, PrecedentTransaction[]> = {
     // Technology Sector - Software
     'SOFTWARE': [
         {
@@ -562,11 +562,6 @@ export function getPrecedentTransactionsBySector(sector: string): PrecedentTrans
     // Return copy with all marked as selected by default
     return (PRECEDENT_TRANSACTIONS_DATABASE[mappedSector] || PRECEDENT_TRANSACTIONS_DATABASE['SOFTWARE'])
         .map(t => ({ ...t, isSelected: true }));
-}
-
-// Get all available transactions
-export function getAllPrecedentTransactions(): PrecedentTransaction[] {
-    return Object.values(PRECEDENT_TRANSACTIONS_DATABASE).flat();
 }
 
 // Calculate transaction statistics

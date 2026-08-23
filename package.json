@@ -1,6 +1,6 @@
 {
   "name": "dcf-builder-pro-desktop",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Desktop DCF valuation workspace with bundled frontend and backend.",
   "author": {
@@ -12,7 +12,7 @@
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && ( [ -f .venv/bin/python ] && .venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload || [ -n \"$VIRTUAL_ENV\" ] && $VIRTUAL_ENV/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload || python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload )",
     "security:scan": "bash ./scripts/security_scan.sh",
-    "install:all": "npm install --prefix frontend && (cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt)",
+    "install:all": "npm install --prefix frontend && (cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt)",
     "build:frontend": "npm run build --prefix frontend",
     "lint:frontend": "npm run lint --prefix frontend",
     "test:frontend": "npm run test --prefix frontend",

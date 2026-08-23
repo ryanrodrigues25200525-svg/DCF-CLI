@@ -11,7 +11,6 @@ import { PrecedentImpact } from './precedent/PrecedentImpact';
 import { PrecedentTransactionsProps } from './precedent/types';
 
 const PrecedentTransactions: React.FC<PrecedentTransactionsProps> = ({
-    isDarkMode = true,
     targetSector = 'Technology',
     targetRevenue,
     targetEbitda,
@@ -73,7 +72,6 @@ const PrecedentTransactions: React.FC<PrecedentTransactionsProps> = ({
             <div className="p-8">
                 {/* Stats Summary */}
                 <PrecedentSummary
-                    isDarkMode={isDarkMode}
                     stats={stats}
                     baseTransactions={baseTransactions}
                 />
@@ -82,7 +80,6 @@ const PrecedentTransactions: React.FC<PrecedentTransactionsProps> = ({
                 <AnimatePresence>
                     {isAdding && (
                         <PrecedentForm
-                            isDarkMode={isDarkMode}
                             onAdd={addTransaction}
                             onCancel={() => setIsAdding(false)}
                             normalizedSector={normalizedSector}
@@ -99,7 +96,6 @@ const PrecedentTransactions: React.FC<PrecedentTransactionsProps> = ({
 
                 {/* Transactions Table */}
                 <PrecedentTable
-                    isDarkMode={isDarkMode}
                     transactions={baseTransactions}
                     onToggle={toggleTransaction}
                     onDelete={deleteTransaction}
