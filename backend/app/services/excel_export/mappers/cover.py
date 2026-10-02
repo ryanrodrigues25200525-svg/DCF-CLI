@@ -85,7 +85,7 @@ def _align_income_statement_labels(
         _safe_set(sheet, "B36", "Research & Development")
         _safe_set(sheet, "B39", "SG&A")
         _safe_set(sheet, "B42", "D&A (included in Operating)")
-        _safe_set(sheet, "B45", "Other Operating Expenses")
+        _safe_set(sheet, "B45", "Other OpEx / (Income)")
         _safe_set(sheet, "B57", "Income Taxes")
 
     for sheet in (data_original, data_recalc):
@@ -99,6 +99,5 @@ def _align_income_statement_labels(
         _safe_set(sheet, "B27", "Other Operating Expenses")
         _safe_set(sheet, "B30", "EBIT")
         _safe_set(sheet, "B31", "EBIT Margin")
-
 
 

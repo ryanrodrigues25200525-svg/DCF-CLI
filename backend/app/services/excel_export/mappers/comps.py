@@ -137,11 +137,45 @@ def _map_comps(comps_ws: Worksheet, payload: dict[str, Any], divisor: float) -> 
         _safe_set_or_clear(comps_ws, f"R{row}", _scale(revenue, divisor) if revenue is not None else None)
         _safe_set_or_clear(comps_ws, f"S{row}", _scale(revenue_ntm, divisor) if revenue_ntm is not None else None)
 
-def _harden_comps_ratio_formulas(comps_ws: Worksheet) -> None:
+def _harden_comps_ratio_formulas(comps_ws: Worksheet, payload: dict[str, Any]) -> int:
     # Avoid propagating #DIV/0! when one or more peer rows are missing inputs.
+    comps = payload.get("comps", []) or []
+    peer_count = 0
+    for comp in comps[:6]:
+        if not isinstance(comp, dict) or _normalize_comp_name(comp) is None:
+            break
+        peer_count += 1
+    summary_end_row = 7 + peer_count if peer_count > 0 else 13
+
     for row in range(8, 14):
+        _force_set(comps_ws, f"F{row}", f'=IFERROR(IF(AND(C{row}>0,D{row}>0),C{row}*D{row},""),"")')
         _force_set(comps_ws, f"H{row}", f'=IFERROR(P{row}/R{row},"")')
         _force_set(comps_ws, f"I{row}", f'=IFERROR($G{row}/P{row},"")')
         _force_set(comps_ws, f"J{row}", f'=IFERROR($G{row}/Q{row},"")')
         _force_set(comps_ws, f"K{row}", f'=IFERROR($G{row}/R{row},"")')
         _force_set(comps_ws, f"L{row}", f'=IFERROR($G{row}/S{row},"")')
+
+    summary_formulas = {
+        15: "MIN",
+        16: "PERCENTILE",
+        17: "AVERAGE",
+        18: "MEDIAN",
+        19: "PERCENTILE",
+        20: "MAX",
+    }
+    for row, function in summary_formulas.items():
+        for column in ("F", "G", "H", "I", "J", "K", "L", "M"):
+            values = f"{column}8:{column}{summary_end_row}"
+            if function == "PERCENTILE":
+                percentile = "0.25" if row == 16 else "0.75"
+                rank = f"(COUNT({values})-1)*{percentile}+1"
+                lower_rank = f"INT({rank})"
+                upper_rank = f"MIN(COUNT({values}),{lower_rank}+1)"
+                formula = (
+                    f'=IFERROR(IF(COUNT({values})>0,SMALL({values},{lower_rank})+'
+                    f'({rank}-{lower_rank})*(SMALL({values},{upper_rank})-SMALL({values},{lower_rank})),""),"")'
+                )
+            else:
+                formula = f'=IFERROR(IF(COUNT({values})>0,{function}({values}),""),"")'
+            _force_set(comps_ws, f"{column}{row}", formula)
+    return peer_count

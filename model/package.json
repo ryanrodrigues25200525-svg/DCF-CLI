@@ -1,0 +1,25 @@
+{
+  "name": "dcf-builder-model",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dcf": "tsx --tsconfig tsconfig.json src/cli.ts",
+    "dcf-mcp": "tsx --tsconfig tsconfig.json src/mcp/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run src/cli.live.test.ts"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "fsevents": true
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.6",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.5"
+  }
+}

@@ -14,7 +14,8 @@ logger = logging.getLogger("app.infrastructure.repository")
 
 # Resolve DB path from this file location so runtime CWD does not matter.
 BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(BACKEND_ROOT, "data", "financial_cache.db")
+DEFAULT_DB_PATH = os.path.join(BACKEND_ROOT, "data", "financial_cache.db")
+DB_PATH = os.path.abspath(os.path.expanduser(os.getenv("DCF_CACHE_DB_PATH", DEFAULT_DB_PATH)))
 CACHE_TTL_DAYS = 90
 
 def _now_utc() -> datetime:

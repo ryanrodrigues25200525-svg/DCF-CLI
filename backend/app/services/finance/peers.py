@@ -14,10 +14,9 @@ from app.services.stockdex_service import StockdexService
 from .utils import (
     _is_financial_like_company,
     _low_memory_mode_enabled,
+    _safe_log10,
     _sanitize_multiple,
     _to_positive_float,
-    _safe_log10,
-    _coerce_datetime,
 )
 
 logger = logging.getLogger("finance-peers")
@@ -77,18 +76,28 @@ DEFAULT_PEER_SYMBOLS: List[str] = [
 
 PEER_PROFILE_TIMEOUT_SECONDS = 3.0
 PEER_DETAILS_MAX_CONCURRENCY = max(1, int(os.getenv("PEER_DETAILS_MAX_CONCURRENCY", "4")))
+_PEER_BUNDLE_INFLIGHT: Dict[str, asyncio.Task] = {}
+_PEER_BUNDLE_INFLIGHT_LOCK = asyncio.Lock()
 
 async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
     from .market import fetch_market_data  # Deferred import to avoid circularity
     normalized_ticker = ticker.upper()
     curated = CURATED_PEERS.get(normalized_ticker, [])
     if curated:
-        return [s for s in curated if s.upper() != normalized_ticker]
+        seen = {normalized_ticker}
+        resolved: List[str] = []
+        for symbol in curated:
+            upper = str(symbol).strip().upper()
+            upper = TICKER_CANONICAL_MAP.get(upper, upper)
+            if upper and upper not in seen:
+                seen.add(upper)
+                resolved.append(upper)
+        return resolved
 
     market_data: Dict[str, Any] = market_snapshot or {}
     sector = ""
     industry = ""
-    if market_data:
+    if market_snapshot is not None:
         sector = str(market_data.get("sector") or "").strip().lower()
         industry = str(market_data.get("industry") or "").strip().lower()
     else:
@@ -217,6 +226,33 @@ async def fetch_peer_data(ticker: str) -> List[Dict[str, Any]]:
     return bundle["peers"]
 
 async def fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
+    normalized_ticker = (ticker or "").strip().upper()
+    if not normalized_ticker:
+        return {
+            "peers": [],
+            "source": "unavailable",
+            "fallback_used": True,
+            "notes": "Ticker is required to load comparable companies.",
+            "fetched_at_ms": int(time.time() * 1000),
+        }
+
+    async with _PEER_BUNDLE_INFLIGHT_LOCK:
+        task = _PEER_BUNDLE_INFLIGHT.get(normalized_ticker)
+        if task is None:
+            task = asyncio.create_task(_fetch_peer_data_bundle(normalized_ticker))
+            _PEER_BUNDLE_INFLIGHT[normalized_ticker] = task
+            task.add_done_callback(lambda finished: _clear_peer_bundle_inflight(normalized_ticker, finished))
+    return await asyncio.shield(task)
+
+
+def _clear_peer_bundle_inflight(ticker: str, task: asyncio.Task) -> None:
+    if _PEER_BUNDLE_INFLIGHT.get(ticker) is task:
+        _PEER_BUNDLE_INFLIGHT.pop(ticker, None)
+    if not task.cancelled():
+        task.exception()
+
+
+async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
     from .market import fetch_market_data  # Deferred import to avoid circularity
 
     try:
@@ -235,12 +271,12 @@ async def fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
         max_symbols = 4 if low_memory_mode else 8
         max_candidates = max_symbols if low_memory_mode else max(max_symbols * 3, 12)
         candidate_symbols = peer_symbols[:max_candidates]
-        
+
         details = await asyncio.wait_for(
             _fetch_peer_details(candidate_symbols, low_memory=low_memory_mode),
             timeout=8.0 if low_memory_mode else 12.0,
         )
-        
+
         if details:
             ranked = _rank_peer_details(
                 peers=details,

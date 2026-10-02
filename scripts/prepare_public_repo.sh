@@ -14,10 +14,8 @@ mkdir -p "$TARGET_DIR"
 rsync -av --delete \
   --exclude '.git/' \
   --exclude 'node_modules/' \
-  --exclude '.next/' \
   --exclude '.pytest_cache/' \
   --exclude 'backend/.env' \
-  --exclude 'frontend/.env.local' \
   --exclude 'backend/data/' \
   --exclude 'output/' \
   --exclude 'OPERATIONS.md' \
@@ -25,4 +23,4 @@ rsync -av --delete \
   "$SOURCE_DIR"/ "$TARGET_DIR"/
 
 echo "Sanitized public export written to: $TARGET_DIR"
-echo "Review README.md, backend/.env.example, frontend/.env.example before pushing."
+echo "Review README.md and backend/.env.example before pushing."

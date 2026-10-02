@@ -13,19 +13,7 @@ from .constants import (
     WACC_LOOP_MODE_CURRENT_EQUITY,
     WACC_LOOP_MODE_ITERATIVE,
 )
-from .compatibility import MockWorkbook, MockWorksheet
-
-
 def _sheet(workbook: Workbook, name: str) -> Worksheet:
-    if isinstance(workbook, MockWorkbook):
-        if name in workbook._sheets:
-            return workbook._sheets[name]
-        if name == SHEET_OUTPUTS and SHEET_OUTPUTS_LEGACY in workbook._sheets:
-            ws = workbook._sheets[SHEET_OUTPUTS_LEGACY]
-            ws.title = SHEET_OUTPUTS
-            return ws
-        raise KeyError(f"Missing required sheet: {name}")
-
     if name in workbook.sheetnames:
         return workbook[name]
     if name == SHEET_OUTPUTS and SHEET_OUTPUTS_LEGACY in workbook.sheetnames:
@@ -76,6 +64,15 @@ def _fiscal_year_end_date(raw: Any, fallback_year: int) -> date | None:
     if numeric_match:
         month = int(numeric_match.group(1))
         day = int(numeric_match.group(2))
+        try:
+            return date(fallback_year, month, day)
+        except ValueError:
+            return None
+
+    compact_match = re.match(r"^\s*(\d{2})(\d{2})\s*$", compact)
+    if compact_match:
+        month = int(compact_match.group(1))
+        day = int(compact_match.group(2))
         try:
             return date(fallback_year, month, day)
         except ValueError:

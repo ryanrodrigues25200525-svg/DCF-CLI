@@ -12,11 +12,11 @@ PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|ghp_[A-Za-z0-9]{36}|xox[baprs]-
 # Prefer ripgrep if available, fallback to grep for portability.
 FOUND=0
 if command -v rg >/dev/null 2>&1; then
-  if git ls-files | rg -v '^frontend/package-lock\.json$' | xargs rg -n --no-heading -P "$PATTERN" >/tmp/dcf_secret_scan_matches.txt 2>/dev/null; then
+  if git ls-files | rg -v '^model/package-lock\.json$' | xargs rg -n --no-heading -P "$PATTERN" >/tmp/dcf_secret_scan_matches.txt 2>/dev/null; then
     FOUND=1
   fi
 else
-  if git ls-files | grep -v '^frontend/package-lock\.json$' | xargs grep -n -P "$PATTERN" >/tmp/dcf_secret_scan_matches.txt 2>/dev/null; then
+  if git ls-files | grep -v '^model/package-lock\.json$' | xargs grep -n -P "$PATTERN" >/tmp/dcf_secret_scan_matches.txt 2>/dev/null; then
     FOUND=1
   fi
 fi

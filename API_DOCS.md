@@ -1,112 +1,42 @@
-# DCF Builder API Documentation
+# Backend API Documentation
 
-This document reflects the current active API surface in the project.
+The CLI starts `python -m app.local_server`, which binds FastAPI to a temporary loopback port and publishes the port through `DCF_BUILDER_BACKEND_PORT=<port>`. For manual API work, start it from `backend/` with `uvicorn app.main:app --host 127.0.0.1 --port 8000`.
 
-## Base URLs
+## Service
 
-- Frontend local: `http://localhost:3000`
-- Backend local: `http://localhost:8000`
-- Backend OpenAPI: `http://localhost:8000/docs`
+- `GET /`: service name and version
+- `GET /health`: process health
+- `GET /ready`: readiness and cache status
+- `GET /api/health`: API and cache health
+- `GET /api/cache/stats`: cache statistics
 
-## Frontend BFF Routes (Next.js)
+## Company data
 
-### `GET /api/sec/company?ticker={TICKER}`
+- `GET /api/company/{ticker}/unified/native?years=5`: profile, SEC statements, canonical financials, market data, peers, valuation context, quality/completeness metadata, and `model_eligibility`
+- `GET /api/company/{ticker}`: profile
+- `GET /api/company/{ticker}/financials/native?years=5`: native financial statements
+- `GET /api/company/{ticker}/market`: market snapshot
+- `GET /api/company/{ticker}/peers`: peer set
+- `GET /api/company/{ticker}/filings?form=10-K&limit=10`: recent filings
+- `GET /api/company/{ticker}/insider-trades?limit=20`: Form 4 trades
 
-- Purpose: Unified company payload for the app.
-- Upstream: `GET {SEC_SERVICE_URL}/api/company/{ticker}/unified/native?years=5`
-- Fallback behavior:
-  - If unified payload has unusable financials, fetches `.../financials/native`.
-  - Uses in-memory response cache per ticker.
-  - Returns stale cached data when upstream fails.
+## Excel export
 
-### `GET /api/sec/search?q={QUERY}&limit={N}`
+- `POST /api/export/dcf/excel`: accepts the completed DCF export payload and returns an `.xlsx` workbook.
 
-- Purpose: Company search for ticker/name/CIK.
-- Uses SEC ticker index with fuzzy matching.
+The CLI builds the forecast and scenarios before calling the export endpoint. The backend validates the request with `DcfExportRequest`, then maps the payload into the checked-in Excel template with `openpyxl`. Generic operating-company DCFs use the multi-sheet template; bank/insurance residual income, REIT AFFO, and utility dividend-growth valuations use an editable `Sector Model` sheet. Revenue-multiple and EV/EBITDA workbooks are not implemented and are rejected.
 
-### `POST /api/projections/{ticker}`
+The unified response's `model_eligibility` is computed by the Python canonical classifier. Its company type, preferred model, support flag, allowed models, and blocked reasons are validated by the CLI and drive valuation routing. The CLI does not substitute a generic DCF for an unsupported preferred model. Pydantic response/request schemas are in `backend/app/api/contracts.py`; the TypeScript client parses both wire responses at runtime.
 
-- Purpose: Build lightweight revenue/earnings projections from native historical data.
-- Upstream source: backend unified native endpoint.
+## Other routes
 
-### `POST /api/dcf/export`
+- `GET /api/search?query={QUERY}&limit={N}`: company search
+- `GET /api/macro`: macro valuation context
 
-- Purpose: Generate downloadable DCF Excel file.
-- Upstream: `POST {SEC_SERVICE_URL}/api/export/dcf/excel`
+## Data sources
 
-### Other frontend API routes
+- SEC company/profile/financial data: `edgartools`
+- Market data: OpenBB with the Yahoo Finance provider, then Stockdex and direct Yahoo/yfinance fallbacks
+- Cache: SQLite under `backend/data/`
 
-- `GET /api/wacc/erp`
-- `GET /api/wacc/treasury`
-- `GET /api/market-data`
-
-## Backend Routes (FastAPI)
-
-Base prefixes registered in `app/main.py`:
-
-- `/api/company`
-- `/api/search`
-- `/api/export`
-- `/api/macro`
-
-### Health and service
-
-- `GET /`
-- `GET /health`
-- `GET /api/health`
-- `GET /api/cache/stats`
-
-### Company endpoints (`/api/company`)
-
-- `GET /{ticker}` profile
-- `GET /{ticker}/unified`
-- `GET /{ticker}/unified/native` alias
-- `GET /{ticker}/financials`
-- `GET /{ticker}/financials/native` alias
-- `GET /{ticker}/market`
-- `GET /{ticker}/peers`
-- `GET /{ticker}/peers/suggested`
-- `GET /{ticker}/filings`
-- `GET /{ticker}/insider-trades`
-- `GET /{ticker}/insiders` alias
-
-### Search endpoint (`/api/search`)
-
-- `GET /?query={QUERY}&limit={N}`
-
-### Macro endpoint (`/api/macro`)
-
-- `GET /api/macro`
-
-### Export endpoint (`/api/export`)
-
-- `POST /dcf/excel`
-
-## Data Source Strategy
-
-- Financial statements/profile: `edgartools` primary.
-- Live market data: `stockdex` primary, Yahoo fallback.
-- Macro context: Yahoo and cached backend context.
-- Response caching: SQLite-backed repository/cache layer.
-
-## Core Environment Variables
-
-### Backend
-
-- `EDGAR_IDENTITY`
-- `CORS_ORIGINS`
-- `ALLOWED_HOSTS`
-- `EXPOSE_IDENTITY_HINT`
-- `FINANCIALS_OPERATING_COMPANY_FILTER`
-- `FINANCIALS_REQUIRE_10K_PREFLIGHT`
-
-### Frontend
-
-- `SEC_SERVICE_URL`
-- `NEXT_PUBLIC_SEC_SERVICE_URL`
-- `SEC_USER_AGENT`
-
-## Error Model
-
-- Frontend BFF routes return JSON errors with HTTP status codes (`400`, `404`, `5xx`).
-- Backend uses FastAPI handlers and a normalized internal error envelope for server errors.
+Set `EDGAR_IDENTITY` in the environment before making SEC-backed requests. Do not commit real identity values or local cache files. The live CLI integration suite exercises these routes with current SEC, market, macro, and peer data and uses an isolated temporary cache.

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DIR="${HOME}/.local/bin"
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+
+mkdir -p "$BIN_DIR"
+
+for CLI_NAME in dcf dcfbuild; do
+  CLI_TARGET="${BIN_DIR}/${CLI_NAME}"
+  CLI_SOURCE="${PROJECT_ROOT}/bin/${CLI_NAME}.mjs"
+  if [[ -L "$CLI_TARGET" ]]; then
+    if [[ "$(readlink "$CLI_TARGET")" != "$CLI_SOURCE" ]]; then
+      printf 'Refusing to replace a different %s link at %s\n' "$CLI_NAME" "$CLI_TARGET" >&2
+      exit 1
+    fi
+  elif [[ -e "$CLI_TARGET" ]]; then
+    printf 'Refusing to replace an existing file at %s\n' "$CLI_TARGET" >&2
+    exit 1
+  fi
+done
+
+for CLI_NAME in dcf dcfbuild; do
+  CLI_TARGET="${BIN_DIR}/${CLI_NAME}"
+  CLI_SOURCE="${PROJECT_ROOT}/bin/${CLI_NAME}.mjs"
+  if [[ ! -L "$CLI_TARGET" ]]; then
+    ln -s "$CLI_SOURCE" "$CLI_TARGET"
+  fi
+done
+
+ZPROFILE="${HOME}/.zprofile"
+case ":${PATH:-}:" in
+  *":${BIN_DIR}:"*) ;;
+  *)
+    if ! { [[ -f "$ZPROFILE" ]] && grep -Fqx "$PATH_LINE" "$ZPROFILE"; }; then
+      printf '\n# DCF CLI\n%s\n' "$PATH_LINE" >> "$ZPROFILE"
+    fi
+    ;;
+esac
+
+printf 'Installed dcf and dcfbuild under %s\n' "$BIN_DIR"
+printf 'Open a new terminal window if the command is not on the current PATH.\n'

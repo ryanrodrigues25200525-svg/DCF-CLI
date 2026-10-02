@@ -22,6 +22,8 @@ class CompanyProfile(BaseSchema):
     exchange: Optional[str] = "Unknown"
     sector: Optional[str] = "Unknown"
     industry: Optional[str] = "Unknown"
+    sic: Optional[str] = None
+    sic_description: Optional[str] = None
     fiscal_year_end: Optional[str] = None
 
     # Market Data (YFinance)

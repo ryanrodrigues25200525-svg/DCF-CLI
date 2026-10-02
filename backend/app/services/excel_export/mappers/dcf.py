@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import math
 from copy import copy
 from datetime import date, datetime
 from typing import Any
 
 from openpyxl.cell.cell import MergedCell
 from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.styles import Font
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .utils import (
     DCF_TIMELINE_COLUMNS,
+    RECALC_COLUMNS,
     SHEET_ASSUMPTION_BREAKDOWN,
+    SHEET_COVER,
+    SHEET_DATA_RECALCULATED,
     SHEET_DATA_ORIGINAL,
+    SHEET_DCF_BASE,
+    SHEET_DCF_BEAR,
+    SHEET_DCF_BULL,
     SHEET_OUTPUTS,
     _apply_scenario_snapshot_to_sheet,
     _axis_from_bounds,
@@ -36,6 +44,7 @@ from .utils import (
     _sanitize_wacc_rate,
     _scale,
     _scenario_snapshot,
+    _sheet,
     _set_comment,
     _set_percent_axis_column,
     _set_percent_axis_row,
@@ -45,6 +54,15 @@ from .utils import (
 SCENARIO_BASE = "base"
 SCENARIO_BULL = "bull"
 SCENARIO_BEAR = "bear"
+
+def _required_positive_integer(value: Any, label: str, default: int) -> int:
+    parsed = _to_float(value)
+    if parsed is None:
+        parsed = float(default)
+    if parsed < 1 or not parsed.is_integer():
+        raise ValueError(f"{label} must be a positive whole number.")
+    return int(parsed)
+
 
 def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: float) -> None:
     assumptions = payload.get("assumptions", {})
@@ -62,6 +80,25 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
     da_pct = _to_float(assumptions.get("daPctRevenue"))
     if da_pct is None:
         da_pct = _to_float(assumptions.get("deaRatio"))
+    ebit_margin = _to_float(assumptions.get("ebitMargin"))
+    if ebit_margin is None:
+        ebit_margin = _to_float(assumptions.get("ebitMarginTarget"))
+    steady_state_ebit_margin = _to_float(assumptions.get("ebitMarginSteadyState"))
+    if steady_state_ebit_margin is None:
+        steady_state_ebit_margin = ebit_margin
+    gross_margin = _to_float(assumptions.get("grossMargin"))
+    historicals = payload.get("historicals", {})
+    historicals = historicals if isinstance(historicals, dict) else {}
+    historical_years = [year for year in (historicals.get("years", []) or []) if _to_float(year) is not None]
+    latest_year = int(historical_years[-1]) if historical_years else None
+    if latest_year is not None:
+        revenue = _historical_value_for_year(payload, latest_year, statement="income", keys=["Total Revenue", "Revenue"])
+        if gross_margin is None:
+            gross_profit = _historical_value_for_year(payload, latest_year, statement="income", keys=["Gross Profit", "GrossProfit"])
+            gross_margin = gross_profit / revenue if gross_profit is not None and revenue else None
+        if ebit_margin is None:
+            ebit = _historical_value_for_year(payload, latest_year, statement="income", keys=["Operating Income (EBIT)", "EBIT"])
+            ebit_margin = ebit / revenue if ebit is not None and revenue else None
     terminal_assumptions = assumptions.get("terminal") or {}
     exit_multiple = _to_float(terminal_assumptions.get("exitMultiple"))
     wacc_assumptions = assumptions.get("wacc")
@@ -71,7 +108,9 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
         terminal_assumptions.get("g"),
         reference_wacc=base_wacc_assumption,
     )
-    revenue_growth = _to_float(assumptions.get("revenueGrowth"))
+    revenue_growth = _to_float(assumptions.get("revenueGrowthStage1"))
+    if revenue_growth is None:
+        revenue_growth = _to_float(assumptions.get("revenueGrowth"))
     if revenue_growth is None:
         revenue_growth = _to_float(assumptions.get("revenueGrowthRate"))
     if revenue_growth is None:
@@ -81,19 +120,30 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
 
     shares = _to_float(market.get("sharesDiluted")) or 0.0
     price = _to_float(market.get("currentPrice")) or 0.0
+    if shares <= 0 or price <= 0:
+        raise ValueError("The DCF workbook requires positive diluted shares and a current share price for per-share outputs.")
     market_cap_raw = _to_float(market.get("marketCap"))
     if market_cap_raw is None and shares > 0 and price > 0:
         market_cap_raw = shares * price
 
     debt_raw = _to_float(market.get("marketValueDebt"))
     if debt_raw is None:
-        debt_raw = _to_float(market.get("debt")) or 0.0
-    cash_raw = _to_float(market.get("cash")) or 0.0
-    non_operating_assets_raw = _to_float(market.get("nonOperatingAssets")) or 0.0
+        debt_raw = _to_float(market.get("debt"))
+    cash_raw = _to_float(market.get("cash"))
+    non_operating_assets_raw = _to_float(market.get("nonOperatingAssets"))
+    minority_interest_raw = _to_float(market.get("minorityInterest"))
+    preferred_equity_raw = _to_float(market.get("preferredEquity"))
+    for label, value in (
+        ("debt", debt_raw),
+        ("cash", cash_raw),
+        ("non-operating assets", non_operating_assets_raw),
+        ("minority interest", minority_interest_raw),
+        ("preferred equity", preferred_equity_raw),
+    ):
+        if value is None:
+            raise ValueError(f"A sourced {label} amount is required for the equity bridge.")
 
-    equity_raw = _to_float(key_metrics.get("equityValue"))
-    if equity_raw is None:
-        equity_raw = market_cap_raw
+    equity_raw = market_cap_raw
 
     net_debt_raw = _to_float(market.get("netDebt"))
     if net_debt_raw is None:
@@ -111,49 +161,127 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
 
     _safe_set(dcf_base, "C9", _scale(enterprise_raw, divisor))
     _safe_set(dcf_base, "C11", _scale(equity_raw, divisor))
-    _safe_set(dcf_base, "F16", _scale(net_debt_raw, divisor))
     _safe_set(dcf_base, "F17", _scale(cash_raw, divisor))
     _safe_set(dcf_base, "F18", _scale(debt_raw, divisor))
     _safe_set(dcf_base, "F19", _scale(non_operating_assets_raw, divisor))
-
-    capex = None
-    nwc_change = None
+    _safe_set(dcf_base, "E20", "Minority Interest")
+    dcf_base["F20"]._style = copy(dcf_base["F9"]._style)
+    dcf_base["F20"].number_format = dcf_base["F9"].number_format
+    _force_set(dcf_base, "F20", _scale(minority_interest_raw, divisor))
+    _safe_set(dcf_base, "E21", "Preferred Equity")
+    dcf_base["F21"]._style = copy(dcf_base["F9"]._style)
+    dcf_base["F21"].number_format = dcf_base["F9"].number_format
+    _force_set(dcf_base, "F21", _scale(preferred_equity_raw, divisor))
 
     first_forecast = forecasts[0] if forecasts and isinstance(forecasts[0], dict) else {}
-    capex = _to_float(first_forecast.get("capex"))
-    nwc_change = _to_float(first_forecast.get("nwcChange"))
+    capex_ratio = _to_float(assumptions.get("capexPctRevenue"))
+    if capex_ratio is None:
+        capex_ratio = _to_float(assumptions.get("capexRatio"))
+    if capex_ratio is None:
+        first_capex = _to_float(first_forecast.get("capex"))
+        first_revenue = _to_float(first_forecast.get("revenue"))
+        capex_ratio = abs(first_capex / first_revenue) if first_capex is not None and first_revenue else None
+    nwc_ratio = _to_float(assumptions.get("nwcPctRevenue"))
+    if capex_ratio is None or not math.isfinite(capex_ratio) or capex_ratio < 0:
+        raise ValueError("The operating DCF requires an editable, non-negative capex-to-revenue assumption.")
+    if nwc_ratio is None:
+        nwc_ratio = 0.0
+    if ebit_margin is None or not math.isfinite(ebit_margin) or not 0 < ebit_margin <= 1:
+        raise ValueError("The operating DCF requires an editable EBIT margin assumption between 0% and 100%.")
+    if gross_margin is None or not math.isfinite(gross_margin) or not 0 < gross_margin <= 1:
+        raise ValueError("The operating DCF requires an editable gross margin assumption between 0% and 100%.")
 
-    if capex is None:
-        capex_abs = assumptions.get("capexAbsolute")
-        if isinstance(capex_abs, list) and capex_abs:
-            capex = _to_float(capex_abs[0])
-
-    if capex is not None:
-        capex = abs(capex)
-    if nwc_change is not None:
-        nwc_change = abs(nwc_change)
-
-    _safe_set(dcf_base, "F9", _scale(capex, divisor))
-    _safe_set(dcf_base, "F10", _scale(nwc_change, divisor))
+    _safe_set(dcf_base, "E9", "CapEx % of Revenue")
+    _safe_set(dcf_base, "F9", capex_ratio)
+    dcf_base["F9"].number_format = "0.0%"
+    operating_archetype = str(company.get("operatingArchetype") or company.get("operating_archetype") or "")
+    if operating_archetype == "subscription_software":
+        _safe_set(dcf_base, "E10", "Aggregate operating NWC residual % of Revenue")
+    else:
+        _safe_set(dcf_base, "E10", "NWC intensity overlay % of Revenue")
+    _safe_set(dcf_base, "F10", nwc_ratio)
+    dcf_base["F10"].number_format = "0.0%"
     _safe_set(dcf_base, "F11", tax_rate)
     _safe_set(dcf_base, "F13", da_pct)
     _safe_set(dcf_base, "F14", revenue_growth)
+    _safe_set(dcf_base, "E14", "Stage 1 Revenue Growth")
+    _safe_set(dcf_base, "E15", "Starting EBIT Margin")
+    _safe_set(dcf_base, "F15", ebit_margin)
+    _safe_set(dcf_base, "E16", "Forecast Gross Margin")
+    _safe_set(dcf_base, "F16", gross_margin)
+    _safe_set(dcf_base, "E17", "Steady-State EBIT Margin")
+    _safe_set(dcf_base, "F17", steady_state_ebit_margin)
+    _safe_set(dcf_base, "E19", "Stage 2 Revenue Growth")
+    stage2_growth = _to_float(assumptions.get("revenueGrowthStage2"))
+    if stage2_growth is None:
+        stage2_growth = revenue_growth
+    _safe_set(dcf_base, "F19", stage2_growth)
+    dcf_base["F15"].number_format = "0.0%"
+    dcf_base["F16"].number_format = "0.0%"
     dcf_base["F14"].number_format = "0.0%"
+    dcf_base["F17"]._style = copy(dcf_base["F15"]._style)
+    dcf_base["F17"].number_format = "0.0%"
+    dcf_base["F19"]._style = copy(dcf_base["F14"]._style)
+    dcf_base["F19"].number_format = "0.0%"
+
+    margin_convergence_years = _required_positive_integer(
+        assumptions.get("ebitMarginConvergenceYears") or assumptions.get("marginRampYears"),
+        "EBIT-margin convergence period",
+        5,
+    )
+    growth_stage1_years = _required_positive_integer(
+        assumptions.get("revenueGrowthStage1Years"), "Revenue-growth Stage 1 duration", 3
+    )
+    growth_fade_years = _required_positive_integer(
+        assumptions.get("revenueGrowthFadeYears"), "Revenue-growth fade duration", 4
+    )
+    for label_ref, value_ref, label, value, number_format in (
+        ("H13", "I13", "EBIT Margin Convergence (Years)", margin_convergence_years, "0"),
+        ("H14", "I14", "Revenue Growth Stage 1 (Years)", growth_stage1_years, "0"),
+        ("H15", "I15", "Revenue Growth Fade (Years)", growth_fade_years, "0"),
+        ("H16", "I16", "Diluted Shares (millions)", _scale(shares, divisor), "#,##0.0;(#,##0.0);-"),
+        ("H17", "I17", "Current Share Price", price, "$0.00"),
+    ):
+        _safe_set(dcf_base, label_ref, label)
+        _safe_set(dcf_base, value_ref, value)
+        dcf_base[label_ref]._style = copy(dcf_base["H9"]._style)
+        dcf_base[value_ref]._style = copy(dcf_base["F14"]._style)
+        dcf_base[value_ref].number_format = number_format
+
     _safe_set(dcf_base, "C16", exit_multiple)
     _safe_set(dcf_base, "Q103", terminal_growth)
 
-    _set_comment(dcf_base, "F9", "Source: Forecast capex (payload.forecasts[0].capex) or capexAbsolute fallback.")
-    _set_comment(dcf_base, "F10", "Source: Forecast working-capital change (payload.forecasts[0].nwcChange).")
+    _set_comment(dcf_base, "F9", "Editable capex assumption: capex as a percentage of revenue; forecast capex recalculates as revenue multiplied by this input.")
+    _set_comment(
+        dcf_base,
+        "F10",
+        "Editable residual working-capital assumption. For subscription software this reconciles filed aggregate noncash current assets less current liabilities to separately disclosed operating drivers; for other operating models it is an explicit overlay on working-capital days.",
+    )
     _set_comment(dcf_base, "F11", "Source: Tax assumption from payload.assumptions.taxRate.")
-    _set_comment(dcf_base, "F14", "Source: Revenue growth assumption; defaults to inferred forecast growth.")
+    _set_comment(dcf_base, "F14", "Editable revenue-growth assumption for the first forecast stage; initialized from filed revenue history, not issuer guidance.")
+    _set_comment(dcf_base, "F15", "Editable starting EBIT margin, initialized from the latest filed margin or three-year average according to the operating archetype.")
+    _set_comment(dcf_base, "F16", "Editable forecast gross margin initialized from the latest filed gross profit divided by filed revenue; forecast cost of revenue reconciles to this input.")
+    _set_comment(dcf_base, "F17", "Editable steady-state EBIT margin, initialized from the three-year filed average.")
+    _set_comment(dcf_base, "F19", "Editable Stage 2 revenue growth assumption; the forecast fades toward this rate after the Stage 1 duration.")
+    _set_comment(dcf_base, "I13", "Editable analyst assumption for the forecast years used to fade EBIT margin to its steady-state assumption.")
+    _set_comment(dcf_base, "I14", "Editable forecast duration for Stage 1 revenue growth.")
+    _set_comment(dcf_base, "I15", "Editable forecast duration for the linear fade from Stage 1 to Stage 2 revenue growth.")
+    _set_comment(dcf_base, "I16", "Source: current diluted shares from the market payload, displayed in millions to match workbook currency units.")
+    _set_comment(dcf_base, "I17", "Source: current share price from the market payload.")
     _set_comment(dcf_base, "C16", "Source: Terminal exit multiple from payload.assumptions.terminal.exitMultiple.")
-    _set_comment(dcf_base, "F17", "Source: Market cash and equivalents.")
-    _set_comment(dcf_base, "F18", "Source: Market debt / market value debt proxy.")
-    _set_comment(dcf_base, "F19", "Source: Non-operating assets from market payload.")
+    _set_comment(dcf_base, "F20", "Source: Noncontrolling interest from the SEC balance sheet; not an equity plug.")
+    _set_comment(dcf_base, "F21", "Source: Preferred equity from SEC canonical history; explicit zero only when the filing has no preferred stock fact.")
 
     as_of = _safe_date(company.get("asOfDate"))
     if as_of is not None:
         _safe_set(dcf_base, "I9", as_of)
+
+    closing_date_raw = (
+        transaction.get("closingDate")
+        or transaction.get("closeDate")
+        or payload.get("closingDate")
+    )
+    _safe_set_or_clear(dcf_base, "I10", _safe_date(closing_date_raw))
 
     fiscal_year = as_of.year if as_of is not None else datetime.now().year
     fiscal_end = _fiscal_year_end_date(company.get("fiscalYearEnd"), fiscal_year)
@@ -165,7 +293,10 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
 
 def _sync_shared_scenario_inputs(scenario_sheet: Worksheet, dcf_base: Worksheet, *, nwc_multiplier: float) -> None:
     # Preserve scenario-specific formulas and apply only payload-driven shared assumptions.
-    for cell in ("C9", "C11", "F9", "F11", "F13", "F14", "C16", "I9", "I11", "Q103"):
+    for cell in (
+        "C9", "C11", "C12", "C17", "F9", "F11", "F13", "F14", "F15", "F16", "F17", "F19", "F20", "F21",
+        "C16", "I9", "I10", "I11", "I13", "I14", "I15", "I16", "I17", "Q103", "AA17", "AA18", "AA19",
+    ):
         scenario_sheet[cell].value = dcf_base[cell].value
 
     base_nwc_change = _to_float(dcf_base["F10"].value)
@@ -177,10 +308,10 @@ def _sync_shared_scenario_inputs(scenario_sheet: Worksheet, dcf_base: Worksheet,
 def _harden_growth_rate_formulas(*scenario_sheets: Worksheet) -> None:
     # Guard CAGR calculations against divide-by-zero in low-data scenarios.
     formula_map = {
-        "S24": "=IFERROR((I24/H24)^(1/(COLUMNS(H24:I24)-1))-1,0)",
-        "T24": "=IFERROR((Q24/J24)^(1/(COLUMNS(J24:Q24)-1))-1,0)",
-        "S27": "=IFERROR((I27/H27)^(1/(COLUMNS(H27:I27)-1))-1,0)",
-        "T27": "=IFERROR((Q27/J27)^(1/(COLUMNS(J27:Q27)-1))-1,0)",
+        "S24": '=IFERROR((I24/H24)^(1/(COLUMNS(H24:I24)-1))-1,"")',
+        "T24": '=IFERROR((Q24/J24)^(1/(COLUMNS(J24:Q24)-1))-1,"")',
+        "S27": '=IFERROR((I27/H27)^(1/(COLUMNS(H27:I27)-1))-1,"")',
+        "T27": '=IFERROR((Q27/J27)^(1/(COLUMNS(J27:Q27)-1))-1,"")',
     }
     for sheet in scenario_sheets:
         for cell_ref, formula in formula_map.items():
@@ -199,21 +330,189 @@ def _harden_growth_rate_formulas(*scenario_sheets: Worksheet) -> None:
                 if "COLUMNS(" not in upper_value:
                     continue
                 expression = value[1:].lstrip("+")
-                _force_set(sheet, cell_ref, f"=IFERROR({expression},0)")
+                _force_set(sheet, cell_ref, f'=IFERROR({expression},"")')
 
 
 
-def _normalize_dcf_waterfall_formulas(*scenario_sheets: Worksheet) -> None:
-    # Keep sign conventions intuitive while preserving economics:
-    # OpEx rows positive, EBIT subtracts OpEx; CapEx/NWC assumptions reference fixed inputs directly.
+def _normalize_dcf_waterfall_formulas(
+    data_recalc: Worksheet,
+    timeline_years: list[int | None],
+    historical_years: set[int],
+    *scenario_sheets: Worksheet,
+) -> None:
+    # D&A is shown as an operating memo line, not a second operating expense.
     for sheet in scenario_sheets:
+        for idx, col in enumerate(DCF_TIMELINE_COLUMNS):
+            _force_set(sheet, f"{col}48", f"=-({col}36+{col}39+{col}45)")
+            _force_set(sheet, f"{col}49", f"=IFERROR(-{col}48/{col}20,0)")
+            _force_set(sheet, f"{col}51", f"={col}32+{col}48")
+
+            year = timeline_years[idx] if idx < len(timeline_years) else None
+            if year is None:
+                for row in range(18, 116):
+                    _force_set(sheet, f"{col}{row}", None)
+                continue
+            if year in historical_years:
+                recalc_col = RECALC_COLUMNS[idx]
+                capex_ref = f"'Data Given (Recalculated)'!{recalc_col}35"
+                da_ref = f"'Data Given (Recalculated)'!{recalc_col}36"
+                nwc_ref = f"'Data Given (Recalculated)'!{recalc_col}41"
+
+                _force_set(
+                    sheet,
+                    f"{col}65",
+                    f'=IF({capex_ref}="","",-{capex_ref})'
+                    if data_recalc[f"{recalc_col}35"].value is not None
+                    else '=""',
+                )
+                _force_set(
+                    sheet,
+                    f"{col}68",
+                    f'=IF({da_ref}="","",{da_ref})'
+                    if data_recalc[f"{recalc_col}36"].value is not None
+                    else '=""',
+                )
+                _force_set(sheet, f"{col}69", f"=IFERROR({col}68/{col}20,0)")
+                _force_set(
+                    sheet,
+                    f"{col}77",
+                    f'=IF({nwc_ref}="","",-{nwc_ref})'
+                    if data_recalc[f"{recalc_col}41"].value is not None
+                    else '=""',
+                )
+            else:
+                _force_set(sheet, f"{col}65", f"=-{col}20*$F$9")
+                _force_set(sheet, f"{col}68", f"={col}20*$F$13")
+                _force_set(sheet, f"{col}69", "=$F$13")
+                days_sheet = "'Data Given (Recalculated)'!"
+                current_nwc = (
+                    f"({col}20*{days_sheet}$C$50/365+{col}30*{days_sheet}$C$51/365-"
+                    f"{col}30*{days_sheet}$C$52/365+{col}20*$F$10)"
+                )
+                prior_year = timeline_years[idx - 1] if idx > 0 else None
+                if idx > 0 and prior_year in historical_years:
+                    prior_recalc_col = RECALC_COLUMNS[idx - 1]
+                    prior_nwc = f"{days_sheet}{prior_recalc_col}40"
+                elif idx > 0:
+                    prior_col = DCF_TIMELINE_COLUMNS[idx - 1]
+                    prior_nwc = (
+                        f"({prior_col}20*{days_sheet}$C$50/365+{prior_col}30*{days_sheet}$C$51/365-"
+                        f"{prior_col}30*{days_sheet}$C$52/365+{prior_col}20*$F$10)"
+                    )
+                else:
+                    prior_nwc = "0"
+                _force_set(sheet, f"{col}77", f"=IFERROR(-({current_nwc}-{prior_nwc}),\"\")")
+            _force_set(sheet, f"{col}66", f"=IFERROR(-{col}65/{col}20,0)")
+            _force_set(sheet, f"{col}70", f"=IFERROR(-{col}68/{col}65,0)")
+
         for col in DCF_TIMELINE_COLUMNS:
-            _force_set(sheet, f"{col}48", f"={col}36+{col}39+{col}42+{col}45")
-            _force_set(sheet, f"{col}49", f"=IFERROR({col}48/{col}20,0)")
-            _force_set(sheet, f"{col}51", f"={col}32-{col}48")
-            _force_set(sheet, f"{col}65", "=-$F$9")
-            _force_set(sheet, f"{col}77", "=-$F$10")
-            _force_set(sheet, f"{col}69", "=$F$13")
+            sheet[f"{col}78"].number_format = sheet["J78"].number_format
+            sheet[f"{col}79"].number_format = sheet["J79"].number_format
+
+
+def apply_incomplete_operating_dcf(
+    workbook: Workbook,
+    payload: dict[str, Any],
+    input_cells: dict[str, dict[str, str]],
+    timeline_years: list[int | None],
+    historical_years: set[int],
+) -> None:
+    requirements = payload.get("requiredInputs")
+    requirements = requirements if isinstance(requirements, list) else []
+    capex_requirements = [
+        item for item in requirements
+        if isinstance(item, dict) and item.get("key") == "capex" and isinstance(item.get("fiscalYear"), int)
+    ]
+    if not capex_requirements:
+        raise ValueError("Incomplete operating DCF requires an exact historical CapEx input manifest.")
+
+    recalculated = _sheet(workbook, SHEET_DATA_RECALCULATED)
+    for requirement in capex_requirements:
+        year = int(requirement["fiscalYear"])
+        if year not in timeline_years:
+            raise ValueError(f"FY{year} CapEx input is outside the workbook timeline.")
+        timeline_index = timeline_years.index(year)
+        input_identity = f"capex:{year}"
+        destination = input_cells.get(input_identity)
+        if not destination or destination.get("sheet") != "Input Required":
+            raise ValueError(f"FY{year} CapEx input has no editable workbook cell.")
+        input_cell = destination["cell"]
+        recalculated_column = RECALC_COLUMNS[timeline_index]
+        _force_set(
+            recalculated,
+            f"{recalculated_column}35",
+            f'=IF(\'Input Required\'!$B$3="READY",\'Input Required\'!{input_cell},"")',
+        )
+
+    recent_years = sorted(historical_years)[-3:]
+    if len(recent_years) != 3:
+        raise ValueError("Incomplete operating DCF requires three historical years for a CapEx ratio.")
+    capex_ratio_terms: list[str] = []
+    for year in recent_years:
+        try:
+            timeline_index = timeline_years.index(year)
+        except ValueError as error:
+            raise ValueError(f"FY{year} is outside the incomplete DCF timeline.") from error
+        column = RECALC_COLUMNS[timeline_index]
+        capex_ratio_terms.append(
+            f"ABS('{SHEET_DATA_RECALCULATED}'!{column}35/'{SHEET_DATA_RECALCULATED}'!{column}12)"
+        )
+    capex_ratio_formula = (
+        '=IF(\'Input Required\'!$B$3<>"READY","",AVERAGE('
+        + ",".join(capex_ratio_terms)
+        + "))"
+    )
+    for sheet_name in (SHEET_DCF_BASE, SHEET_DCF_BULL, SHEET_DCF_BEAR):
+        sheet = _sheet(workbook, sheet_name)
+        _force_set(sheet, "F9", capex_ratio_formula)
+        sheet["F9"].number_format = "0.0%"
+        sheet["F9"].font = Font(name="Arial", size=10, color="008000")
+        _set_comment(
+            sheet,
+            "F9",
+            "Editable formula assumption: average filed CapEx / revenue for the latest three fiscal years. The formula remains blank until every required actual and source reference is entered.",
+        )
+
+    def guard_formula(sheet: Worksheet, coordinate: str) -> None:
+        formula = sheet[coordinate].value
+        if not (isinstance(formula, str) and formula.startswith("=")):
+            return
+        if "'Input Required'!$B$3" in formula:
+            return
+        _force_set(sheet, coordinate, f'=IF(\'Input Required\'!$B$3<>"READY","",{formula[1:]})')
+
+    forecast_columns = {
+        DCF_TIMELINE_COLUMNS[index]
+        for index, year in enumerate(timeline_years)
+        if year is not None and year not in historical_years
+    }
+    for sheet_name in (SHEET_DCF_BASE, SHEET_DCF_BULL, SHEET_DCF_BEAR):
+        sheet = _sheet(workbook, sheet_name)
+        for column in forecast_columns:
+            for row in range(18, 91):
+                guard_formula(sheet, f"{column}{row}")
+        for row in range(91, 131):
+            for column_index in range(1, sheet.max_column + 1):
+                coordinate = sheet.cell(row=row, column=column_index).coordinate
+                guard_formula(sheet, coordinate)
+        for coordinate in ("C9", "C10", "C12", "C13", "C14"):
+            guard_formula(sheet, coordinate)
+
+    for sheet_name in (SHEET_COVER, SHEET_OUTPUTS):
+        if sheet_name not in workbook.sheetnames:
+            continue
+        sheet = workbook[sheet_name]
+        for row in sheet.iter_rows():
+            for cell in row:
+                if not isinstance(cell, MergedCell):
+                    guard_formula(sheet, cell.coordinate)
+
+    for index, year in enumerate(timeline_years):
+        if year is None or year in historical_years:
+            continue
+        column = RECALC_COLUMNS[index]
+        for row in range(12, 42):
+            guard_formula(recalculated, f"{column}{row}")
 
 
 
@@ -222,12 +521,16 @@ def _normalize_public_dcf_layout(
     dcf_base: Worksheet,
     dcf_bull: Worksheet,
     dcf_bear: Worksheet,
+    data_recalc: Worksheet,
     payload: dict[str, Any],
     divisor: float,
+    timeline_years: list[int | None],
+    historical_years: set[int],
 ) -> None:
-    _link_dcf_income_statement_to_recalculated_data(dcf_base, dcf_bull, dcf_bear)
+    _link_dcf_income_statement_to_recalculated_data(timeline_years, historical_years, dcf_base, dcf_bull, dcf_bear)
     _normalize_public_dcf_assumption_block(dcf_base, dcf_bull, dcf_bear, payload, divisor)
     _enforce_core_public_dcf_formulas(dcf_base, dcf_bull, dcf_bear)
+    _normalize_dcf_waterfall_formulas(data_recalc, timeline_years, historical_years, dcf_base, dcf_bull, dcf_bear)
     _enforce_outputs_bridge_formulas(outputs)
 
 
@@ -255,7 +558,7 @@ def _apply_capex_schedule_to_dcf(
     dcf_bull: Worksheet,
     dcf_bear: Worksheet,
     payload: dict[str, Any],
-    timeline_years: list[int],
+    timeline_years: list[int | None],
     divisor: float,
 ) -> None:
     # Projection-period CapEx rows are formula-driven from assumptions.
@@ -269,7 +572,7 @@ def _apply_scenario_snapshots_to_dcf(
     dcf_bull: Worksheet,
     dcf_bear: Worksheet,
     payload: dict[str, Any],
-    timeline_years: list[int],
+    timeline_years: list[int | None],
     divisor: float,
 ) -> None:
     base_snapshot = _scenario_snapshot(payload, SCENARIO_BASE)
@@ -286,6 +589,26 @@ def _apply_scenario_snapshots_to_dcf(
     if bear_snapshot is not None:
         _apply_scenario_snapshot_to_sheet(dcf_bear, bear_snapshot, timeline_years, divisor)
 
+    for sheet in (dcf_base, dcf_bull, dcf_bear):
+        first_forecast_idx = next(
+            (
+                idx
+                for idx, col in enumerate(DCF_TIMELINE_COLUMNS)
+                if isinstance(sheet[f"{col}18"].value, str)
+                and str(sheet[f"{col}18"].value).endswith("E")
+            ),
+            None,
+        )
+        if first_forecast_idx is None or first_forecast_idx == 0:
+            continue
+        first_forecast_col = DCF_TIMELINE_COLUMNS[first_forecast_idx]
+        prior_col = DCF_TIMELINE_COLUMNS[first_forecast_idx - 1]
+        _force_set(
+            sheet,
+            f"{first_forecast_col}20",
+            f"={prior_col}20*(1+{first_forecast_col}21)",
+        )
+
 
 
 def _finalize_assumption_block_cleanup(*scenario_sheets: Worksheet) -> None:
@@ -293,13 +616,12 @@ def _finalize_assumption_block_cleanup(*scenario_sheets: Worksheet) -> None:
     for sheet in scenario_sheets:
         _safe_set(sheet, "B18", "Income Statement")
         _safe_set_or_clear(sheet, "B19", None)
-        _safe_set_or_clear(sheet, "E15", None)
-        _safe_set_or_clear(sheet, "E16", None)
-        _safe_set_or_clear(sheet, "F16", None)
-        _safe_set_or_clear(sheet, "F17", None)
+        _safe_set(sheet, "E14", "Stage 1 Revenue Growth")
+        _safe_set(sheet, "E15", "Starting EBIT Margin")
+        _safe_set(sheet, "E16", "Forecast Gross Margin")
+        _safe_set(sheet, "E17", "Steady-State EBIT Margin")
         _safe_set_or_clear(sheet, "F18", None)
-        _safe_set_or_clear(sheet, "F19", None)
-        _safe_set_or_clear(sheet, "E19", None)
+        _safe_set(sheet, "E19", "Stage 2 Revenue Growth")
         for address in ("C18", "C19", "D18", "D19", "E18", "G18", "G19"):
             _safe_set_or_clear(sheet, address, None)
         # Remove lingering note indicators (red triangles) from template/input mapping.
@@ -307,19 +629,13 @@ def _finalize_assumption_block_cleanup(*scenario_sheets: Worksheet) -> None:
             "C13",
             "C16",
             "C17",
-            "E15",
-            "E16",
             "F9",
             "F10",
             "F11",
             "F12",
             "F13",
             "F14",
-            "F15",
-            "F16",
-            "F17",
             "F18",
-            "F19",
         ):
             sheet[address].comment = None
 
@@ -330,13 +646,16 @@ def _add_prior_actual_year_display_column(
     dcf_bull: Worksheet,
     dcf_bear: Worksheet,
     payload: dict[str, Any],
-    timeline_years: list[int],
+    timeline_years: list[int | None],
     historical_years: set[int],
     divisor: float,
 ) -> None:
     if not timeline_years:
         return
-    prior_candidates = [year for year in historical_years if year < timeline_years[0]]
+    first_timeline_year = next((year for year in timeline_years if year is not None), None)
+    if first_timeline_year is None:
+        return
+    prior_candidates = [year for year in historical_years if year < first_timeline_year]
     if not prior_candidates:
         return
 
@@ -402,12 +721,12 @@ def _add_prior_actual_year_display_column(
         if other_opex is not None:
             _force_set(sheet, "G45", _scale(other_opex, divisor))
         _force_set(sheet, "G46", "=IFERROR(G45/G20,0)")
-        _force_set(sheet, "G48", "=G36+G39+G42+G45")
-        _force_set(sheet, "G49", "=IFERROR(G48/G20,0)")
+        _force_set(sheet, "G48", "=-(G36+G39+G45)")
+        _force_set(sheet, "G49", "=IFERROR(-G48/G20,0)")
         if ebit is not None:
             _force_set(sheet, "G51", _scale(ebit, divisor))
         else:
-            _force_set(sheet, "G51", "=G32-G48")
+            _force_set(sheet, "G51", "=G32+G48")
         _force_set(sheet, "G52", "=IFERROR(G51/G20,0)")
         _force_set(sheet, "G54", "=G51+G68")
         _force_set(sheet, "G55", "=IFERROR(G54/G20,0)")
@@ -451,27 +770,6 @@ def _map_sensitivity_blocks(
     sensitivities = payload.get("sensitivities", {})
     sensitivities = sensitivities if isinstance(sensitivities, dict) else {}
 
-    key_metrics = (payload.get("uiMeta") or {}).get("keyMetrics") or {}
-    market = payload.get("market", {})
-    shares = _to_float(market.get("sharesDiluted")) or 0.0
-    price = _to_float(market.get("currentPrice")) or 0.0
-    market_cap = shares * price if shares > 0 and price > 0 else None
-    net_debt = _to_float(market.get("netDebt"))
-    if net_debt is None:
-        debt = _to_float(market.get("debt")) or 0.0
-        cash = _to_float(market.get("cash")) or 0.0
-        net_debt = debt - cash
-
-    base_ev_raw = _to_float(key_metrics.get("enterpriseValue"))
-    if base_ev_raw is None and market_cap is not None:
-        base_ev_raw = market_cap + (net_debt or 0.0)
-    if base_ev_raw is None:
-        base_ev_raw = 1_000_000.0
-
-    pv_terminal_raw = _to_float(key_metrics.get("pvTerminalValue")) or 0.0
-    tv_weight = pv_terminal_raw / base_ev_raw if base_ev_raw > 0 else 0.7
-    tv_weight = max(0.4, min(0.9, tv_weight))
-
     base_wacc = _sanitize_wacc_rate(assumptions.get("waccRate")) or 0.10
     base_growth = _sanitize_terminal_growth_rate(terminal.get("g"), reference_wacc=base_wacc) or 0.025
     base_revenue_growth = _to_float(assumptions.get("revenueGrowth")) or 0.03
@@ -506,27 +804,6 @@ def _map_sensitivity_blocks(
         max_value=0.60,
     )
 
-    wacc_terminal_matrix = _matrix_values(sensitivities.get("waccTerminalEvMatrix"))
-    if wacc_terminal_matrix is None:
-        wacc_terminal_matrix = _fallback_wacc_terminal_matrix(
-            base_ev=base_ev_raw,
-            base_wacc=base_wacc,
-            base_growth=base_growth,
-            wacc_axis=wacc_axis,
-            growth_axis=growth_axis,
-            tv_weight=tv_weight,
-        )
-
-    revenue_ebit_matrix = _matrix_values(sensitivities.get("revenueEbitEvMatrix"))
-    if revenue_ebit_matrix is None:
-        revenue_ebit_matrix = _fallback_revenue_ebit_matrix(
-            base_ev=base_ev_raw,
-            base_revenue_growth=base_revenue_growth,
-            base_ebit_margin=base_ebit_margin,
-            revenue_growth_axis=revenue_growth_axis,
-            ebit_margin_axis=ebit_margin_axis,
-        )
-
     for sheet in (dcf_base, dcf_bull, dcf_bear):
         # Add visual space between the two sensitivity tables.
         current_i_width = sheet.column_dimensions["I"].width
@@ -540,11 +817,38 @@ def _map_sensitivity_blocks(
         _safe_set(sheet, "B122", "Rate")
         _set_percent_axis_row(sheet, cells=("D119", "E119", "F119", "G119", "H119"), values=wacc_axis)
         _set_percent_axis_column(sheet, cells=("C120", "C121", "C122", "C123", "C124"), values=growth_axis)
+        _force_set(sheet, "F119", "=$F$12")
+        _force_set(sheet, "C122", "=$Q$103")
 
-        for row_idx in range(5):
-            for col_idx in range(5):
-                scaled = _scale(wacc_terminal_matrix[row_idx][col_idx], divisor)
-                _force_set(sheet, f"{chr(ord('D') + col_idx)}{120 + row_idx}", scaled)
+        first_forecast_idx = next(
+            (
+                idx
+                for idx, col in enumerate(DCF_TIMELINE_COLUMNS)
+                if isinstance(sheet[f"{col}18"].value, str)
+                and str(sheet[f"{col}18"].value).endswith("E")
+            ),
+            None,
+        )
+        if first_forecast_idx is not None:
+            forecast_columns = DCF_TIMELINE_COLUMNS[first_forecast_idx:]
+            last_forecast_col = forecast_columns[-1]
+            for row_idx in range(5):
+                growth_ref = f"$C${120 + row_idx}"
+                for col_idx in range(5):
+                    wacc_ref = f"${chr(ord('D') + col_idx)}$119"
+                    explicit_pv = "+".join(
+                        f"{col}78/(1+{wacc_ref})^{col}84"
+                        for col in forecast_columns
+                    )
+                    terminal_pv = (
+                        f"{last_forecast_col}78*(1+{growth_ref})/({wacc_ref}-{growth_ref})"
+                        f"/(1+{wacc_ref})^{last_forecast_col}83"
+                    )
+                    _force_set(
+                        sheet,
+                        f"{chr(ord('D') + col_idx)}{120 + row_idx}",
+                        f'=IFERROR(IF({wacc_ref}>{growth_ref},{explicit_pv}+{terminal_pv},""),"")',
+                    )
 
         _force_set(sheet, "C126", "=MIN(D120:H124)")
         _force_set(sheet, "C127", "=PERCENTILE(D120:H124,0.25)")
@@ -570,12 +874,30 @@ def _map_sensitivity_blocks(
         _safe_set(sheet, "I122", "Rate")
         _set_percent_axis_row(sheet, cells=("J119", "K119", "L119", "M119", "N119"), values=revenue_growth_axis)
         _set_percent_axis_column(sheet, cells=("I120", "I121", "I122", "I123", "I124"), values=ebit_margin_axis)
+        _force_set(sheet, "L119", "=$F$14")
+        _force_set(sheet, "I122", f"={forecast_columns[0]}52" if first_forecast_idx is not None else "=$F$14")
 
-        for row_idx in range(5):
-            for col_idx in range(5):
-                scaled = _scale(revenue_ebit_matrix[row_idx][col_idx], divisor)
-                numeric = scaled if scaled is not None else 0.0
-                _force_set(sheet, f"{chr(ord('J') + col_idx)}{120 + row_idx}", numeric)
+        if first_forecast_idx is not None:
+            prior_col = DCF_TIMELINE_COLUMNS[first_forecast_idx - 1] if first_forecast_idx > 0 else forecast_columns[0]
+            last_forecast_col = forecast_columns[-1]
+            for row_idx in range(5):
+                margin_ref = f"$I${120 + row_idx}"
+                for col_idx in range(5):
+                    growth_ref = f"{chr(ord('J') + col_idx)}$119"
+                    explicit_pv_terms: list[str] = []
+                    for year_idx, col in enumerate(forecast_columns, start=1):
+                        revenue = f"{prior_col}20*(1+{growth_ref})^{year_idx}"
+                        fcff = f"({revenue}*{margin_ref}*(1-$F$11)+{revenue}*$F$13-$F$9-$F$10)"
+                        explicit_pv_terms.append(f"{fcff}/(1+$F$12)^{col}84")
+                    terminal_revenue = f"{prior_col}20*(1+{growth_ref})^{len(forecast_columns)}"
+                    terminal_ebitda = f"({terminal_revenue}*{margin_ref}+{terminal_revenue}*$F$13)"
+                    terminal_pv = f"{terminal_ebitda}*$C$16/(1+$F$12)^{last_forecast_col}83"
+                    formula = "+".join([*explicit_pv_terms, terminal_pv])
+                    _force_set(
+                        sheet,
+                        f"{chr(ord('J') + col_idx)}{120 + row_idx}",
+                        f'=IFERROR({formula},"")',
+                    )
 
         _safe_set(sheet, "I126", "Min")
         _safe_set(sheet, "I127", "Q1")
@@ -642,12 +964,18 @@ def _finalize_timeline_headers(
     dcf_base: Worksheet,
     dcf_bull: Worksheet,
     dcf_bear: Worksheet,
-    timeline_years: list[int],
+    timeline_years: list[int | None],
     historical_years: set[int],
 ) -> None:
     # Final guardrail: force all timeline headers to explicit FY labels as text.
     for idx, col in enumerate(DCF_TIMELINE_COLUMNS):
         year = timeline_years[idx]
+        if year is None:
+            _safe_set_or_clear(outputs, f"{col}6", None)
+            for sheet in (dcf_base, dcf_bull, dcf_bear):
+                for row in (18, 63, 72, 89):
+                    _safe_set_or_clear(sheet, f"{col}{row}", None)
+            continue
         label = f"FY{year}{'A' if year in historical_years else 'E'}"
         _force_set(outputs, f"{col}6", label)
         outputs[f"{col}6"].number_format = "@"
@@ -683,6 +1011,3 @@ def _remove_assumption_breakdown(workbook: Workbook, cover: Worksheet) -> None:
     _safe_set(cover, "F15", "Data Given (Recalculated)")
     _safe_set_or_clear(cover, "F16", None)
     _safe_set_or_clear(cover, "F17", None)
-
-
-

@@ -12,25 +12,13 @@ node_modules/
 
 # testing
 coverage/
-frontend/test-results/
-frontend/output/
-
-# next.js
-.next/
-out/
+model/test-results/
+model/output/
 
 # production
-build/*
-!build/
-!build/icon.svg
-!build/icon.png
-!build/icon.icns
-!build/icon.ico
 dist/
-dist-electron/
 backend/build/
 backend/dist/
-frontend/.next/
 
 # misc
 .DS_Store
@@ -52,12 +40,8 @@ yarn-error.log*
 .env*
 !.env.example
 
-# vercel
-.vercel
-
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # python
 __pycache__/
@@ -74,6 +58,13 @@ backend/*_debug.json
 backend/*.spec
 backend/scratch/
 backend/scripts/*_output*.txt
-frontend/test_output.txt
-frontend/eslint_report.json
+model/test_output.txt
+model/eslint_report.json
 dcf_export_test.xlsx
+
+# generated workbooks and local implementation scratch
+*.xlsx
+library.db
+library.db-*
+.superpowers/sdd/
+model/.check-pld.ts

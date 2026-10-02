@@ -19,7 +19,7 @@ def _to_positive_float(value: Any) -> float:
         parsed = float(value or 0.0)
     except Exception:
         return 0.0
-    return parsed if parsed > 0 else 0.0
+    return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
 
 def _safe_log10(value: Any) -> float:
     parsed = _to_positive_float(value)
@@ -41,7 +41,8 @@ def _is_financial_like_company(sector: str, industry: str) -> bool:
 
 def _is_missing_numeric(value: Any) -> bool:
     try:
-        return float(value or 0) <= 0
+        parsed = float(value or 0)
+        return not math.isfinite(parsed) or parsed <= 0
     except Exception:
         return True
 

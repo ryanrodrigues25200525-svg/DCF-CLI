@@ -24,10 +24,11 @@ async def set_to_cache(
     active_repo = repo or repository
     await active_repo.set(key, data, ttl_seconds=ttl_seconds)
 
-def get_cache_stats() -> Dict[str, Any]:
+def get_cache_stats(repo: FinancialRepository | None = None) -> Dict[str, Any]:
     """Report cache status for health/debug endpoints."""
+    active_repo = repo or repository
     return {
         "storage": CACHE_BACKEND,
         "enabled": True,
-        "path": repository.db_path,
+        "path": active_repo.db_path,
     }

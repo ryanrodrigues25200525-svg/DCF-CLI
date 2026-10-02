@@ -1,11 +1,26 @@
 # Changelog
 
-All notable changes to **DCF Builder Pro Desktop** are documented in this file.
+All notable changes to **DCF CLI** are documented in this file. Early entries describe the desktop release; the current product is the CLI.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- Added `input_required` exports for implemented valuation families. Missing inputs appear as blank, unlocked cells with source-reference tracking; dependent valuation formulas remain blank until the workbook is ready.
+- Added incomplete formula workbooks for operating DCF, commercial banks, P&C insurance, equity REITs, agency mortgage REITs, traditional asset managers, telecom, integrated energy, mature pharma, EV/EBITDA, and EV/Revenue comparables.
+- Added an MRNA-only input-required biotech pipeline rNPV workbook with source-mapped SEC assets, explicit paused/early-program inclusion controls, editable commercial and clinical assumptions, a 35-year pipeline formula schedule, and live recalculation/engine-parity checks. Missing forecasts and clinical assumptions remain blank and no valuation is shown until inputs and references pass review.
+- Added MET and PRU input-required life-insurance distributable-earnings DCF workbooks. The models preserve their distinct filed earnings bases, show entity-scoped capital/dividend disclosures, and use blank source-required capital, upstream-capacity, tax-conversion, and parent-claims inputs with native editable formulas and sensitivity.
+- Added live checks for blank, invalid, and restored inputs, current-peer preservation, LibreOffice formula recalculation, and direct formula edits. Unsupported model families continue to stop without a workbook.
+
+### Changed
+
+- Replaced the Next.js/Electron UI workflow with a ticker-in, Excel-out CLI.
+- Moved the valuation pipeline to a headless model package and made the CLI start and stop the local backend itself.
+- Replaced the undeclared `officecli` export dependency with direct `openpyxl` workbook generation.
+- Added issuer-specific XOM integrated-energy, PFE mature-pharma, MRNA pipeline-biotech, and MET/PRU life-insurance formula-workbook routes with live SEC-source checks. Other energy, pharma/biotech, life-insurance, and utility issuers remain blocked where their source contracts do not pass.
 
 ## [1.3.0] — 2026-08-23
 
@@ -89,8 +104,8 @@ Initial public desktop release. Published as installers on GitHub Releases (row 
 
 ## Links
 
-- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-Builder-Pro-Desktop/compare/v1.3.0...HEAD
-- [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-Builder-Pro-Desktop/compare/1.0.0...v1.3.0
-- [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-Builder-Pro-Desktop/releases/tag/1.0.0
+- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...HEAD
+- [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/1.0.0...v1.3.0
+- [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/releases/tag/1.0.0
 
-[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-Builder-Pro-Desktop/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...HEAD

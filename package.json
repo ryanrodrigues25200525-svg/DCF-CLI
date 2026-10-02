@@ -1,92 +1,22 @@
 {
-  "name": "dcf-builder-pro-desktop",
-  "version": "1.3.0",
+  "name": "dcf-cli",
+  "version": "2.0.0",
   "private": true,
-  "description": "Desktop DCF valuation workspace with bundled frontend and backend.",
-  "author": {
-    "name": "Ryan Rodrigues",
-    "email": "ryanrodrigues25200525@gmail.com"
+  "description": "Local sector-specific Excel model library with CLI and MCP review tools.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "dcfbuild": "bin/dcfbuild.mjs",
+    "dcf": "bin/dcf.mjs"
   },
   "scripts": {
-    "dev": "concurrently -n \"frontend,backend\" -c \"bgBlue,bgGreen\" \"npm run dev:frontend\" \"npm run dev:backend\"",
-    "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "cd backend && ( [ -f .venv/bin/python ] && .venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload || [ -n \"$VIRTUAL_ENV\" ] && $VIRTUAL_ENV/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload || python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload )",
-    "security:scan": "bash ./scripts/security_scan.sh",
-    "install:all": "npm install --prefix frontend && (cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt)",
-    "build:frontend": "npm run build --prefix frontend",
-    "lint:frontend": "npm run lint --prefix frontend",
-    "test:frontend": "npm run test --prefix frontend",
-    "test:e2e:dcf-flow": "npm run test:e2e:dcf-flow --prefix frontend",
-    "test:backend": "cd backend && python3 -m pytest -q",
-    "verify": "npm run lint:frontend && npm run test:frontend && npm run build:frontend && npm run test:backend",
-    "electron:dev": "cross-env NODE_ENV=development electron .",
-    "electron:pack": "electron-builder --dir",
-    "electron:dist": "electron-builder --publish never",
-    "electron:build": "npm run build:desktop && npm run electron:dist",
-    "icons:generate": "bash scripts/generate_icons.sh",
-    "build:desktop": "npm run build:frontend && bash scripts/prepare_desktop_frontend.sh && npm run build:backend:desktop",
-    "build:backend:desktop": "bash scripts/build_desktop_backend.sh",
-    "dev:desktop": "npm run electron:dev"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1",
-    "cross-env": "^10.1.0",
-    "electron": "^41.5.0",
-    "electron-builder": "^26.8.1",
-    "wait-on": "^9.0.5"
-  },
-  "main": "electron/main.js",
-  "build": {
-    "appId": "com.dcfbuilderpro.app",
-    "productName": "DCF Builder Pro",
-    "directories": {
-      "output": "dist-electron"
-    },
-    "mac": {
-      "identity": "-",
-      "icon": "build/icon.icns",
-      "target": [
-        "dmg"
-      ]
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
-    "files": [
-      "electron/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "frontend/.next/standalone",
-        "to": "frontend-standalone",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "frontend/.next/static",
-        "to": "frontend-standalone/frontend/.next/static"
-      },
-      {
-        "from": "frontend/public",
-        "to": "frontend-standalone/frontend/public"
-      },
-      {
-        "from": "backend/dist/dcf-backend",
-        "to": "backend"
-      },
-      ".env.example"
-    ]
+    "dcf": "npm --prefix model run dcf --",
+    "install:command": "bash ./scripts/install_cli.sh",
+    "install:all": "env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS npm install --prefix model && (cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt && .venv/bin/python -m pip install --no-deps -r requirements-openbb-meta.txt)",
+    "typecheck": "npm --prefix model run typecheck",
+    "test:model": "npm --prefix model test",
+    "test:backend": "npm --prefix model test",
+    "security:scan": "bash ./scripts/security_scan.sh"
   }
 }

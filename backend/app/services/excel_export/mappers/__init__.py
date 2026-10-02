@@ -12,9 +12,23 @@ from .cover import (
     _map_currency_labels,
 )
 from .data import _build_timeline, _map_data_sheets, _map_year_headers
+from .bank_model import apply_bank_model, apply_incomplete_bank_model
+from .insurance_model import apply_insurance_model
+from .insurance_model import apply_incomplete_insurance_model
+from .reit_model import apply_reit_model, apply_incomplete_reit_model
+from .asset_manager_model import apply_asset_manager_model, apply_incomplete_asset_manager_model
+from .telecom_model import apply_telecom_model, apply_incomplete_telecom_model
+from .mortgage_reit_model import apply_mortgage_reit_model, apply_incomplete_mortgage_reit_model
+from .integrated_energy_model import apply_integrated_energy_model, apply_incomplete_integrated_energy_model
+from .mature_pharma_model import apply_mature_pharma_model, apply_incomplete_mature_pharma_model
+from .comparable_model import apply_comparable_model, apply_incomplete_comparable_model
+from .utility_model import apply_utility_model, apply_incomplete_utility_model
+from .biotech_model import apply_biotech_model, apply_incomplete_biotech_model
+from .life_insurance_model import apply_incomplete_life_insurance_model
 from .dcf import (
     _add_prior_actual_year_display_column,
     _apply_capex_schedule_to_dcf,
+    apply_incomplete_operating_dcf,
     _apply_scenario_snapshots_to_dcf,
     _finalize_assumption_block_cleanup,
     _finalize_timeline_headers,
@@ -29,6 +43,9 @@ from .dcf import (
     _sync_scenario_formula_backbone,
     _sync_shared_scenario_inputs,
 )
+from .review import _map_data_review_sheet
+from .incomplete import apply_incomplete_workbook
+from app.services.valuation.model_eligibility import PRODUCTION_MODEL_ROUTES
 from .utils import (
     SHEET_COMPS,
     SHEET_COVER,
@@ -55,6 +72,226 @@ from .wacc import (
 
 
 def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> None:
+    build_status = payload.get("buildStatus", "ready")
+    should_build_incomplete_operating_dcf = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "unlevered_dcf"
+        and isinstance(payload.get("assumptions"), dict)
+    )
+    bank_model = payload.get("bankModel") if isinstance(payload.get("bankModel"), dict) else {}
+    bank_assumptions = bank_model.get("assumptions") if isinstance(bank_model.get("assumptions"), dict) else {}
+    should_build_incomplete_bank_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "bank_residual_income"
+        and bank_assumptions.get("minimumCet1Ratio") is None
+    )
+    insurance_model = payload.get("insuranceModel") if isinstance(payload.get("insuranceModel"), dict) else {}
+    should_build_incomplete_insurance_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "insurance_pnc_residual_income"
+        and isinstance(insurance_model.get("history"), dict)
+        and any(
+            isinstance(item, dict) and item.get("key") == "unpaid_loss_reserves"
+            for item in payload.get("requiredInputs", []) if isinstance(payload.get("requiredInputs"), list)
+        )
+    )
+    reit_model = payload.get("reitModel") if isinstance(payload.get("reitModel"), dict) else {}
+    reit_requirements = payload.get("requiredInputs")
+    reit_requirements = reit_requirements if isinstance(reit_requirements, list) else []
+    should_build_incomplete_reit_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "reit_affo"
+        and isinstance(reit_model.get("history"), dict)
+        and any(isinstance(item, dict) and item.get("key") == "same_store_noi_growth" for item in reit_requirements)
+    )
+    mortgage_reit_model = payload.get("mortgageReitModel") if isinstance(payload.get("mortgageReitModel"), dict) else {}
+    mortgage_reit_requirements = payload.get("requiredInputs")
+    mortgage_reit_requirements = mortgage_reit_requirements if isinstance(mortgage_reit_requirements, list) else []
+    should_build_incomplete_mortgage_reit_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "mortgage_reit_residual_income"
+        and isinstance(mortgage_reit_model.get("history"), dict)
+        and any(isinstance(item, dict) and item.get("key") == "average_repo_borrowings" for item in mortgage_reit_requirements)
+    )
+    asset_manager_model = payload.get("assetManagerModel") if isinstance(payload.get("assetManagerModel"), dict) else {}
+    asset_manager_requirements = payload.get("requiredInputs")
+    asset_manager_requirements = asset_manager_requirements if isinstance(asset_manager_requirements, list) else []
+    should_build_incomplete_asset_manager_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "asset_manager_aum_dcf"
+        and isinstance(asset_manager_model.get("history"), dict)
+        and any(isinstance(item, dict) and item.get("key") == "base_fee_yield" for item in asset_manager_requirements)
+    )
+    telecom_model = payload.get("telecomModel") if isinstance(payload.get("telecomModel"), dict) else {}
+    telecom_requirements = payload.get("requiredInputs")
+    telecom_requirements = telecom_requirements if isinstance(telecom_requirements, list) else []
+    should_build_incomplete_telecom_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "telecom_subscriber_dcf"
+        and isinstance(telecom_model.get("history"), dict)
+        and any(isinstance(item, dict) and item.get("key") == "postpaid_phone_churn" for item in telecom_requirements)
+    )
+    integrated_energy_model = payload.get("integratedEnergyModel") if isinstance(payload.get("integratedEnergyModel"), dict) else {}
+    integrated_energy_requirements = payload.get("requiredInputs")
+    integrated_energy_requirements = integrated_energy_requirements if isinstance(integrated_energy_requirements, list) else []
+    should_build_incomplete_integrated_energy_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "integrated_energy_dcf"
+        and isinstance(integrated_energy_model.get("history"), dict)
+        and any(isinstance(item, dict) and item.get("key") == "crude_oil_production" for item in integrated_energy_requirements)
+    )
+    mature_pharma_model = payload.get("maturePharmaModel") if isinstance(payload.get("maturePharmaModel"), dict) else {}
+    mature_pharma_requirements = payload.get("requiredInputs")
+    mature_pharma_requirements = mature_pharma_requirements if isinstance(mature_pharma_requirements, list) else []
+    should_build_incomplete_mature_pharma_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "mature_pharma_product_dcf"
+        and isinstance(mature_pharma_model.get("history"), dict)
+        and any(isinstance(item, dict) and str(item.get("key") or "").startswith("product_revenue:") for item in mature_pharma_requirements)
+    )
+    comparable_model = payload.get("comparableModel") if isinstance(payload.get("comparableModel"), dict) else {}
+    comparable_requirements = payload.get("requiredInputs")
+    comparable_requirements = comparable_requirements if isinstance(comparable_requirements, list) else []
+    should_build_incomplete_comparable_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") in {"ev_ebitda", "revenue_multiple"}
+        and comparable_model.get("method") == payload.get("valuationModel")
+        and any(
+            isinstance(item, dict)
+            and (str(item.get("key") or "").startswith("peer_ebitda:") or str(item.get("key") or "").startswith("peer_revenue:"))
+            for item in comparable_requirements
+        )
+    )
+    utility_model = payload.get("utilityModel") if isinstance(payload.get("utilityModel"), dict) else {}
+    should_build_incomplete_utility_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "utility_dcf"
+        and isinstance(utility_model.get("assumptionSources"), dict)
+        and any(isinstance(item, dict) and str(item.get("key") or "") == "jurisdictional_rate_base"
+                for item in payload.get("requiredInputs", []) if isinstance(payload.get("requiredInputs"), list))
+    )
+    biotech_model = payload.get("biotechModel") if isinstance(payload.get("biotechModel"), dict) else {}
+    biotech_requirements = payload.get("requiredInputs")
+    biotech_requirements = biotech_requirements if isinstance(biotech_requirements, list) else []
+    should_build_incomplete_biotech_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "biotech_pipeline_rnpv"
+        and isinstance(biotech_model.get("pipelineAssets"), list)
+        and any(isinstance(item, dict) and item.get("key") == "commercial_fcf_margin" for item in biotech_requirements)
+    )
+    life_insurance_model = payload.get("lifeInsuranceModel") if isinstance(payload.get("lifeInsuranceModel"), dict) else {}
+    should_build_incomplete_life_insurance_model = (
+        build_status == "input_required"
+        and payload.get("valuationModel") == "life_insurer_distributable_earnings_dcf"
+        and life_insurance_model.get("ticker") in {"MET", "PRU"}
+        and isinstance(life_insurance_model.get("filingFacts"), list)
+    )
+    if build_status == "input_required" and not (
+        should_build_incomplete_operating_dcf or should_build_incomplete_bank_model
+        or should_build_incomplete_insurance_model or should_build_incomplete_reit_model
+        or should_build_incomplete_mortgage_reit_model or should_build_incomplete_asset_manager_model
+        or should_build_incomplete_telecom_model or should_build_incomplete_integrated_energy_model
+        or should_build_incomplete_mature_pharma_model
+        or should_build_incomplete_comparable_model
+        or should_build_incomplete_utility_model
+        or should_build_incomplete_biotech_model
+        or should_build_incomplete_life_insurance_model
+    ):
+        apply_incomplete_workbook(workbook, payload)
+        return
+    if build_status not in {"ready", "input_required"}:
+        raise ValueError(f"Unsupported workbook build status: {build_status}.")
+
+    valuation_model = payload.get("valuationModel")
+    if valuation_model is not None and valuation_model not in PRODUCTION_MODEL_ROUTES:
+        raise ValueError(f"The {valuation_model} workbook is not implemented.")
+
+    if valuation_model == "bank_residual_income":
+        apply_bank_model(workbook, payload)
+        if should_build_incomplete_bank_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_bank_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "insurance_pnc_residual_income":
+        apply_insurance_model(workbook, payload)
+        if should_build_incomplete_insurance_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_insurance_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "reit_affo":
+        apply_reit_model(workbook, payload)
+        if should_build_incomplete_reit_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_reit_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "asset_manager_aum_dcf":
+        apply_asset_manager_model(workbook, payload)
+        if should_build_incomplete_asset_manager_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_asset_manager_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "telecom_subscriber_dcf":
+        apply_telecom_model(workbook, payload)
+        if should_build_incomplete_telecom_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_telecom_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "mortgage_reit_residual_income":
+        apply_mortgage_reit_model(workbook, payload)
+        if should_build_incomplete_mortgage_reit_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_mortgage_reit_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "integrated_energy_dcf":
+        apply_integrated_energy_model(workbook, payload)
+        if should_build_incomplete_integrated_energy_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_integrated_energy_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model == "mature_pharma_product_dcf":
+        apply_mature_pharma_model(workbook, payload)
+        if should_build_incomplete_mature_pharma_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_mature_pharma_model(workbook, payload, input_cells)
+        return
+
+    if valuation_model in {"ev_ebitda", "revenue_multiple"}:
+        if should_build_incomplete_comparable_model:
+            apply_incomplete_comparable_model(workbook, payload)
+        else:
+            apply_comparable_model(workbook, payload)
+        return
+
+    if valuation_model == "utility_dcf":
+        if should_build_incomplete_utility_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_utility_model(workbook, payload, input_cells)
+        else:
+            apply_utility_model(workbook, payload)
+        return
+
+    if valuation_model == "biotech_pipeline_rnpv":
+        if should_build_incomplete_biotech_model:
+            input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+            apply_incomplete_biotech_model(workbook, payload, input_cells)
+        else:
+            apply_biotech_model(workbook, payload)
+        return
+
+    if valuation_model == "life_insurer_distributable_earnings_dcf":
+        if not should_build_incomplete_life_insurance_model:
+            raise ValueError("Life-insurance workbooks require a validated input-required MET or PRU source contract.")
+        input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+        apply_incomplete_life_insurance_model(workbook, payload, input_cells)
+        return
+
     divisor = _resolve_amount_scale_divisor(payload)
 
     cover = _sheet(workbook, SHEET_COVER)
@@ -87,13 +324,24 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
     _map_data_sheets(data_original, data_recalc, payload, divisor, timeline_years)
 
     _map_comps(comps_ws, payload, divisor)
-    _harden_comps_ratio_formulas(comps_ws)
-    _harden_wacc_peer_aggregate_formulas(wacc)
+    peer_count = _harden_comps_ratio_formulas(comps_ws, payload)
+    _harden_wacc_peer_aggregate_formulas(wacc, peer_count)
 
-    _normalize_public_dcf_layout(outputs, dcf_base, dcf_bull, dcf_bear, payload, divisor)
+    _normalize_public_dcf_layout(
+        outputs,
+        dcf_base,
+        dcf_bull,
+        dcf_bear,
+        data_recalc,
+        payload,
+        divisor,
+        timeline_years,
+        historical_years,
+    )
     _sync_scenario_formula_backbone(dcf_base, dcf_bull, dcf_bear)
     _apply_capex_schedule_to_dcf(dcf_base, dcf_bull, dcf_bear, payload, timeline_years, divisor)
     _apply_scenario_snapshots_to_dcf(dcf_base, dcf_bull, dcf_bear, payload, timeline_years, divisor)
+    _harden_growth_rate_formulas(dcf_base, dcf_bull, dcf_bear)
 
     _map_sensitivity_blocks(dcf_base, dcf_bull, dcf_bear, payload, divisor)
 
@@ -101,3 +349,7 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
     _replace_template_placeholders(company_name=company_name, ticker=ticker, sheets=(outputs, dcf_base, dcf_bull, dcf_bear))
     _reset_dcf_sheet_view_to_top(outputs, dcf_base, dcf_bull, dcf_bear)
     _remove_assumption_breakdown(workbook, cover)
+    _map_data_review_sheet(workbook, payload)
+    if should_build_incomplete_operating_dcf:
+        input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
+        apply_incomplete_operating_dcf(workbook, payload, input_cells, timeline_years, historical_years)

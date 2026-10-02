@@ -1,83 +1,30 @@
-# DCF Builder Architecture and Flow
-
-## High-Level Map
+# CLI Data and Export Flow
 
 ```text
-[User Browser]
+dcfbuild AAPL
    |
-   v
-[Next.js Frontend UI]
-   |
-   +--> [BFF: /api/sec/company]
-            |
-            v
-      [Backend: /api/company/{ticker}/unified/native]
-            |
-            +--> [Cache lookup (SQLite repository)]
-            |       |
-            |       +-- hit -> return unified payload
-            |
-            +--> [Profile + Financials: edgartools]
-            +--> [Market: stockdex -> Yahoo fallback]
-            +--> [Peers + Insider + Macro context]
-            |
-            +--> [Unified response]
-                    |
-                    +--> cache write
-                    +--> return to frontend
+   +--> Start backend/app/local_server.py; bind loopback and emit its port
+   +--> BackendApiClient validates /api/company/{ticker}/unified/native
+   +--> RunValuationJob maps SEC statements and market data to model inputs
+   +--> Consume Python's authoritative model_eligibility
+   +--> Build assumptions, valuation, scenarios, and sensitivities
+   +--> Validate and POST the completed payload to /api/export/dcf/excel
+   +--> Write <ticker>_dcf.xlsx, then stop the backend
 ```
 
-## Request Lifecycle
+## Source Routing
 
-1. User searches/selects ticker in frontend.
-2. Frontend calls `/api/sec/company?ticker=...`.
-3. BFF requests backend unified native payload.
-4. Backend checks cache first.
-5. On miss, backend fetches and normalizes source data, then caches.
-6. BFF validates unified payload usability.
-7. If financials are insufficient, BFF requests backend financials-native fallback and merges result.
-8. Final payload returned to frontend state/hooks.
+- Company profile and financial statements: SEC filings through `edgartools`.
+- Market data: OpenBB with the Yahoo Finance provider, then Stockdex and direct Yahoo/yfinance fallbacks.
+- Peers and valuation context: best-effort backend enrichment; missing peers use the model's documented default multiple and add a quality warning.
+- Company data, fallbacks, and completeness are returned by `/api/company/{ticker}/unified/native`.
 
-## Fallback Strategy
+## Model and Workbook
 
-### Financials and profile
+- `model/src/services/integration/sec/native-normalizer.ts` maps the unified payload to model inputs.
+- `model/src/services/dcf/assumption-policy.ts` selects and normalizes default assumptions.
+- `model/src/services/dcf/engine.ts` calculates the DCF forecast and valuation.
+- `model/src/services/exporters/excel/index.ts` assembles base, bull, bear, and sensitivity payloads.
+- `backend/app/services/excel_export/` maps the payload into the Excel template using `openpyxl`.
 
-- Primary: `edgartools`.
-- No alternate provider for native financial structure.
-
-### Market data
-
-- Primary: `stockdex`.
-- Fallback: Yahoo Finance.
-
-### BFF response behavior
-
-- Uses short in-memory cache keyed by ticker.
-- Returns stale cache on upstream failure when available.
-- Emits source headers (`X-Data-Source`, `X-Cache-Hit`).
-
-## Backend Modules (Current)
-
-- `app/api/routers/financials_router.py`: company endpoints, unified/native payloads.
-- `app/api/routers/search.py`: search endpoint.
-- `app/api/routers/macro_router.py`: macro context endpoint.
-- `app/api/routers/export_router.py`: DCF Excel export.
-- `app/services/edgar.py`: SEC/edgartools integration.
-- `app/services/finance.py`: market/macro/peer sourcing and fallbacks.
-- `app/infrastructure/repository.py`: cache persistence layer.
-
-## Deployment Update Flow
-
-GitHub is the deployment trigger source:
-
-1. Code pushed/merged to GitHub.
-2. Frontend pipeline deploys to Vercel.
-3. Backend pipeline deploys to Google Cloud.
-4. Production env vars are injected at platform level.
-
-## Operational Checks
-
-- Backend health: `/health`
-- API health and cache status: `/api/health`, `/api/cache/stats`
-- Frontend build gate: `npm run build:frontend`
-- Security gate: `npm run security:scan`
+`backend/app/services/valuation/classifier.py` is the single company-type and model-eligibility authority; `model/src/services/valuation/router.ts` consumes its validated result. The CLI owns the run lifecycle; it does not require an already-running API server or browser UI. A route is available only when both its calculation engine and formula workbook mapper are in the production registries. Banks and P&C insurers use common-equity residual-income models, equity REITs use AFFO, and source-ready asset managers, telecom, agency mortgage REITs, integrated energy (XOM), mature pharma (PFE), and MRNA's input-required biotech pipeline route use separate sector models. Other biotech issuers, life insurers, unsupported utilities, and issuer-specific peers remain blocked until their required source schedules are available.

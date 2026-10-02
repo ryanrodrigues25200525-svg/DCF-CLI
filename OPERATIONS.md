@@ -1,119 +1,27 @@
-# Operations Guide
+# CLI Operations
 
-This project is set up for a low-traffic deployment model:
+## Runtime requirements
 
-- Frontend on Vercel
-- Backend on Google Cloud Run
-- Backend cache stored locally per Cloud Run instance
+- Node.js 22.5 or newer for the TypeScript model CLI.
+- Python 3.11 and the dependencies in `backend/requirements.txt` for data retrieval and workbook export. `npm run install:all` also installs the OpenBB SDK entrypoint with its Yahoo Finance provider, without optional paid-provider keys.
+- `EDGAR_IDENTITY` in the shell environment for SEC requests.
 
-## Monitoring
+Run `npm run install:all` once to install the Node model dependencies and create `backend/.venv`, then run `npm run install:command` from this project folder to install `dcfbuild` under `~/.local/bin`.
 
-Minimum production checks:
+## A model run
 
-- Vercel deployment status and function errors
-- Cloud Run request count, latency, and 5xx rate
-- `/health`
-- `/ready`
-- `/api/health`
+Run `dcfbuild` to be prompted for a ticker, or use `dcfbuild AAPL`. The command starts the API on a temporary loopback port, checks `/ready`, requests the unified company payload, calls the Excel export endpoint, saves `<ticker>_dcf.xlsx` under `~/Downloads`, and stops the service process. It refuses to overwrite an existing workbook unless `--force` is supplied. Use `--output <file>` to select a different path explicitly. Each workbook is an editable draft with formulas and a `Data Review` sheet listing source-quality and mapping warnings. Banks and insurers receive a residual-income sheet, REITs receive an AFFO sheet, and utilities receive a dividend-growth sheet.
 
-Recommended alert thresholds:
+The SQLite cache in `backend/data/` persists between runs. It is disposable; removing it causes providers to fetch data again. The child process receives a small environment allowlist, including `EDGAR_IDENTITY` and the optional `DCF_CACHE_DB_PATH` used to isolate a cache.
 
-- Cloud Run 5xx ratio above `2%` for 5 minutes
-- P95 latency above `8s` for 5 minutes
-- Consecutive deployment failures on either platform
+## Common failures
 
-## Error Correlation
+- **Identity placeholder:** set `EDGAR_IDENTITY` in the current shell, then rerun.
+- **No usable financial history:** check the ticker and SEC filing coverage.
+- **Missing price or shares:** market data or SEC share data was not available; the CLI stops instead of exporting a partial model.
+- **Unsupported business type:** the company needs a sector model that is not implemented. Residual income, REIT AFFO, and utility dividend-growth workbooks are currently supported.
+- **Backend startup error:** install the backend requirements with `npm run install:all` and retry.
 
-Backend responses now include:
+## Data privacy
 
-- `X-Request-ID`
-- `X-Response-Time-Ms`
-
-Use the request id to correlate user-reported failures with Cloud Run logs.
-
-## Rate Limiting
-
-The backend applies a conservative in-memory rate limit to `/api/*` paths.
-
-Default settings:
-
-- `RATE_LIMIT_ENABLED=true`
-- `RATE_LIMIT_REQUESTS=120`
-- `RATE_LIMIT_WINDOW_SECONDS=60`
-
-This is instance-local and intended as a low-complexity abuse guard, not a distributed gateway.
-
-## Secrets
-
-Do not store secrets in repo files.
-
-Use:
-
-- Vercel project environment variables for frontend/BFF values
-- Cloud Run service environment variables or Secret Manager references for backend values
-
-Minimum backend secrets/config:
-
-- `EDGAR_IDENTITY`
-- `CORS_ORIGINS`
-- `ALLOWED_HOSTS`
-
-## GitHub -> Cloud Run Deploy
-
-The backend can be deployed automatically from GitHub Actions using:
-
-- `.github/workflows/backend-cloud-run.yml`
-
-Set these GitHub repository variables:
-
-- `GCP_PROJECT_ID`
-- `CLOUD_RUN_SERVICE`
-- `CLOUD_RUN_REGION`
-
-Set this GitHub repository secret:
-
-- `GCP_SA_KEY`
-
-`GCP_SA_KEY` should be the full JSON key for a service account with permissions to:
-
-- build from source with Cloud Build
-- push container artifacts
-- deploy/update the target Cloud Run service
-
-After those values are configured, pushes to `main` that touch `dcf-builder/backend/**` will deploy a new Cloud Run revision automatically.
-
-## Backup / Recovery
-
-The SQLite cache is disposable. It is not a source of truth.
-
-Recovery model:
-
-- GitHub is the source of truth for code
-- Vercel and Cloud Run can be redeployed from GitHub
-- External providers are the source of truth for data
-
-If the backend cache is lost:
-
-- restart service
-- allow cache to warm naturally
-- verify `/ready` and `/api/health`
-
-## Rollback
-
-Rollback path:
-
-1. Revert or redeploy the previous GitHub commit.
-2. Promote the previous Vercel deployment if frontend-only.
-3. Redeploy the previous Cloud Run revision if backend-only.
-4. Re-run:
-   - `npm run verify`
-   - `npm run test:e2e:dcf-flow`
-
-## Release Checks
-
-Run before deploy:
-
-```bash
-npm run verify
-npm run test:e2e:dcf-flow
-```
+The CLI test suite is live. Run `npm run test:model` or `npm run test:backend` with network access and `EDGAR_IDENTITY` configured. It checks current AAPL, JPM, AIG, PLD, NEE, and MRNA responses, exports supported workbooks, and uses a new temporary cache for each ticker. It does not write the identity value into workbooks or print it in CLI output.

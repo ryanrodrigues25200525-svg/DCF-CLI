@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import copy
 from typing import Any
 
+from openpyxl.comments import Comment
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .utils import (
@@ -14,6 +15,7 @@ from .utils import (
     _safe_set,
     _scenario_assumption_value,
     _to_float,
+    _safe_set_or_clear,
     resolve_wacc_loop_mode,
 )
 
@@ -35,6 +37,12 @@ def _map_wacc_inputs(wacc: Worksheet, payload: dict[str, Any]) -> None:
         erp = _to_float(assumptions.get("equityRiskPremium"))
     if erp is None:
         erp = 0.055
+
+    beta = _to_float(wacc_assumptions.get("beta"))
+    if beta is None:
+        beta = _to_float(assumptions.get("beta"))
+    if beta is None or beta <= 0:
+        raise ValueError("WACC export requires a sourced positive beta input.")
 
     illiquidity_discount = (
         _to_float(wacc_assumptions.get("illiquidityDiscount"))
@@ -71,6 +79,12 @@ def _map_wacc_inputs(wacc: Worksheet, payload: dict[str, Any]) -> None:
 
     _safe_set(wacc, "D9", rf)
     _safe_set(wacc, "D10", erp)
+    wacc["D11"]._style = copy(wacc["D9"]._style)
+    wacc["D11"].number_format = "0.00"
+    _safe_set(wacc, "D11", beta)
+    beta_source = str(wacc_assumptions.get("betaSource") or "").strip()
+    if beta_source:
+        wacc["D11"].comment = Comment(f"Market beta source: {beta_source}", "DCF Builder Pro")
     _safe_set(wacc, "D14", illiquidity_discount if illiquidity_discount is not None else 0.0)
     _safe_set(wacc, "D15", size_premium)
     _safe_set(wacc, "D19", cost_of_debt)
@@ -85,8 +99,13 @@ def _apply_required_wacc_formulas(wacc: Worksheet, payload: dict[str, Any]) -> N
     wacc_assumptions = assumptions.get("wacc")
     wacc_assumptions = wacc_assumptions if isinstance(wacc_assumptions, dict) else {}
 
-    # Required fix: use beta from D11 directly.
-    _force_set(wacc, "D11", "=H23")
+    beta = _to_float(wacc_assumptions.get("beta"))
+    if beta is None:
+        beta = _to_float(assumptions.get("beta"))
+    if beta is None or beta <= 0:
+        raise ValueError("WACC formula export requires a sourced positive beta input.")
+    # Use the same live company beta as the TypeScript DCF engine. Peer betas remain visible in the comp analysis.
+    _force_set(wacc, "D11", beta)
     if wacc_loop_mode == WACC_LOOP_MODE_ITERATIVE:
         _force_set(wacc, "D23", "='DCF Model - Base (1)'!C12")
     else:
@@ -148,30 +167,44 @@ def _apply_required_wacc_formulas(wacc: Worksheet, payload: dict[str, Any]) -> N
 
     # Harden peer beta table against partial/missing comp rows so D/E and
     # unlevered beta sections do not surface #DIV/0! in exported workbooks.
+    comps = payload.get("comps", [])
+    comps = comps if isinstance(comps, list) else []
     for row in range(8, 14):
+        comp = comps[row - 8] if row - 8 < len(comps) else None
+        has_comp = isinstance(comp, dict) and any(
+            isinstance(comp.get(key), str) and comp[key].strip()
+            for key in ("ticker", "symbol", "company", "name", "companyName")
+        )
+        _force_set(wacc, f"G{row}", f'=IF(Comps!B{row}="","",Comps!B{row})')
+        _force_set(wacc, f"H{row}", f'=IF(G{row}="","",Comps!E{row})')
+        _force_set(wacc, f"J{row}", f'=IF(G{row}="","",Comps!F{row})')
+        if not has_comp:
+            for col in ("I", "L", "N"):
+                _safe_set_or_clear(wacc, f"{col}{row}", None)
         # Debt units in the template are in billions while equity values are in millions.
         # Scale debt by 1,000 so D/E is computed on consistent units.
         _force_set(wacc, f"K{row}", f'=IFERROR(IF(J{row}>0,(I{row}*1000)/J{row},""),"")')
-        _force_set(wacc, f"M{row}", f'=IFERROR(H{row}/(1+(1-L{row})*K{row}),"")')
+        _force_set(wacc, f"M{row}", f'=IF(G{row}="","",IFERROR(H{row}/(1+(1-L{row})*K{row}),""))')
 
 
 
-def _harden_wacc_peer_aggregate_formulas(wacc: Worksheet) -> None:
+def _harden_wacc_peer_aggregate_formulas(wacc: Worksheet, peer_count: int) -> None:
     # Guard peer aggregates to avoid #DIV/0! when comparable set is partially empty.
-    _force_set(wacc, "H16", "=IFERROR(AVERAGE(H8:H13),1)")
-    _force_set(wacc, "I16", "=IFERROR(AVERAGE(I8:I13),0)")
-    _force_set(wacc, "J16", "=IFERROR(AVERAGE(J8:J13),0)")
-    _force_set(wacc, "K16", "=IFERROR(AVERAGE(K8:K13),0)")
-    _force_set(wacc, "L16", "=IFERROR(AVERAGE(L8:L13),0.25)")
-    _force_set(wacc, "M16", "=IFERROR(AVERAGE(M8:M13),1)")
-    _force_set(wacc, "N16", "=IFERROR(AVERAGE(N8:N13),1)")
-    _force_set(wacc, "H17", "=IFERROR(MEDIAN(H8:H13),1)")
-    _force_set(wacc, "I17", "=IFERROR(MEDIAN(I8:I13),0)")
-    _force_set(wacc, "J17", "=IFERROR(MEDIAN(J8:J13),0)")
-    _force_set(wacc, "K17", "=IFERROR(MEDIAN(K8:K13),0)")
-    _force_set(wacc, "L17", "=IFERROR(MEDIAN(L8:L13),0.25)")
-    _force_set(wacc, "M17", "=IFERROR(MEDIAN(M8:M13),1)")
-    _force_set(wacc, "N17", "=IFERROR(MEDIAN(N8:N13),1)")
-
-
-
+    summary_end_row = 7 + peer_count if peer_count > 0 else 13
+    average_fallbacks = {"H": 1, "I": 0, "J": 0, "K": 0, "L": 0.25, "M": 1, "N": 1}
+    for column in "HIJKLMN":
+        values = f"{column}8:{column}{summary_end_row}"
+        _force_set(wacc, f"{column}14", f'=IFERROR(IF(COUNT({values})>0,MIN({values}),""),"")')
+        for row, percentile in ((15, "0.25"), (18, "0.75")):
+            rank = f"(COUNT({values})-1)*{percentile}+1"
+            lower_rank = f"INT({rank})"
+            upper_rank = f"MIN(COUNT({values}),{lower_rank}+1)"
+            formula = (
+                f'=IFERROR(IF(COUNT({values})>0,SMALL({values},{lower_rank})+'
+                f'({rank}-{lower_rank})*(SMALL({values},{upper_rank})-SMALL({values},{lower_rank})),""),"")'
+            )
+            _force_set(wacc, f"{column}{row}", formula)
+        _force_set(wacc, f"{column}19", f'=IFERROR(IF(COUNT({values})>0,MAX({values}),""),"")')
+        fallback = average_fallbacks[column]
+        _force_set(wacc, f"{column}16", f'=IFERROR(IF(COUNT({values})>0,AVERAGE({values}),{fallback}),{fallback})')
+        _force_set(wacc, f"{column}17", f'=IFERROR(IF(COUNT({values})>0,MEDIAN({values}),{fallback}),{fallback})')

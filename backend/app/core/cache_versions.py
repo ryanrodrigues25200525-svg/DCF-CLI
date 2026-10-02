@@ -3,6 +3,7 @@ from __future__ import annotations
 NATIVE_FINANCIALS_CACHE_VERSION = "v1"
 NATIVE_UNIFIED_CACHE_VERSION = "v1"
 MACRO_CACHE_VERSION = "v2"
+MACRO_CONTEXT_CACHE_VERSION = "v3"
 PEERS_CACHE_VERSION = "v1"
 
 FINANCIALS_TTL_SECONDS = 24 * 60 * 60
@@ -32,7 +33,7 @@ def peers_key(ticker: str) -> str:
 
 
 def macro_context_key() -> str:
-    return f"macro_context_{MACRO_CACHE_VERSION}"
+    return f"macro_context_{MACRO_CONTEXT_CACHE_VERSION}"
 
 
 def macro_treasury_key() -> str:

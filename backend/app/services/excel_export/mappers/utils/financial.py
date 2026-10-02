@@ -215,10 +215,12 @@ def _scenario_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def _scenario_first_projection_forecast(
     forecast_by_year: dict[int, dict[str, Any]],
-    timeline_years: list[int],
+    timeline_years: list[int | None],
 ) -> dict[str, Any] | None:
     projection_years = timeline_years[2:] if len(timeline_years) >= 3 else []
     for year in projection_years:
+        if year is None:
+            continue
         forecast = forecast_by_year.get(year)
         if forecast is not None:
             return forecast
@@ -241,7 +243,7 @@ def _infer_revenue_growth_rate(forecasts: list[Any]) -> float | None:
         prev_revenue = revenue
     return None
 
-def _metric_series(payload: dict[str, Any], timeline: list[int], metric: str, revenue_series: list[float] | None = None) -> list[float]:
+def _metric_series(payload: dict[str, Any], timeline: list[int | None], metric: str, revenue_series: list[float] | None = None) -> list[float]:
     historicals = payload.get("historicals", {})
     income = historicals.get("income", {}) if isinstance(historicals, dict) else {}
 
@@ -341,7 +343,7 @@ def _split_cost_of_revenue_components(
 def _opex_component_series(
     template_sheet: Worksheet,
     payload: dict[str, Any],
-    timeline: list[int],
+    timeline: list[int | None],
     revenue_series: list[float],
     purchases_series: list[float],
     sales_commission_series: list[float],

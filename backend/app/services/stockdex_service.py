@@ -115,6 +115,7 @@ class StockdexService:
                 "total_debt": StockdexService._parse_volume_string(highlights.get("Total Debt  (mrq)")),
                 "operating_cash_flow": StockdexService._parse_volume_string(highlights.get("Operating Cash Flow  (ttm)")),
                 "fcf_ttm": StockdexService._parse_volume_string(highlights.get("Levered Free Cash Flow  (ttm)")),
+                "source": "stockdex",
             }
             return {k: v for k, v in result.items() if v is not None}
         except Exception as e:
