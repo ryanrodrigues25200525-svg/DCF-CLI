@@ -32,6 +32,7 @@ import { calculateBiotechRnpv } from '@/services/valuation/biotech-rnpv-model';
 import type { BiotechRnpvAssumptions } from '@/services/valuation/biotech-rnpv-model';
 import { buildBankModelExportPayload } from '@/services/exporters/excel/bank-payload';
 import { formatValuationJobSuccess, runValuationJob } from '@/application/run-valuation-job';
+import { findSoffice } from '@/workbook/xlsx';
 
 const modelRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = resolve(modelRoot, '..');
@@ -39,7 +40,10 @@ const launcherPath = resolve(projectRoot, 'bin/dcfbuild.mjs');
 const pythonPath = process.platform === 'win32'
   ? resolve(projectRoot, 'backend/.venv/Scripts/python.exe')
   : resolve(projectRoot, 'backend/.venv/bin/python');
-const sofficePath = '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice';
+const sofficePath = findSoffice();
+if (!sofficePath) {
+  throw new Error('Live model tests require LibreOffice. Install it or set SOFFICE_PATH to the soffice executable.');
+}
 
 interface LiveCompanyCase {
   ticker: string;
@@ -3545,7 +3549,7 @@ print(json.dumps({
       const workbookPath = join(home, 't-telecom-live.xlsx');
       await writeFile(inputPath, JSON.stringify(payload), 'utf8');
       const inspected = spawnSync(pythonPath, ['-c', pythonScript, inputPath, workbookPath,
-        '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice'], {
+        sofficePath], {
         cwd: resolve(projectRoot, 'backend'), encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 180_000,
       });
       if (inspected.error) throw inspected.error;
@@ -4002,7 +4006,7 @@ print(json.dumps({
       const workbookPath = join(home, 'agnc-mortgage-reit-live.xlsx');
       await writeFile(inputPath, JSON.stringify(payload), 'utf8');
       const inspected = spawnSync(pythonPath, ['-c', pythonScript, inputPath, workbookPath,
-        '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice'], {
+        sofficePath], {
         cwd: resolve(projectRoot, 'backend'), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
       });
       if (inspected.error) throw inspected.error;
@@ -4382,7 +4386,6 @@ print(json.dumps({
       const inputPath = join(home, 'pfe-mature-pharma-export.json');
       const workbookPath = join(home, 'pfe-mature-pharma-live.xlsx');
       await writeFile(inputPath, JSON.stringify(exportPayload), 'utf8');
-      const sofficePath = '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice';
       const pythonScript = String.raw`import json, subprocess, sys
 from pathlib import Path
 from openpyxl import Workbook, load_workbook
@@ -4605,7 +4608,6 @@ print(json.dumps({
       const inputPath = join(home, 'xom-integrated-energy-export.json');
       const workbookPath = join(home, 'xom-integrated-energy-live.xlsx');
       await writeFile(inputPath, JSON.stringify(exportPayload), 'utf8');
-      const sofficePath = '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice';
       const pythonScript = String.raw`import json, subprocess, sys
 from pathlib import Path
 from openpyxl import Workbook, load_workbook
@@ -5212,7 +5214,6 @@ print(json.dumps({
       const {buildSourcedAssetManagerModelAssumptions} = await import('@/services/valuation/asset-manager-assumption-policy');
       const {calculateAssetManagerValuation} = await import('@/services/valuation/asset-manager-model');
       const {buildAssetManagerModelExportPayload} = await import('@/services/exporters/excel/asset-manager-payload');
-      const sofficePath = '/Users/ryanrodrigues/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice';
       const pythonScript = `import json, os, shutil, subprocess, sys
 from pathlib import Path
 from openpyxl import Workbook, load_workbook

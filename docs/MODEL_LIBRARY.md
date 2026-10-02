@@ -55,7 +55,7 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf model propose-update <ticker> --change 'spec'` | Records a sourced proposal (status `proposed`); reads each targeted cell's current literal/formula into `priorValue`/`priorFormula` at creation and shows them in the preview; workbook untouched |
 | `dcf model apply <id> --approve [--by name]` | Applies an approved proposal (see below) |
 | `dcf model reject <id> [--reason text]` | Status-only rejection; workbook unchanged |
-| `dcf filings sync <ticker>` | Fetches unified model data + the SEC filings list (`GET /api/company/{ticker}/filings`, EdgarTools source); selects the latest identity-validated report filing (endpoint CIK must match profile CIK; report-form accession prefix must match issuer CIK; Form 3/4/5/144 never model filings); stores snapshot, flags update-ready; never edits workbooks |
+| `dcf filings sync <ticker>` | Fetches unified model data + the SEC filings list (`GET /api/company/{ticker}/filings`, EdgarTools source); selects the latest identity-validated report filing (endpoint CIK and ticker must match the profile/request; accession prefixes are submitting-account CIKs and may belong to filing agents; Form 3/4/5/144 never model filings); stores snapshot, flags update-ready; never edits workbooks |
 | `dcf watch status` | Read-only table (enabled, update-ready, accession) |
 | `dcf watch check [ticker]` | One-shot refresh of one or all enabled tickers; snapshots only |
 | `dcf watch run [--interval s] [ticker]` | Polls enabled tickers through the live backend source path on the interval; Ctrl+C stops; never writes workbook files |
@@ -116,11 +116,10 @@ that only the structured snapshot was reviewed.
 
 ## Watch lifecycle
 
-Known issue: the current report-selection code rejects an accession when its
-prefix differs from the issuer CIK. That prefix identifies the submitting
-account and may be a filing agent, so this can miss valid company reports.
-Correcting this rule using SEC issuer metadata is the first follow-up task;
-the endpoint/profile CIK comparison should remain.
+The monitor validates the company filings endpoint's CIK and ticker against
+the issuer profile/request. It does not treat the accession prefix as the
+registrant CIK because that prefix identifies the submitting account, which
+may be a filing agent.
 
 - `dcf filings sync <ticker>` fetches the latest filing and upserts the snapshot row.
 - `dcf watch check [ticker]` refreshes one ticker or all enabled tickers (one-shot).

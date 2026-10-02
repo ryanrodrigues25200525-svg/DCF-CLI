@@ -24,11 +24,12 @@ through the shared service; never writes workbooks).
 - Confirm each fact cites the filed concept, SEC accession, filed date,
   currency, and unit scale.
 - Accession/filed date must match the queued filing snapshot for the ticker.
-  The endpoint CIK must equal the profile CIK. The accession prefix identifies
-  the submitting account and can belong to a filing agent; verify issuer
-  identity using the filing's SEC metadata. The current monitor still rejects
-  differing accession prefixes, a known false-negative issue listed in the
-  README. Independently check rejected company report filings before review.
+  The filings endpoint CIK must equal the profile CIK, and its ticker (when
+  present) must match the requested company. Do not treat the accession prefix
+  as the issuer CIK: it identifies the submitting account and may belong to a
+  filing agent. The monitor selects report forms from the issuer-scoped filing
+  list and excludes owner forms (3/4/5/144); confirm identity from the endpoint
+  CIK/ticker and filing metadata, not from the prefix alone.
 - `source_snapshot` contains normalized facts and provenance, not the full
   filing narrative. For narrative claims, open the primary SEC document using
   its returned reference; if only CIK/accession are available, use the SEC

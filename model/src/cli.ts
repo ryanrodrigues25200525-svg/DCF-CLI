@@ -47,7 +47,7 @@ function checkNodeVersion(): void {
   const minor = match ? Number(match[2]) : 0;
   if (major < MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor < MIN_NODE_MINOR)) {
     throw new Error(
-      `DCF Builder requires Node.js >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} (node:sqlite). Current: ${process.versions.node}.`,
+      `DCF CLI requires Node.js >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} (node:sqlite). Current: ${process.versions.node}.`,
     );
   }
 }
@@ -86,7 +86,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 function usage(): string {
   return [
-    'DCF Builder CLI',
+    'DCF CLI',
     '',
     'Legacy (preserved): dcfbuild [<ticker>] [--output <file.xlsx>] [--force]',
     'Library commands:  dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
@@ -515,7 +515,7 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
           console.log(`Watch: newer ${latestFiling.form} ${latestFiling.accession} (filed ${latestFiling.filingDate}) queued update-ready; manifest keeps fact source ${meta.accession}.`);
         }
         if (resolved.rejectedRowCount > 0) {
-          console.log(`Watch: ${resolved.rejectedRowCount} filing-list row(s) rejected on CIK identity.`);
+          console.log(`Watch: ${resolved.rejectedRowCount} report-form row(s) with invalid accession/date metadata ignored.`);
         }
       } catch (error) {
         console.error(`Warning: filing identity check failed: ${error instanceof Error ? error.message : String(error)}`);

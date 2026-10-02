@@ -15,8 +15,7 @@
     "install:command": "bash ./scripts/install_cli.sh",
     "install:all": "env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS npm install --prefix model && (cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt && .venv/bin/python -m pip install --no-deps -r requirements-openbb-meta.txt)",
     "typecheck": "npm --prefix model run typecheck",
-    "test:model": "npm --prefix model test",
-    "test:backend": "npm --prefix model test",
+    "test:model": "npm --prefix model test && npm --prefix model run test:filing-agent",
     "security:scan": "bash ./scripts/security_scan.sh"
   }
 }

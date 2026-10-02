@@ -108,7 +108,7 @@ function sofficeWorks(candidate: string): boolean {
   }
 }
 
-/** `SOFFICE_PATH`, then `which soffice`, brew/app paths, codex runtime; first that executes. */
+/** Uses `SOFFICE_PATH`, a POSIX `PATH` lookup, then common install paths. */
 export function findSoffice(): string | null {
   if (process.platform === 'win32') {
     const candidates = [

@@ -21,7 +21,7 @@ export interface FilingSyncReport {
   readiness: string | null;
   updateReady: boolean;
   acceptedAccession: string | null;
-  /** Report-form rows rejected on CIK mismatch (never flagged update-ready). */
+  /** Report-form rows ignored because accession or filing-date metadata is invalid. */
   rejectedRowCount: number;
   /** Filings-endpoint response CIK used for the identity check. */
   responseCik: string;
@@ -49,8 +49,9 @@ function isValidFiling(filing: CompanyFiling): boolean {
 
 /**
  * SEC report forms that may carry the issuer's own disclosures. Owner forms
- * (3/4/5/144) are NEVER model filings — metadata only. An 8-K/10-Q/10-K with
- * a foreign accession prefix (e.g. an owner's 8-K/A) is equally rejected.
+ * (3/4/5/144) are NEVER model filings — metadata only. Accession prefixes
+ * identify the submitting account, which may be a filing agent, so issuer
+ * identity is checked against the filings-list response CIK and ticker.
  */
 export const REPORT_FORMS = new Set([
   '10-K', '10-K/A', '10-Q', '10-Q/A', '8-K', '8-K/A',
@@ -68,11 +69,6 @@ function normalizeCik(value: unknown): string | null {
   return digits.padStart(10, '0');
 }
 
-function accessionCikPrefix(accession: string): string | null {
-  const match = accession.match(/^(\d{10})-\d{2}-\d{6}$/);
-  return match ? match[1] : null;
-}
-
 /** Latest filed entry wins; ties broken by accession order. */
 export function selectLatestFiling(filings: CompanyFiling[]): CompanyFiling | null {
   const valid = filings.filter(isValidFiling);
@@ -88,9 +84,10 @@ export function selectLatestFiling(filings: CompanyFiling[]): CompanyFiling | nu
  * Identity-validated monitor selection. Throws when the list identity itself
  * is suspect (response CIK/ticker mismatch, missing issuer CIK) so the caller
  * retains the unified fact accession without flagging update-ready. Otherwise
- * returns the latest report-form row whose accession prefix matches the
- * issuer CIK (or null when no valid row exists → fact-inference fallback),
- * plus the count of rejected rows. Form 3/4/5/144 rows are never candidates.
+ * returns the latest valid report-form row (or null when no valid row exists
+ * → fact-inference fallback), plus the count of report-form rows with invalid
+ * accession/date metadata. Form 3/4/5/144 rows are never candidates. The
+ * accession prefix is not an issuer check: it can identify a filing agent.
  */
 export function resolveMonitorFiling(
   list: FilingsListResult,
@@ -120,7 +117,7 @@ export function resolveMonitorFiling(
   let rejectedRowCount = 0;
   const candidates = list.filings.filter((filing) => {
     if (!REPORT_FORMS.has(filing.form.toUpperCase())) return false;
-    if (accessionCikPrefix(filing.accession) !== issuer) {
+    if (!isValidFiling(filing)) {
       rejectedRowCount += 1;
       return false;
     }
@@ -171,8 +168,9 @@ export async function syncFilingSnapshot(
   const unifiedRecord = asRecord(unified) ?? {};
   const profile = asRecord(unifiedRecord.profile);
   const issuerCik = profile && typeof profile.cik === 'string' ? profile.cik : null;
-  // Identity-validated selection: throws on CIK/ticker mismatch (nothing is
-  // flagged update-ready then); cross-CIK rows are rejected, never selected.
+  // Identity-validated selection: throws on endpoint/profile CIK or ticker
+  // mismatch (nothing is flagged update-ready then). Accession prefixes are
+  // submitting-account CIKs and may belong to the issuer's filing agent.
   const resolved = resolveMonitorFiling(filings, issuerCik, normalizedTicker);
   const latest = resolved.latest;
   const latestAccession = latest?.accession ?? built.accession;
