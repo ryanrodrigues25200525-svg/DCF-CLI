@@ -5,7 +5,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { getModelsDir, resolveModelsDir } from './config';
 import type {
   AddRevisionInput,
+  CandidateRecord,
   CompanyRecord,
+  CreateCandidateInput,
   CreateProposalInput,
   ProposalRecord,
   RevisionRecord,
@@ -99,6 +101,23 @@ function mapProposal(row: Record<string, unknown>): ProposalRecord {
   return {
     id: String(row.id),
     ticker: String(row.ticker),
+    base_revision_hash: strOrNull(row.base_revision_hash),
+    status: strOrNull(row.status) ?? '',
+    created_at: strOrNull(row.created_at) ?? '',
+    payload_json: strOrNull(row.payload_json) ?? '',
+  };
+}
+
+/** Lazily created so read-only opens of legacy libraries never migrate schemas. */
+const CANDIDATES_DDL = `CREATE TABLE IF NOT EXISTS candidates(
+  id TEXT PRIMARY KEY, ticker TEXT, workbook_hash TEXT, base_revision_hash TEXT,
+  status TEXT, created_at TEXT, payload_json TEXT)`;
+
+function mapCandidate(row: Record<string, unknown>): CandidateRecord {
+  return {
+    id: String(row.id),
+    ticker: String(row.ticker),
+    workbook_hash: strOrNull(row.workbook_hash) ?? '',
     base_revision_hash: strOrNull(row.base_revision_hash),
     status: strOrNull(row.status) ?? '',
     created_at: strOrNull(row.created_at) ?? '',
@@ -279,6 +298,73 @@ export class ModelLibrary {
   /** Remove a revision row (rollback only; revision files are never rewritten). */
   deleteRevision(id: string): void {
     this.db.prepare('DELETE FROM revisions WHERE id = ?').run(id);
+  }
+
+  /** Stage a build/update candidate. Creates the candidates table on first use. */
+  createCandidate(input: CreateCandidateInput): CandidateRecord {
+    const ticker = normalizeTicker(input.ticker);
+    if (!input.workbook_hash || input.workbook_hash.trim().length === 0) {
+      throw new Error('workbook_hash is required.');
+    }
+    this.db.exec(CANDIDATES_DDL);
+    const payloadJson = input.payload_json !== undefined ? input.payload_json : JSON.stringify(input.payload ?? null);
+    const rec: CandidateRecord = {
+      id: input.id ?? newId('cand'),
+      ticker,
+      workbook_hash: input.workbook_hash,
+      base_revision_hash: input.base_revision_hash ?? null,
+      status: input.status ?? 'pending',
+      created_at: utcNow(),
+      payload_json: payloadJson,
+    };
+    this.db
+      .prepare('INSERT INTO candidates(id, ticker, workbook_hash, base_revision_hash, status, created_at, payload_json) VALUES(?, ?, ?, ?, ?, ?, ?)')
+      .run(rec.id, rec.ticker, rec.workbook_hash, rec.base_revision_hash, rec.status, rec.created_at, rec.payload_json);
+    return rec;
+  }
+
+  getCandidate(id: string): CandidateRecord | null {
+    try {
+      const row = this.db.prepare('SELECT * FROM candidates WHERE id = ?').get(id);
+      return row === undefined ? null : mapCandidate(row as Record<string, unknown>);
+    } catch (e) {
+      // Legacy library without the candidates table: no candidate exists.
+      // Any other SQL error is real and must surface.
+      if (e instanceof Error && /no such table/i.test(e.message)) return null;
+      throw e;
+    }
+  }
+
+  /** Latest pending candidate for a ticker, or null. Never creates tables. */
+  getPendingCandidate(ticker: string): CandidateRecord | null {
+    try {
+      const rows = this.db
+        .prepare('SELECT * FROM candidates WHERE ticker = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+        .all(normalizeTicker(ticker), 'pending');
+      if (rows.length === 0) return null;
+      return mapCandidate(rows[0] as Record<string, unknown>);
+    } catch (e) {
+      if (e instanceof Error && /no such table/i.test(e.message)) return null;
+      throw e;
+    }
+  }
+
+  setCandidateStatus(id: string, status: string): CandidateRecord {
+    const existing = this.getCandidate(id);
+    if (existing === null) throw new Error(`Candidate not found: ${id}`);
+    this.db.prepare('UPDATE candidates SET status = ? WHERE id = ?').run(status, id);
+    const updated = this.getCandidate(id);
+    if (updated === null) throw new Error(`Candidate not found: ${id}`);
+    return updated;
+  }
+
+  updateCandidatePayload(id: string, payloadJson: string): CandidateRecord {
+    const existing = this.getCandidate(id);
+    if (existing === null) throw new Error(`Candidate not found: ${id}`);
+    this.db.prepare('UPDATE candidates SET payload_json = ? WHERE id = ?').run(payloadJson, id);
+    const updated = this.getCandidate(id);
+    if (updated === null) throw new Error(`Candidate not found: ${id}`);
+    return updated;
   }
 
   listProposals(ticker?: string): ProposalRecord[] {

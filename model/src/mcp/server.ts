@@ -622,6 +622,110 @@ async function toolProposalReject(args: Row): Promise<unknown> {
   }
 }
 
+/* ---------- build-candidate gate (shares the CLI service; never invents values) ---------- */
+interface CandidateLibT {
+  getPendingCandidate(ticker: string): Row | null;
+  getCandidate(id: string): Row | null;
+  close(): void;
+}
+interface CandidateModT {
+  getPendingCandidateView(lib: unknown, root: string, ticker: string): unknown;
+  getCandidateViewById(lib: unknown, root: string, id: string): unknown;
+  recordCandidateVerification(lib: unknown, root: string, id: string, text: string, by: string): unknown;
+  acceptCandidate(lib: unknown, root: string, id: string, by: string): Promise<Row>;
+  rejectCandidate(lib: unknown, root: string, id: string, reason?: string): unknown;
+}
+async function loadCandidateStack(modelsDir: string): Promise<{ lib: CandidateLibT; mod: CandidateModT }> {
+  const storeMod = (await import('../library/store.js')) as Row;
+  const Ctor = storeMod['ModelLibrary'] as new (root: string) => CandidateLibT;
+  const mod = (await import('../review/build-candidate.js')) as unknown as CandidateModT;
+  return { lib: new Ctor(modelsDir), mod };
+}
+function closeLib(lib: CandidateLibT): void {
+  try { lib.close(); } catch { /* ignore */ }
+}
+function candidateIdArg(args: Row): string {
+  const raw = args['candidateId'];
+  if (typeof raw !== 'string' || !raw.trim()) throw err('INVALID_CANDIDATE', 'candidateId is required');
+  return raw.trim();
+}
+function libraryDbPresent(modelsDir: string): boolean {
+  return DB_CANDIDATES.some((n) => existsSync(join(modelsDir, n)));
+}
+
+async function toolCandidateInspect(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) return { ticker, pendingCandidate: null };
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    return { ticker, pendingCandidate: mod.getPendingCandidateView(lib, modelsDir, ticker) };
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateVerify(args: Row): Promise<unknown> {
+  const candidateId = candidateIdArg(args);
+  if (typeof args['verification'] !== 'string' || !args['verification'].trim()) {
+    throw err('INVALID_VERIFICATION', 'verification is required: freshness verdict, source/period checks, formula findings, and summary');
+  }
+  if (typeof args['verifiedBy'] !== 'string' || !args['verifiedBy'].trim()) {
+    throw err('INVALID_VERIFICATION', 'verifiedBy is required');
+  }
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    return mod.recordCandidateVerification(lib, modelsDir, candidateId, args['verification'] as string, args['verifiedBy'] as string);
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/only pending/i.test(msg)) throw err('CANDIDATE_NOT_PENDING', msg);
+    throw err('INVALID_VERIFICATION', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateAccept(args: Row): Promise<unknown> {
+  if (args['approval'] !== true) {
+    throw err('APPROVAL_REQUIRED', 'Explicit approval required: call candidate_accept with approval=true');
+  }
+  const candidateId = candidateIdArg(args);
+  const approvedBy = typeof args['approvedBy'] === 'string' && args['approvedBy'].trim() ? args['approvedBy'].trim() : 'mcp';
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    const accepted = await mod.acceptCandidate(lib, modelsDir, candidateId, approvedBy);
+    return { candidateId, status: 'accepted', ticker: accepted['ticker'], revisionId: accepted['revisionId'], hash: accepted['hash'] };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/no recorded AI verification/i.test(msg)) throw err('VERIFICATION_REQUIRED', msg);
+    if (/stale/i.test(msg)) throw err('STALE_CANDIDATE', msg);
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    throw err('ACCEPT_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateReject(args: Row): Promise<unknown> {
+  const candidateId = candidateIdArg(args);
+  const reason = typeof args['reason'] === 'string' ? args['reason'] : undefined;
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    mod.rejectCandidate(lib, modelsDir, candidateId, reason);
+    return { candidateId, status: 'rejected' };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/only pending/i.test(msg)) throw err('CANDIDATE_NOT_PENDING', msg);
+    throw err('REJECT_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
 /* ---------- tool registry (inputSchema key order is part of the contract) ---------- */
 const changeSchema: Row = {
   type: 'object',
@@ -680,6 +784,20 @@ const TOOLS: ToolDef[] = [
     inputSchema: { type: 'object', properties: {
       proposalId: { description: 'Proposal id (text id or integer row id)' }, reason: { type: 'string' },
     }, required: ['proposalId'], additionalProperties: false } },
+  { name: 'candidate_inspect', description: 'Show the pending build/update candidate for a ticker: staged hash, route/readiness, source accession, mapped period, base revision, and verification status. Read-only.',
+    inputSchema: { type: 'object', properties: { ...tickerProp }, required: ['ticker'], additionalProperties: false } },
+  { name: 'candidate_verify', description: 'Record the AI review result on a pending build candidate (freshness verdict, source/period checks, formula findings, summary). Does not publish.',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, verification: { type: 'string' }, verifiedBy: { type: 'string' },
+    }, required: ['candidateId', 'verification', 'verifiedBy'], additionalProperties: false } },
+  { name: 'candidate_accept', description: 'Promote a verified pending candidate to the accepted revision. Requires recorded verification and approval=true; stale or edited bases fail closed.',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, approval: { type: 'boolean' }, approvedBy: { type: 'string' },
+    }, required: ['candidateId', 'approval'], additionalProperties: false } },
+  { name: 'candidate_reject', description: 'Reject a pending build candidate (status-only; the accepted library is never touched).',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, reason: { type: 'string' },
+    }, required: ['candidateId'], additionalProperties: false } },
 ];
 const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
@@ -687,6 +805,8 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   workbook_read_cells: toolWorkbookReadCells, filings_sync: toolFilingsSync,
   proposal_create: toolProposalCreate, proposal_apply: toolProposalApply,
   proposal_reject: toolProposalReject,
+  candidate_inspect: toolCandidateInspect, candidate_verify: toolCandidateVerify,
+  candidate_accept: toolCandidateAccept, candidate_reject: toolCandidateReject,
 };
 
 /* ---------- stdio JSON-RPC loop ---------- */

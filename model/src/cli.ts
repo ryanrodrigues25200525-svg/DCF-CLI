@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
-import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -16,19 +16,23 @@ import { formatValuationJobSuccess, runValuationJob } from '@/application/run-va
 import { getConfigPath, getModelsDir, resolveModelsDir, setModelsDir } from '@/library/config';
 import {
   ModelLibrary,
-  companyDir,
   currentWorkbookPath,
   manifestPath,
   normalizeTicker as normalizeLibraryTicker,
   readManifest,
   revisionPath,
-  sha256Hex,
   utcNow,
   verifyManifest,
-  writeManifestAtomic,
-  type ModelManifest,
 } from '@/library/index';
 import { applyApprovedProposal, captureChangePriors, rejectProposal } from '@/review/apply-service';
+import {
+  acceptCandidate,
+  formatCandidateMarkdown,
+  getPendingCandidateView,
+  recordCandidateVerification,
+  rejectCandidate,
+  stageBuildCandidate,
+} from '@/review/build-candidate';
 import { extractFilingInfo } from '@/watch/filing-source';
 import { getWatchStatus, setWatchEnabled } from '@/watch/watch-service';
 import { resolveMonitorFiling, syncFilingSnapshot } from '@/watch/source-sync';
@@ -36,7 +40,7 @@ import type { FilingsListResult } from '@/api/backend-client';
 import { buildSourceSnapshot } from '@/watch/source-snapshot';
 import { formatProposalMarkdown, validateProposalDraft, type ProposalDraft } from '@/review/proposal';
 import { formatReviewReport, runStaticWorkbookChecks } from '@/review/review-checks';
-import { findBackendPython, findSoffice, inspectWorkbook, recalculateWorkbook } from '@/workbook/xlsx';
+import { findBackendPython, inspectWorkbook } from '@/workbook/xlsx';
 
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 5;
@@ -97,6 +101,10 @@ function usage(): string {
     '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model export <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model propose-update <ticker> [--summary <text>] [--change <spec>]... [--accession <acc> --filed <date>] [--models-dir <dir>]',
+    '                   dcf model candidate <ticker> [--models-dir <dir>]',
+    '                   dcf model candidate-verify <candidate-id> --verification <text> --by <name> [--models-dir <dir>]',
+    '                   dcf model accept <candidate-id> --approve [--by <name>] [--models-dir <dir>]',
+    '                   dcf model candidate-reject <candidate-id> [--reason <text>] [--models-dir <dir>]',
     '                   dcf model apply <proposal-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model reject <proposal-id> [--reason <text>] [--models-dir <dir>]',
     '                   dcf filings sync <ticker> [--models-dir <dir>]',
@@ -116,6 +124,9 @@ function usage(): string {
     'Change spec for propose-update: sheet|cell|proposed|rationale|source[|accession]',
     '  (numbers, exponents, and true/false are typed; __BLANK__ clears the cell;',
     '   a proposed value starting with "=" is recorded as an explicit formula edit)',
+    'Build gate: `dcf build` and `dcf model update` stage a pending candidate;',
+    '  record the AI review with `model candidate-verify`, then promote with',
+    '  `model accept --approve`. Nothing is published before approval.',
     'If no ticker is provided to the legacy command, the CLI prompts for one.',
     'Set EDGAR_IDENTITY in the environment before running build/sync commands.',
     'Set DCF_MODELS_DIR or run `dcf config models-dir --set <dir>` for the library root.',
@@ -233,6 +244,7 @@ interface GlobalFlags {
   filed?: string;
   set?: string;
   reason?: string;
+  verification?: string;
   interval?: number;
   positionals: string[];
 }
@@ -259,6 +271,7 @@ function parseLibraryArgs(argv: string[]): GlobalFlags {
     else if (arg === '--filed') flags.filed = takeValue(arg);
     else if (arg === '--set') flags.set = takeValue(arg);
     else if (arg === '--reason') flags.reason = takeValue(arg);
+    else if (arg === '--verification') flags.verification = takeValue(arg);
     else if (arg === '--interval') {
       const raw = takeValue(arg);
       const seconds = Number(raw);
@@ -324,117 +337,22 @@ function snapshotJson(ticker: string, meta: ReturnType<typeof manifestMeta>): st
   });
 }
 
-/** Persist a freshly calculated workbook: immutable revision copy + validated current copy. */
-async function persistWorkbookRevision(
+/** Source metadata for a staged candidate: normalized snapshot + watch only.
+ *  The accepted workbook, manifest, companies row, and revision history are
+ *  untouched until a human approves the candidate. */
+function saveSourceMetadata(
   lib: ModelLibrary,
-  root: string,
   ticker: string,
-  bytes: Uint8Array,
   meta: ReturnType<typeof manifestMeta>,
-  note: string,
   snapshotJsonText?: string,
-): Promise<{ hash: string; revisionId: string; workbookPath: string; recalculatedBytes: Uint8Array }> {
-  // Engine recalculation gate: stage the engine bytes in an isolated folder
-  // inside the model root, recalculate with LibreOffice, and inspect BEFORE
-  // any revision/manifest/index write. Any failure aborts with the accepted
-  // workbook, manifest, index, and revisions unchanged.
-  const python = findBackendPython();
-  if (!python) {
-    throw new Error('No Python with openpyxl is available (backend/.venv); cannot validate the workbook before publication.');
-  }
-  const soffice = findSoffice();
-  if (!soffice) {
-    throw new Error('LibreOffice (soffice) is not available; cannot recalculate the workbook before publication.');
-  }
-  const stagingDir = await mkdtemp(join(root, '.build-staging-'));
-  let recalculatedBytes: Uint8Array;
-  try {
-    const stagedPath = join(stagingDir, 'engine.xlsx');
-    await copyFileBytes(bytes, stagedPath);
-    await recalculateWorkbook(soffice, stagedPath);
-    const inspection = await inspectWorkbook(python, stagedPath);
-    if (inspection.sheets.length === 0) throw new Error('Recalculated workbook has no sheets; refusing to publish.');
-    if (inspection.formulaCount === 0) throw new Error('Recalculated workbook has no formulas; refusing to publish.');
-    if (inspection.cachedErrorCells.length > 0) {
-      throw new Error(
-        `Recalculated workbook has cached formula errors (${inspection.cachedErrorCells.slice(0, 10).join(', ')}); refusing to publish.`,
-      );
-    }
-    recalculatedBytes = await readFile(stagedPath);
-  } finally {
-    await rm(stagingDir, {recursive: true, force: true}).catch(() => undefined);
-  }
-  const hash = sha256Hex(recalculatedBytes);
-  const previous = lib.getCompany(ticker);
-  const workbookPath = currentWorkbookPath(root, ticker);
-  await mkdir(companyDir(root, ticker), {recursive: true});
-  if (existsSync(workbookPath) && previous?.revision_id) {
-    const archived = revisionPath(root, ticker, previous.revision_id);
-    if (!existsSync(archived)) {
-      await mkdir(dirname(archived), {recursive: true});
-      await copyFile(workbookPath, archived);
-    }
-  }
-  const revision = lib.addRevision({
-    ticker,
-    workbook_hash: hash,
-    parent_hash: previous?.workbook_hash ?? null,
-    path: null,
-    note,
-  });
-  const archivedPath = revisionPath(root, ticker, revision.id);
-  await mkdir(dirname(archivedPath), {recursive: true});
-  await copyFileBytes(recalculatedBytes, archivedPath);
-  // Publish current.xlsx via same-directory temp + rename so a partial copy
-  // can never corrupt the accepted workbook.
-  const stagedPath = `${workbookPath}.staged-${process.pid}.tmp`;
-  try {
-    await copyFileBytes(recalculatedBytes, stagedPath);
-    const checks = runStaticWorkbookChecks(stagedPath);
-    if (!checks.exists || !checks.isZip || checks.sha256 !== hash) {
-      throw new Error('Workbook validation failed after writing the library copy.');
-    }
-    await rename(stagedPath, workbookPath);
-  } finally {
-    await rm(stagedPath, {force: true}).catch(() => undefined);
-  }
-  const builtAt = utcNow();
-  lib.upsertCompany({
-    ticker,
-    route: meta.route,
-    currency: meta.currency,
-    unit_scale: meta.unitScale,
-    accession: meta.accession,
-    filed_date: meta.filedDate,
-    workbook_hash: hash,
-    built_at: builtAt,
-    readiness: meta.readiness,
-    workbook_path: workbookPath,
-    revision_id: revision.id,
-  });
-  const manifest: ModelManifest = {
-    ticker,
-    route: meta.route,
-    currency: meta.currency,
-    unitScale: meta.unitScale,
-    accession: meta.accession,
-    filedDate: meta.filedDate,
-    workbookHash: hash,
-    builtAt,
-    readiness: meta.readiness,
-    revisionId: revision.id,
-    workbookFile: 'current.xlsx',
-    libraryVersion: 1,
-  };
-  await writeManifestAtomic(root, manifest);
-  if (meta.accession) {
-    // Prefer the full normalized snapshot when provided; fall back to metadata.
-    const payload = snapshotJsonText ?? snapshotJson(ticker, meta);
-    lib.saveSnapshot({ticker, accession: meta.accession, filed_date: meta.filedDate, payload_json: payload});
-    lib.setWatch(ticker, {last_check: utcNow(), latest_accession: meta.accession, update_ready: false, last_error: null});
-  }
-  return {hash, revisionId: revision.id, workbookPath, recalculatedBytes};
+): void {
+  if (!meta.accession) return;
+  // Prefer the full normalized snapshot when provided; fall back to metadata.
+  const payload = snapshotJsonText ?? snapshotJson(ticker, meta);
+  lib.saveSnapshot({ticker, accession: meta.accession, filed_date: meta.filedDate, payload_json: payload});
+  lib.setWatch(ticker, {last_check: utcNow(), latest_accession: meta.accession, update_ready: false, last_error: null});
 }
+
 
 function readCurrentHash(root: string, ticker: string): string | null {
   const checks = runStaticWorkbookChecks(currentWorkbookPath(root, ticker));
@@ -514,13 +432,26 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     const meta = manifestMeta(unified);
     const built = buildSourceSnapshot(unified);
     const fullSnapshotJson = JSON.stringify({...built.snapshot, _ticker: ticker, _fetchedAt: utcNow()});
-    const saved = await persistWorkbookRevision(lib, root, ticker, result.workbookBytes, meta, 'dcf build', fullSnapshotJson);
-    await writeWorkbook(output, saved.recalculatedBytes, flags.force);
+    // Build gate: stage a pending candidate for AI review + human approval.
+    // The accepted library copy, manifest, and revisions stay unchanged.
+    const staged = await stageBuildCandidate({
+      lib, root, ticker, engineBytes: result.workbookBytes, meta, snapshotJsonText: fullSnapshotJson, note: 'dcf build',
+    });
+    saveSourceMetadata(lib, ticker, meta, fullSnapshotJson);
+    await writeWorkbook(output, await readFile(staged.workbookPath), flags.force);
     console.log(formatValuationJobSuccess(result, output));
-    console.log(`Accepted library copy: ${saved.workbookPath}`);
-    console.log(`Library: ${ticker} route=${meta.route} readiness=${meta.readiness} revision=${saved.revisionId} hash=${saved.hash}`);
+    console.log(`Staged build candidate ${staged.candidateId} for ${ticker} (route=${meta.route} readiness=${meta.readiness} hash=${staged.hash}).`);
+    if (staged.isInitialBuild) {
+      console.log('No accepted revision exists yet; nothing was published.');
+    } else {
+      console.log('The accepted library copy is unchanged until approval.');
+    }
+    console.log('Review the export, then record the AI review and approve:');
+    console.log(`  dcf model candidate ${ticker}`);
+    console.log(`  dcf model candidate-verify ${staged.candidateId} --verification "<freshness, sources, formulas, summary>" --by <name>`);
+    console.log(`  dcf model accept ${staged.candidateId} --approve [--by <name>]`);
     if (meta.accession) console.log(`Source: accession ${meta.accession}, filed ${meta.filedDate ?? 'unknown'}.`);
-    // Manifest keeps the fact-source accession represented by the workbook.
+    // The candidate carries the fact-source accession represented by the workbook.
     // If the SEC filings list has something newer, queue it on watch only.
     // Identity-validated: cross-CIK rows can never queue update-ready.
     if (filings) {
@@ -530,7 +461,7 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
         const latestFiling = resolved.latest;
         if (latestFiling && meta.accession && latestFiling.accession !== meta.accession) {
           lib.setWatch(ticker, {last_check: utcNow(), latest_accession: latestFiling.accession, update_ready: true, last_error: null});
-          console.log(`Watch: newer ${latestFiling.form} ${latestFiling.accession} (filed ${latestFiling.filingDate}) queued update-ready; manifest keeps fact source ${meta.accession}.`);
+          console.log(`Watch: newer ${latestFiling.form} ${latestFiling.accession} (filed ${latestFiling.filingDate}) queued update-ready; candidate keeps fact source ${meta.accession}.`);
         }
         if (resolved.rejectedRowCount > 0) {
           console.log(`Watch: ${resolved.rejectedRowCount} report-form row(s) with invalid accession/date metadata ignored.`);
@@ -559,7 +490,16 @@ async function cmdModelExport(tickerRaw: string | undefined, flags: GlobalFlags)
   const lib = openLibrary(flags.modelsDir);
   try {
     const manifest = lib.getCompany(ticker);
-    if (!manifest) throw new CliUsageError(`No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`);
+    if (!manifest) {
+      let hint = `No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`;
+      try {
+        const pending = getPendingCandidateView(lib, root, ticker);
+        if (pending) hint += ` A pending build candidate ${pending.id} exists: verify it with \`dcf model candidate-verify ${pending.id} --verification \"...\" --by <name>\`, then \`dcf model accept ${pending.id} --approve\`.`;
+      } catch {
+        // Legacy library without a candidates table: plain missing-model error.
+      }
+      throw new CliUsageError(hint);
+    }
     const workbookPath = currentWorkbookPath(root, ticker);
     const currentHash = readCurrentHash(root, ticker);
     if (!currentHash) throw new Error(`The accepted workbook for ${ticker} is missing; refusing to export.`);
@@ -644,6 +584,14 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
     console.log(`Workbook: ${manifest.workbook_path ?? '-'}  Hash: ${manifest.workbook_hash ?? '-'}`);
     console.log(`On-disk hash matches manifest: ${payload.hashMatchesManifest ? 'yes' : 'NO — possible manual edit'}`);
     console.log(`Revisions: ${revisions.length}  Proposals: ${proposals.length}`);
+    try {
+      const pending = getPendingCandidateView(lib, root, ticker);
+      if (pending) {
+        console.log(`Pending candidate: ${pending.id} status=${pending.status} hash=${pending.workbookHash} verification=${pending.payload.verification ? 'recorded' : 'missing'}`);
+      }
+    } catch {
+      // Legacy library without a candidates table: no pending candidate.
+    }
     if (snapshot) console.log(`Latest snapshot: ${snapshot.accession} (filed ${snapshot.filed_date ?? 'unknown'})`);
     if (watch) console.log(`Watch: ${watch.enabled === 1 ? 'enabled' : 'paused'}, update-ready: ${watch.update_ready === 1 ? 'yes' : 'no'}`);
   } finally {
@@ -940,6 +888,68 @@ async function cmdModelReject(proposalIdRaw: string | undefined, flags: GlobalFl
   console.log(`Proposal ${rejected.id} rejected (status=${rejected.status}). The workbook is unchanged.`);
 }
 
+async function cmdModelCandidate(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model candidate <ticker> [--models-dir <dir>]');
+  const ticker = normalizeLibraryTicker(tickerRaw);
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const view = getPendingCandidateView(lib, root, ticker);
+    if (!view) {
+      console.log(`No pending build candidate for ${ticker}. Stage one with \`dcf build ${ticker}\`.`);
+      return;
+    }
+    console.log(formatCandidateMarkdown(view));
+  } finally {
+    lib.close();
+  }
+}
+
+async function cmdCandidateVerify(candidateIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!candidateIdRaw) throw new CliUsageError('Usage: dcf model candidate-verify <candidate-id> --verification <text> --by <name> [--models-dir <dir>]');
+  if (!flags.verification) throw new CliUsageError('A review result is required: re-run with --verification "<freshness, sources, formulas, summary>".');
+  if (!flags.approvedBy) throw new CliUsageError('A reviewer name is required: re-run with --by <name>.');
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const view = recordCandidateVerification(lib, root, candidateIdRaw, flags.verification, flags.approvedBy);
+    console.log(`Recorded AI verification for candidate ${view.id} (reviewed by ${flags.approvedBy}).`);
+    console.log(`Promote with explicit human approval: \`dcf model accept ${view.id} --approve [--by <name>]\`.`);
+  } finally {
+    lib.close();
+  }
+}
+
+async function cmdModelAccept(candidateIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!candidateIdRaw) throw new CliUsageError('Usage: dcf model accept <candidate-id> --approve [--by <name>] [--models-dir <dir>]');
+  if (!flags.approve) {
+    throw new CliUsageError(`Explicit approval required: re-run with --approve to accept candidate ${candidateIdRaw}.`);
+  }
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const accepted = await acceptCandidate(lib, root, candidateIdRaw, flags.approvedBy ?? 'cli');
+    console.log(`Accepted candidate ${accepted.candidateId} (approved by ${flags.approvedBy ?? 'cli'}): new revision ${accepted.revisionId} (${accepted.hash}).`);
+    if (accepted.parentHash) console.log(`Prior revision preserved: ${accepted.parentHash}.`);
+    console.log(`Accepted library copy: ${accepted.workbookPath}`);
+  } finally {
+    lib.close();
+  }
+}
+
+async function cmdCandidateReject(candidateIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!candidateIdRaw) throw new CliUsageError('Usage: dcf model candidate-reject <candidate-id> [--reason <text>] [--models-dir <dir>]');
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const payload = rejectCandidate(lib, root, candidateIdRaw, flags.reason);
+    console.log(`Candidate ${candidateIdRaw} rejected. The accepted library copy is unchanged.`);
+    void payload;
+  } finally {
+    lib.close();
+  }
+}
+
 async function checkOneTicker(root: string, modelsDir: string | undefined, ticker: string): Promise<void> {
   try {
     const report = await withBackend((client) => syncFilingSnapshot(root, ticker, {
@@ -1085,7 +1095,11 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
       else if (sub === 'apply') await cmdModelApply(args[0], flags);
       else if (sub === 'reject') await cmdModelReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...');
+      else if (sub === 'candidate') await cmdModelCandidate(args[0], flags);
+      else if (sub === 'candidate-verify') await cmdCandidateVerify(args[0], flags);
+      else if (sub === 'accept') await cmdModelAccept(args[0], flags);
+      else if (sub === 'candidate-reject') await cmdCandidateReject(args[0], flags);
+      else throw new CliUsageError('Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');

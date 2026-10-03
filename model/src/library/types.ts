@@ -31,6 +31,17 @@ export interface ProposalRecord {
   payload_json: string;
 }
 
+/** A staged build/update awaiting AI verification and human approval. */
+export interface CandidateRecord {
+  id: string;
+  ticker: string;
+  workbook_hash: string;
+  base_revision_hash: string | null;
+  status: string;
+  created_at: string;
+  payload_json: string;
+}
+
 export interface SnapshotRecord {
   ticker: string;
   accession: string;
@@ -59,6 +70,16 @@ export interface AddRevisionInput {
 
 export interface CreateProposalInput {
   ticker: string;
+  base_revision_hash?: string | null;
+  payload?: unknown;
+  payload_json?: string;
+  id?: string;
+  status?: string;
+}
+
+export interface CreateCandidateInput {
+  ticker: string;
+  workbook_hash: string;
   base_revision_hash?: string | null;
   payload?: unknown;
   payload_json?: string;
