@@ -91,12 +91,17 @@ Validation rejects unsourced or malformed changes; nothing is written until appr
 
 ## 4. Approval requirement
 
+- Review first with `dcf model preview <id>` (or MCP `proposal_preview`):
+  edits a copy, recalculates, validates, and records the reviewed changes hash
+  without publishing. Applying requires a matching preview for the exact edits.
 - Applying requires explicit approval: CLI `dcf model apply <id> --approve`
   (optionally `--by <name>`); MCP `proposal_apply` requires `approval: true`
   and runs the SAME shared apply service (copy, openpyxl edits, `soffice`
   recalculation, new-error/sheet gates, staged publish with rollback + audit).
   "Staged" is literal: same-directory temp + rename per file, rollback copies
-  retained, no multi-file atomicity claimed.
+  retained, no multi-file atomicity claimed. Failures share codes across
+  preview and apply: approval/preview-required, stale base, manual edit,
+  invalid source, engine unavailable.
 - Rejection is status-only: `dcf model reject <id>` (or MCP `proposal_reject`);
   the workbook is unchanged.
 - After a proposal is applied, `dcf model export <ticker>` writes a new dated

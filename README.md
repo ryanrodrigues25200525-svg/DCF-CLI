@@ -175,7 +175,7 @@ The pipeline separates jobs that need different standards:
 | `dcf filings sync AAPL` | Refresh filing metadata and queue an update; it never edits a workbook |
 | `dcf watch run --interval 300` | Check enabled companies every 300 seconds |
 | `dcf model propose-update AAPL` | Save a source-backed proposal using one or more --change entries |
-| `dcf model apply ID --approve` | Apply the reviewed proposal as a new revision |
+| `dcf model apply ID --approve` | Promote exactly the previewed proposal edits as a new revision |
 | `dcf model reject ID` | Reject a proposal without changing the workbook |
 | `dcf model compare AAPL` | Diff two same-company revisions (prior vs newest by default) to see what changed |
 | `dcf config models-dir [--set <dir>]` | Show or persist the model-library root |
@@ -226,8 +226,9 @@ asking it to invent a workbook from scratch.
    > assumptions and list the checks you would run after an edit.
 
 4. Apply analyst judgment in Excel. For a source-backed fact correction, sync
-   the filing and record a proposal with `dcf model propose-update`; inspect its
-   preview, then apply it only after approval with
+   the filing and record a proposal with `dcf model propose-update`; review it
+   without publishing via `dcf model preview <proposal-id>`, then apply exactly
+   what was reviewed only after approval with
    `dcf model apply <proposal-id> --approve`. For a staged build candidate,
    record the AI review with
    `dcf model candidate-verify <id> --verification "<freshness, sources, formulas, summary>" --by <name>`

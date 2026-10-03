@@ -54,8 +54,9 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf model inspect <ticker> [--json]` | Manifest file + DB rows + hash verification |
 | `dcf model open <ticker>` | Opens the workbook in the host app; library copy unchanged |
 | `dcf model review <ticker>` | Static checks plus real xlsx inspection: sheet list, formula count, cached formula errors, Input Required status, Data Review rows (backend-venv openpyxl) |
-| `dcf model propose-update <ticker> --change 'spec'` | Records a sourced proposal (status `proposed`); reads each targeted cell's current literal/formula into `priorValue`/`priorFormula` at creation and shows them in the preview; workbook untouched |
-| `dcf model apply <id> --approve [--by name]` | Applies an approved proposal (see below) |
+| `dcf model propose-update <ticker> --change 'spec'` | Records a sourced proposal (status `proposed`); reads each targeted cell's current literal/formula into `priorValue`/`priorFormula` at creation; workbook untouched |
+| `dcf model preview <proposal-id>` | Reviews a proposal without publishing: edits a copy, recalculates, validates, and records the reviewed changes hash. Must precede apply for the same edits |
+| `dcf model apply <id> --approve [--by name]` | Promotes exactly the previewed edits as a new revision (fails closed without a matching preview). Retains route/readiness/source context with rollback on failure |
 | `dcf model reject <id> [--reason text]` | Status-only rejection; workbook unchanged |
 | `dcf model candidate <ticker>` | Shows the pending build/update candidate: staged hash, route/readiness, source accession, mapped period, base revision, verification status |
 | `dcf model candidate-verify <id> --verification <text> --by <name>` | Records the AI review result (freshness, sources, formulas, summary; minimum 40 chars). Does not publish |
@@ -114,9 +115,13 @@ Start with `npm --prefix model run dcf-mcp` (or `dcf mcp`).
 | `workbook_read_cells` | Live cached values + formulas for up to 50 `{sheet, cell}` refs; read-only |
 | `workbook_validate` | Full xlsx inspection (same helper as CLI review): manifest/hash match, sheet + formula counts, cached formula errors, Input Required gate status. Reports `fullValidation: false` with a reason when the inspection engine is unavailable instead of pretending a hash check is full validation; read-only, no network |
 | `source_snapshot` | Stored normalized snapshot, paged (`offset`, `maxChars` 1–20000, default 4000; returns `totalChars`, `nextOffset`, `truncated`); read-only, no network |
-| `proposal_create` | Validates (exactly one of `proposedValue`/`proposedFormula`, `=`-prefixed formulas), defaults the base to the manifest hash and refuses stale bases, captures each cell's current literal/formula as `priorValue`/`priorFormula`, inserts with status `proposed` |
-| `proposal_apply` | Requires `approval: true`; runs the SAME shared apply service and returns revision info — it DOES modify the library through the approved path |
+| `proposal_create` | Validates (exactly one of `proposedValue`/`proposedFormula`, `=`-prefixed formulas rejected in favor of explicit formula edits), defaults the base to the manifest hash and refuses stale bases, captures each cell's current literal/formula as `priorValue`/`priorFormula`, inserts with status `proposed` |
+| `proposal_preview` | Reviews without publishing (edit copy, recalc, validate) and records the reviewed changes hash; must precede apply for the same edits |
+| `proposal_apply` | Requires a matching preview plus `approval: true`; promotes exactly the reviewed edits and publishes a new revision. Failures use shared codes: `APPROVAL/PREVIEW_REQUIRED`, `STALE_BASE`, `MANUAL_EDIT_DETECTED`, `INVALID_SOURCE`, `ENGINE_UNAVAILABLE` |
 | `proposal_reject` | Status-only rejection; never alters the workbook |
+| `candidate_inspect` / `candidate_verify` / `candidate_accept` / `candidate_reject` | Pending build-candidate lifecycle; read-only except verify/accept/reject, and accept requires recorded verification plus approval |
+| `revision_compare` | Hash-verified same-company diffs (`from`/`to` revision ids or `accepted`/`candidate` aliases, `limit` 1–500) |
+| `model_build` | Same deterministic staging flow as CLI `dcf build` (long-running); stages a candidate and publishes nothing |
 
 `source_snapshot` returns normalized facts and per-fact source lineage, not
 full SEC filing narrative text. For narrative review, the assistant follows
@@ -144,9 +149,9 @@ may be a filing agent.
    flags update-ready. The workbook is untouched.
 2. `dcf model review <ticker>` runs static checks and the real xlsx inspection.
 3. `dcf model propose-update` records a sourced proposal (`proposed`).
-4. A human reviews the markdown proposal.
+4. A human reviews the markdown proposal, then `dcf model preview <id>` reviews it without publishing (required before apply).
 5. `dcf model apply <id> --approve` (or MCP `proposal_apply` with
-   `approval: true`) runs the shared apply service and publishes a new revision.
+   `approval: true`) promotes exactly the previewed edits and publishes a new revision.
 6. `dcf model reject <id>` only flips status; the workbook is unchanged.
 
 No step auto-applies. The watcher never edits workbooks.
