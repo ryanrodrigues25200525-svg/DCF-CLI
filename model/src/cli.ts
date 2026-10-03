@@ -114,7 +114,8 @@ function usage(): string {
     '  -h, --help           Show this help',
     '',
     'Change spec for propose-update: sheet|cell|proposed|rationale|source[|accession]',
-    '  (a proposed value starting with "=" is recorded as an explicit formula edit)',
+    '  (numbers, exponents, and true/false are typed; __BLANK__ clears the cell;',
+    '   a proposed value starting with "=" is recorded as an explicit formula edit)',
     'If no ticker is provided to the legacy command, the CLI prompts for one.',
     'Set EDGAR_IDENTITY in the environment before running build/sync commands.',
     'Set DCF_MODELS_DIR or run `dcf config models-dir --set <dir>` for the library root.',
@@ -655,17 +656,53 @@ async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): 
   const root = libraryRoot(flags.modelsDir);
   const workbookPath = currentWorkbookPath(root, ticker);
   if (!existsSync(workbookPath)) throw new CliUsageError(`No saved workbook for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`);
-  const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-  const openerArgs = process.platform === 'darwin' ? [workbookPath] : process.platform === 'win32' ? ['/c', 'start', '""', workbookPath] : [workbookPath];
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn(opener, openerArgs, {detached: true, stdio: 'ignore'});
-    child.once('error', rejectPromise);
-    child.once('spawn', () => {
-      child.unref();
-      resolvePromise();
+  // DCF_OPEN_COMMAND overrides the desktop opener (used by the live
+  // regression to force launch success/failure deterministically).
+  const openerOverride = process.env.DCF_OPEN_COMMAND?.trim() || null;
+  const isDesktop = process.platform === 'darwin' || process.platform === 'win32';
+  if (!isDesktop && !openerOverride && !process.env.DISPLAY?.trim() && !process.env.WAYLAND_DISPLAY?.trim()) {
+    // Headless Linux: xdg-open would fail after we already claimed success,
+    // so report the path instead of spawning the opener.
+    console.log('No desktop session detected (DISPLAY/WAYLAND_DISPLAY are unset); the workbook was not opened.');
+    console.log(`Workbook: ${workbookPath}`);
+    return;
+  }
+  const opener = openerOverride ?? (process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open');
+  const openerArgs = openerOverride !== null || process.platform !== 'win32' ? [workbookPath] : ['/c', 'start', '""', workbookPath];
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const child = spawn(opener, openerArgs, {detached: true, stdio: 'ignore'});
+      let settled = false;
+      const settle = (finish: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        finish();
+      };
+      // A lingering opener means it is still running (assumed launched);
+      // an early nonzero exit means the open failed.
+      const timer = setTimeout(() => settle(() => {
+        child.unref();
+        resolvePromise();
+      }), 2000);
+      child.once('error', (error) => settle(() => rejectPromise(error)));
+      child.once('exit', (code) => {
+        if (code !== null && code !== 0) {
+          settle(() => rejectPromise(new Error(`workbook opener exited with code ${code} (${opener}); the workbook was not confirmed open`)));
+        } else {
+          settle(() => {
+            child.unref();
+            resolvePromise();
+          });
+        }
+      });
+      child.once('spawn', () => {
+        child.unref();
+      });
     });
-    setTimeout(() => resolvePromise(), 2000);
-  });
+  } catch (error) {
+    throw new Error(`Could not open ${workbookPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   console.log(`Opened ${workbookPath} (read-only open; the library copy is unchanged).`);
 }
 
@@ -746,7 +783,7 @@ async function cmdModelReview(tickerRaw: string | undefined, flags: GlobalFlags)
 function parseChangeSpec(spec: string, fallbackAccession: string): {
   sheet: string;
   cell: string;
-  proposedValue: string | number;
+  proposedValue: string | number | boolean | null;
   rationale: string;
   source: string;
   accession: string;
@@ -763,15 +800,23 @@ function parseChangeSpec(spec: string, fallbackAccession: string): {
   return {sheet, cell, proposedValue: coerceScalar(proposed), rationale, source, accession: resolvedAccession};
 }
 
+/** Explicit token that clears a proposed cell to a true blank (JSON null). */
+const BLANK_VALUE_TOKEN = '__BLANK__';
+
 /**
- * CLI --change values arrive as strings. A plain numeric literal (no leading
- * zeros, no trailing text) is stored as a JSON number so Excel keeps a numeric
- * cell type; anything else stays a string. Leading '=' is handled by the caller
- * as an explicit formula edit and never reaches this coercion as a value.
+ * CLI --change values arrive as strings. Plain numeric literals (including
+ * exponent notation) become JSON numbers, true/false become JSON booleans,
+ * and the explicit __BLANK__ token becomes null so a cell can be cleared;
+ * anything else stays a string. Leading '=' is handled by the caller as an
+ * explicit formula edit and never reaches this coercion as a value.
  */
-function coerceScalar(raw: string): string | number {
+function coerceScalar(raw: string): string | number | boolean | null {
   const trimmed = raw.trim();
-  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(trimmed)) {
+  if (trimmed === BLANK_VALUE_TOKEN) return null;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === 'true') return true;
+  if (lowered === 'false') return false;
+  if (/^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
     const numeric = Number(trimmed);
     if (Number.isFinite(numeric)) return numeric;
   }
@@ -993,7 +1038,7 @@ async function cmdConfigModelsDir(flags: GlobalFlags): Promise<void> {
 async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
   const [command, subcommand, ...rest] = argv;
   if (!command || !LIBRARY_COMMANDS.has(command)) return false;
-  const flags = parseLibraryArgs(command === 'mcp' ? [] : rest);
+  const flags = parseLibraryArgs(command === 'mcp' ? (subcommand === undefined ? rest : [subcommand, ...rest]) : rest);
   const args = flags.positionals;
   const sub = command === 'mcp' ? undefined : subcommand;
   switch (command) {
@@ -1027,6 +1072,26 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       await cmdConfigModelsDir(flags);
       return true;
     case 'mcp': {
+      // The stdio server takes no arguments: --help/-h is handled by the
+      // usage trap in main(), anything else is rejected before startup so a
+      // typo never holds the terminal in the MCP request loop.
+      const unexpected: string[] = [...flags.positionals];
+      if (flags.modelsDir !== undefined) unexpected.push('--models-dir');
+      if (flags.json) unexpected.push('--json');
+      if (flags.force) unexpected.push('--force');
+      if (flags.approve) unexpected.push('--approve');
+      if (flags.approvedBy !== undefined) unexpected.push('--by');
+      if (flags.output !== undefined) unexpected.push('--output');
+      if (flags.summary !== undefined) unexpected.push('--summary');
+      if (flags.changes.length > 0) unexpected.push('--change');
+      if (flags.accession !== undefined) unexpected.push('--accession');
+      if (flags.filed !== undefined) unexpected.push('--filed');
+      if (flags.set !== undefined) unexpected.push('--set');
+      if (flags.reason !== undefined) unexpected.push('--reason');
+      if (flags.interval !== undefined) unexpected.push('--interval');
+      if (unexpected.length > 0) {
+        throw new CliUsageError(`Usage: dcf mcp (takes no arguments). Unexpected: ${unexpected.join(' ')}`);
+      }
       const {startMcpServer} = await import('@/mcp/server');
       await startMcpServer();
       return true;

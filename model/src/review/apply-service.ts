@@ -47,9 +47,11 @@ function readCurrentBytesHash(root: string, ticker: string): { path: string; has
 function toCellEdit(change: ProposedChange): CellEdit {  if (change.proposedFormula !== undefined && change.proposedFormula !== null && change.proposedFormula !== '') {
     return {sheet: change.sheet, cell: change.cell, formula: change.proposedFormula};
   }
-  if (change.proposedValue !== undefined && change.proposedValue !== null) {
+  // An explicit null clears the cell to a true blank (the value key must be
+  // present so the workbook helper writes None instead of skipping the edit).
+  if (change.proposedValue !== undefined) {
     const value = change.proposedValue;
-    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+    if (value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
       throw new Error(`Change ${change.sheet}!${change.cell} has an unsupported proposed value type.`);
     }
     return {sheet: change.sheet, cell: change.cell, value};

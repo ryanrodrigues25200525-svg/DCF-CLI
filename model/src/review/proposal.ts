@@ -6,7 +6,9 @@ export interface ProposedChange {
   cell: string;
   priorValue?: number | string | boolean | null;
   priorFormula?: string | null;
-  proposedValue?: number | string | null;
+  // An explicit null clears the cell to a true blank (distinct from an
+  // absent proposedValue, which means no value edit was proposed).
+  proposedValue?: number | string | boolean | null;
   proposedFormula?: string | null;
   rationale: string;
   source: string;
@@ -40,13 +42,14 @@ const CELL_PATTERN = /^[A-Z]{1,3}[1-9][0-9]{0,6}$/i;
 const ACCESSION_PATTERN = /^\d{10}-\d{2}-\d{6}$/;
 
 function hasProposal(change: ProposedChange): boolean {
-  if (change.proposedValue !== undefined && change.proposedValue !== null) return true;
+  // An explicit null is a blank-clear edit, not a missing value.
+  if (change.proposedValue !== undefined) return true;
   return typeof change.proposedFormula === 'string' && change.proposedFormula.startsWith('=') && change.proposedFormula.length >= 2;
 }
 
 /** Mirror of the MCP exactly-one rule: value XOR explicit (=, length>=2) formula. */
 function proposalContentError(change: ProposedChange): string | null {
-  const hasValue = change.proposedValue !== undefined && change.proposedValue !== null;
+  const hasValue = change.proposedValue !== undefined;
   const hasFormula = typeof change.proposedFormula === 'string' && change.proposedFormula !== '';
   if (hasValue && hasFormula) return 'set exactly one of proposedValue/proposedFormula';
   if (hasFormula && !(change.proposedFormula as string).startsWith('=')) {
@@ -155,7 +158,8 @@ export function formatProposalMarkdown(draft: ProposalDraft): string {
   lines.push('| - | ----- | ---- | ----- | -------- | --------- | ------ | --------- |');
   draft.changes.forEach((change, index) => {
     const prior = change.priorFormula ?? formatCellValue(change.priorValue);
-    const proposed = change.proposedFormula ?? formatCellValue(change.proposedValue);
+    const proposed = change.proposedFormula
+      ?? (change.proposedValue === null ? '(blank)' : formatCellValue(change.proposedValue));
     lines.push(
       `| ${index + 1} | ${change.sheet} | ${change.cell} | ${prior} | ${proposed} | ${change.rationale} | ${change.source} | ${change.accession} |`,
     );

@@ -1,5 +1,6 @@
-import { spawnSync } from 'node:child_process';
-import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1672,13 +1673,14 @@ function runLiveCli(ticker: string, outputPath: string, home: string) {
   });
 }
 
-function runLibraryCli(args: string[], home: string) {
+function runLibraryCli(args: string[], home: string, extraEnv: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, [resolve(projectRoot, 'bin/dcf.mjs'), ...args], {
     cwd: projectRoot,
     env: {
       ...process.env,
       HOME: home,
       DCF_CACHE_DB_PATH: join(home, 'financial_cache.sqlite'),
+      ...extraEnv,
     },
     encoding: 'utf8',
     maxBuffer: 3 * 1024 * 1024,
@@ -8723,4 +8725,311 @@ print(json.dumps({
       await rm(home, {recursive: true, force: true});
     }
   }, 600_000);
+
+  // --- Task 1 CLI regressions (GitHub issues #1, #3, #8) ---
+  // These cases spawn the real CLI against hermetic local fixtures (no
+  // provider network): a hand-built model library plus the project Python
+  // venv and LibreOffice for prior capture and proposal application.
+
+  const typedFixturePython = String.raw`
+import sys
+from openpyxl import Workbook
+path = sys.argv[1]
+wb = Workbook()
+ws = wb.active
+ws.title = 'Data Review'
+ws['B2'] = 1
+ws['B3'] = 'x'
+ws['B4'] = 'y'
+ws['B5'] = 0
+ws['B6'] = 'seed'
+ws['B7'] = 'seed'
+ws['B8'] = 0
+ws['B10'] = '=B2*2'
+wb.save(path)
+`;
+
+  const readProposalPayloadPython = String.raw`
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = db.execute(
+    "SELECT payload_json FROM proposals WHERE ticker=? ORDER BY created_at DESC LIMIT 1",
+    (sys.argv[2],),
+).fetchone()
+if not row:
+    raise RuntimeError('no proposal recorded')
+print(row[0])
+`;
+
+  const readCellsPython = String.raw`
+import json, sys
+from openpyxl import load_workbook
+wb_formulas = load_workbook(sys.argv[1], data_only=False)
+wb_cached = load_workbook(sys.argv[1], data_only=True)
+ws_formulas = wb_formulas[sys.argv[2]]
+ws_cached = wb_cached[sys.argv[2]]
+out = {}
+for cell in json.loads(sys.argv[3]):
+    out[cell] = {'formula': ws_formulas[cell].value, 'cached': ws_cached[cell].value}
+print(json.dumps(out))
+`;
+
+  const seedFixtureLibraryPython = String.raw`
+import sqlite3, sys
+models_dir, ticker, workbook_path, workbook_hash, accession, filed_date, built_at, manifest_json = sys.argv[1:9]
+db = sqlite3.connect(models_dir + '/library.db')
+db.execute("""CREATE TABLE IF NOT EXISTS companies(ticker TEXT PRIMARY KEY, route TEXT, currency TEXT,
+  unit_scale TEXT, accession TEXT, filed_date TEXT, workbook_hash TEXT, built_at TEXT,
+  readiness TEXT, workbook_path TEXT, revision_id TEXT)""")
+db.execute("""CREATE TABLE IF NOT EXISTS snapshots(ticker TEXT, accession TEXT, filed_date TEXT,
+  fetched_at TEXT, payload_json TEXT, PRIMARY KEY(ticker, accession))""")
+db.execute("INSERT OR REPLACE INTO companies VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    (ticker, 'test_fixture', 'USD', 'units', accession, filed_date, workbook_hash,
+     built_at, 'ready', workbook_path, 'rev-fixture-1'))
+db.execute("INSERT OR REPLACE INTO snapshots VALUES(?,?,?,?,?)",
+    (ticker, accession, filed_date, built_at, '{"fixture": true}'))
+db.commit()
+db.close()
+open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest_json)
+`;
+
+  async function seedTypedFixtureLibrary(
+    modelsDir: string,
+    ticker: string,
+  ): Promise<{ workbookPath: string; hash: string; accession: string; filedDate: string }> {
+    const accession = '0000000000-00-000001';
+    const filedDate = '2026-01-15';
+    const workbookPath = join(modelsDir, 'companies', ticker, 'current.xlsx');
+    await mkdir(dirname(workbookPath), {recursive: true});
+    const created = spawnSync(pythonPath, ['-c', typedFixturePython, workbookPath], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (created.status !== 0) {
+      throw new Error(`Fixture workbook creation failed: ${sanitizedOutput(created.stderr || created.stdout || 'unknown error')}`);
+    }
+    const hash = createHash('sha256').update(await readFile(workbookPath)).digest('hex');
+    const builtAt = new Date().toISOString();
+    const manifestJson = `${JSON.stringify({
+      ticker,
+      route: 'test_fixture',
+      currency: 'USD',
+      unitScale: 'units',
+      accession,
+      filedDate,
+      workbookHash: hash,
+      builtAt,
+      readiness: 'ready',
+      revisionId: 'rev-fixture-1',
+      workbookFile: 'current.xlsx',
+      libraryVersion: 1,
+    }, null, 2)}\n`;
+    const seeded = spawnSync(
+      pythonPath,
+      ['-c', seedFixtureLibraryPython, modelsDir, ticker, workbookPath, hash, accession, filedDate, builtAt, manifestJson],
+      {cwd: projectRoot, encoding: 'utf8', timeout: 60_000},
+    );
+    if (seeded.status !== 0) {
+      throw new Error(`Fixture library seeding failed: ${sanitizedOutput(seeded.stderr || seeded.stdout || 'unknown error')}`);
+    }
+    return {workbookPath, hash, accession, filedDate};
+  }
+
+  function readProposalChanges(modelsDir: string, ticker: string): Array<Record<string, unknown>> {
+    const dumped = spawnSync(pythonPath, ['-c', readProposalPayloadPython, join(modelsDir, 'library.db'), ticker], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Proposal payload read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return (JSON.parse(String(dumped.stdout)) as { changes: Array<Record<string, unknown>> }).changes;
+  }
+
+  function readFixtureCells(workbookPath: string, cells: string[]): Record<string, { formula: unknown; cached: unknown }> {
+    const dumped = spawnSync(pythonPath, ['-c', readCellsPython, workbookPath, 'Data Review', JSON.stringify(cells)], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Fixture cell read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as Record<string, { formula: unknown; cached: unknown }>;
+  }
+
+  it.runIf(process.platform !== 'win32')('cli regression: workbook-open failures are reported, not claimed (issue #1)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-model-open-'));
+    const modelsDir = join(home, 'models');
+    try {
+      const {workbookPath} = await seedTypedFixtureLibrary(modelsDir, 'TST');
+
+      const missing = runLibraryCli(['model', 'open', 'NOPE', '--models-dir', modelsDir], home);
+      if (missing.error) throw missing.error;
+      expect(missing.status, sanitizedOutput(`${missing.stdout ?? ''}\n${missing.stderr ?? ''}`)).not.toBe(0);
+
+      // The opener exits nonzero: the CLI must fail, never print success.
+      const failed = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {DCF_OPEN_COMMAND: 'false'});
+      if (failed.error) throw failed.error;
+      const failedOutput = sanitizedOutput(`${failed.stdout ?? ''}\n${failed.stderr ?? ''}`);
+      expect(failed.status, failedOutput).not.toBe(0);
+      expect(failedOutput).not.toContain('Opened ');
+      expect(failedOutput).toMatch(/not confirmed open|Could not open/);
+
+      // The normal desktop path still reports success for a clean launch.
+      const opened = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {DCF_OPEN_COMMAND: 'true'});
+      if (opened.error) throw opened.error;
+      const openedOutput = sanitizedOutput(`${opened.stdout ?? ''}\n${opened.stderr ?? ''}`);
+      expect(opened.status, openedOutput).toBe(0);
+      expect(openedOutput).toContain(`Opened ${workbookPath}`);
+    } finally {
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 180_000);
+
+  it.runIf(process.platform === 'linux')('cli regression: headless Linux prints the workbook path instead of claiming success (issue #1)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-model-open-headless-'));
+    const modelsDir = join(home, 'models');
+    try {
+      const {workbookPath} = await seedTypedFixtureLibrary(modelsDir, 'TST');
+      const result = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {
+        DISPLAY: '',
+        WAYLAND_DISPLAY: '',
+      });
+      if (result.error) throw result.error;
+      const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+      expect(result.status, output).toBe(0);
+      expect(output).not.toContain('Opened ');
+      expect(output).toContain('No desktop session');
+      expect(output).toContain(workbookPath);
+    } finally {
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 180_000);
+
+  it('cli regression: proposal change values keep boolean/number/blank types (issue #3)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-proposal-types-'));
+    const modelsDir = join(home, 'models');
+    try {
+      const {accession, filedDate} = await seedTypedFixtureLibrary(modelsDir, 'TST');
+      const change = (cell: string, proposed: string): string =>
+        `Data Review|${cell}|${proposed}|type check|filed fact`;
+      const proposed = runLibraryCli([
+        'model', 'propose-update', 'TST',
+        '--summary', 'Typed value check',
+        '--change', change('B2', '1e3'),
+        '--change', change('B3', 'true'),
+        '--change', change('B4', 'FALSE'),
+        '--change', change('B5', '-2.5E-4'),
+        '--change', change('B6', '__BLANK__'),
+        '--change', change('B7', 'hello world'),
+        '--change', change('B8', '=B2*2'),
+        '--accession', accession,
+        '--filed', filedDate,
+        '--models-dir', modelsDir,
+      ], home);
+      if (proposed.error) throw proposed.error;
+      const proposedOutput = sanitizedOutput(`${proposed.stdout ?? ''}\n${proposed.stderr ?? ''}`);
+      expect(proposed.status, proposedOutput).toBe(0);
+      const proposalId = /Proposal (\S+) recorded as proposed/.exec(proposedOutput)?.[1];
+      expect(proposalId, proposedOutput).toBeTruthy();
+
+      const byCell = Object.fromEntries(readProposalChanges(modelsDir, 'TST').map((row) => [row['cell'], row]));
+      expect(byCell['B2']?.['proposedValue']).toBe(1000);
+      expect(byCell['B3']?.['proposedValue']).toBe(true);
+      expect(byCell['B4']?.['proposedValue']).toBe(false);
+      expect(byCell['B5']?.['proposedValue']).toBe(-2.5e-4);
+      expect(byCell['B6']?.['proposedValue']).toBeNull();
+      expect('proposedValue' in (byCell['B6'] ?? {})).toBe(true);
+      expect(byCell['B7']?.['proposedValue']).toBe('hello world');
+      expect(byCell['B8']?.['proposedFormula']).toBe('=B2*2');
+      expect('proposedValue' in (byCell['B8'] ?? {})).toBe(false);
+
+      const applied = runLibraryCli(
+        ['model', 'apply', proposalId!, '--approve', '--by', 'cli-regression', '--models-dir', modelsDir],
+        home,
+      );
+      if (applied.error) throw applied.error;
+      const appliedOutput = sanitizedOutput(`${applied.stdout ?? ''}\n${applied.stderr ?? ''}`);
+      expect(applied.status, appliedOutput).toBe(0);
+      expect(appliedOutput).toContain(`Applied proposal ${proposalId}`);
+
+      const workbookPath = join(modelsDir, 'companies', 'TST', 'current.xlsx');
+      const cells = readFixtureCells(workbookPath, ['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B10']);
+      expect(cells['B2']?.formula).toBe(1000);
+      expect(cells['B2']?.cached).toBe(1000);
+      // LibreOffice normalizes boolean literals to =TRUE()/=FALSE() formulas
+      // on save; the cached cell type stays boolean either way.
+      expect(['=TRUE()', true]).toContain(cells['B3']?.formula);
+      expect(cells['B3']?.cached).toBe(true);
+      expect(['=FALSE()', false]).toContain(cells['B4']?.formula);
+      expect(cells['B4']?.cached).toBe(false);
+      expect(cells['B5']?.formula).toBeCloseTo(-2.5e-4, 12);
+      expect(cells['B5']?.cached).toBeCloseTo(-2.5e-4, 12);
+      expect(cells['B6']?.formula).toBeNull();
+      expect(cells['B6']?.cached).toBeNull();
+      expect(cells['B7']?.formula).toBe('hello world');
+      expect(cells['B8']?.formula).toBe('=B2*2');
+      expect(cells['B10']?.formula).toBe('=B2*2');
+    } finally {
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 300_000);
+
+  it('cli regression: dcf mcp validates help and arguments before starting the server (issue #8)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-mcp-args-'));
+    try {
+      const help = runLibraryCli(['mcp', '--help'], home);
+      if (help.error) throw help.error;
+      const helpOutput = sanitizedOutput(`${help.stdout ?? ''}\n${help.stderr ?? ''}`);
+      expect(help.status, helpOutput).toBe(0);
+      expect(helpOutput).toContain('dcf mcp');
+
+      const bogus = runLibraryCli(['mcp', '--bogus-flag'], home);
+      if (bogus.error) throw bogus.error;
+      const bogusOutput = sanitizedOutput(`${bogus.stdout ?? ''}\n${bogus.stderr ?? ''}`);
+      expect(bogus.status, bogusOutput).not.toBe(0);
+      expect(bogusOutput).toMatch(/Unknown option|Usage/);
+
+      const extra = runLibraryCli(['mcp', 'extra-arg'], home);
+      if (extra.error) throw extra.error;
+      const extraOutput = sanitizedOutput(`${extra.stdout ?? ''}\n${extra.stderr ?? ''}`);
+      expect(extra.status, extraOutput).not.toBe(0);
+      expect(extraOutput).toMatch(/Unexpected|Usage/);
+    } finally {
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 300_000);
+
+  it.runIf(process.platform !== 'win32')('cli regression: dcf mcp with no arguments still starts the stdio server (issue #8)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-mcp-start-'));
+    let child: ReturnType<typeof spawn> | null = null;
+    try {
+      child = spawn(process.execPath, [resolve(projectRoot, 'bin/dcf.mjs'), 'mcp'], {
+        cwd: projectRoot,
+        env: {...process.env, HOME: home, DCF_CACHE_DB_PATH: join(home, 'financial_cache.sqlite')},
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 15_000));
+      // Still holding the terminal: no exit, no usage error.
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      if (child?.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+      }
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 120_000);
 });
