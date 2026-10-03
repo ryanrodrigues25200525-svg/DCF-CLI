@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { lstatSync, mkdirSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readlinkSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -13,9 +13,10 @@ import { findBackendPython, findSoffice } from '@/workbook/xlsx';
 const modelRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = resolve(modelRoot, '..');
 const installScript = resolve(projectRoot, 'scripts/install_cli.sh');
-const pathLine = 'export PATH="$HOME/.local/bin:$PATH"';
+const pathLine = 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac';
 const pathSeparator = process.platform === 'win32' ? ';' : ':';
 const windowsOnly = process.platform === 'win32';
+const zshBinary = ['/bin/zsh', '/usr/bin/zsh'].find((candidate) => existsSync(candidate));
 
 function assertEdgarIdentityConfigured(): void {
   if (!process.env.EDGAR_IDENTITY?.trim()) {
@@ -147,6 +148,32 @@ describe('live host platform integration', () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(windowsOnly || zshBinary === undefined)(
+    'prepends ~/.local/bin once when both zsh startup files are sourced',
+    async () => {
+      const home = await mkdtemp(join(tmpdir(), 'dcf-zsh-source-'));
+      try {
+        const install = spawnSync('bash', [installScript], {
+          encoding: 'utf8',
+          env: { ...process.env, HOME: home, SHELL: '/bin/zsh' },
+        });
+        expect(install.status, install.stderr).toBe(0);
+        const probe = spawnSync(
+          zshBinary as string,
+          ['-c', 'source "$HOME/.zprofile"; source "$HOME/.zshrc"; printf "%s" "$PATH"'],
+          // Minimal env keeps the probe inside the temporary HOME and out of user dotfiles.
+          { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: home, SHELL: '/bin/zsh' } },
+        );
+        expect(probe.status, probe.stderr).toBe(0);
+        const binDir = join(home, '.local', 'bin');
+        const matches = probe.stdout.split(':').filter((entry) => entry === binDir);
+        expect(matches, probe.stdout).toHaveLength(1);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.skipIf(windowsOnly)('refuses to replace an unrelated file in the install directory', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dcf-install-conflict-'));

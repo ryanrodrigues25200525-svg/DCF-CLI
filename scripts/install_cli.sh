@@ -3,7 +3,9 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+# Runtime-idempotent so login shells that source both .zprofile and .zshrc
+# (zsh) or .bash_profile and .bashrc (bash) never prepend the bin directory twice.
+PATH_LINE='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac'
 
 mkdir -p "$BIN_DIR"
 
