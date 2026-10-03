@@ -8,31 +8,34 @@ product change; it is separate from model-coverage limits listed in
 ## GitHub tracker snapshot
 
 Checked on **3 October 2026** with `gh issue list --state open` and
-`gh pr list --state open`: **16 open GitHub issues and 0 open pull requests**.
+`gh pr list --state open`: **16 open GitHub issues and 1 open draft pull
+request** ([#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17)).
 Issues #1–#8 are the earlier CLI/platform bugs; #9–#16 are the new
-review findings from the AI-reviewed model-history work. All sixteen have fixes
-implemented in the uncommitted working tree on the feature branch
-`feature/ai-reviewed-model-history`; none is committed, merged, or closed, and no
-PR is open, so `main` still carries the old behavior until the branch lands.
-Typecheck, the security scan, `git diff --check`, the targeted hung-LibreOffice
-and duplicate-candidate platform regressions, and the live AAPL filing-agent
-accession check pass in this tree. The full live suite remains unrun: LibreOffice
-is installed but its headless startup hangs, and the CLI live suite aborts at
-module import, so its tests did not run. Dated example workbooks, the examples
-whitelist, the complete diff review, and Windows-only behavior are still
-unverified. "Fixed" below means the code change is present in this tree, not that
-it has been fully live-verified, merged, or closed. This file remains the local
-summary; the GitHub tracker holds the work items. [Open
-the issue tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
+review findings from the AI-reviewed model-history work. All sixteen fixes are
+committed and pushed on the feature branch `feature/ai-reviewed-model-history`
+at commit `43ab374`; none is merged or closed, no issue has been closed, and the
+draft PR is not merged, so `main` still carries the old behavior until the branch
+lands. Typecheck, the security scan, `git diff --check`, the targeted
+hung-LibreOffice and duplicate-candidate platform regressions, and the live AAPL
+filing-agent accession check pass on the pushed branch. The full live suite is
+still blocked: LibreOffice is installed but its headless startup hangs, and the
+CLI live suite aborts at module import, so its tests did not run. Dated example
+workbooks, the examples whitelist, the complete diff review, and Windows-only
+behavior are still unverified. "Fixed" below means the code change is present on
+the pushed branch, not that it has been fully live-verified, merged, or closed.
+This file remains the local summary; the GitHub tracker holds the work items.
+[Open the issue tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Fixed in this update
 
-These fixes are present in the branch checkout on
-`feature/ai-reviewed-model-history`; the related public items are not closed.
-The targeted platform regressions, typecheck, security scan, and live AAPL
-filing-agent accession check pass, but the full live suite has not re-confirmed
-them for the current review (LibreOffice is installed but its headless startup
-hangs, and the CLI live suite aborts at module import).
+These fixes are committed and pushed on `feature/ai-reviewed-model-history`
+(commit `43ab374`, draft PR
+[#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17)); the related
+public items are not closed and the draft PR is not merged. The targeted platform
+regressions, typecheck, security scan, and live AAPL filing-agent accession check
+pass, but the full live suite has not re-confirmed them for the current review
+(LibreOffice is installed but its headless startup hangs, and the CLI live suite
+aborts at module import).
 
 | Issue | Status | Evidence |
 | --- | --- | --- |
@@ -42,14 +45,15 @@ hangs, and the CLI live suite aborts at module import).
 | Build/update could target the library's `current.xlsx` as its export when `--force` was used, and a missing stored workbook hash could skip the manual-edit conflict gate. | Fixed in `model/src/cli.ts` | Builds reject an export path that aliases `current.xlsx`; a live-built model test corrupts the stored hash and verifies refresh fails closed. |
 | The operating DCF fallback could substitute a market-cap-derived pseudo-value and then be marked valuation-supported despite having no forecast rows. | Fixed in `model/src/services/dcf/engine.ts` and `model/src/services/valuation/router.ts` | Fallback now returns no enterprise/equity/per-share value and is unsupported; a live CRM-source redaction check covers the route. |
 
-## Tracked issues #1–#8: fix in uncommitted working tree, still open on GitHub
+## Tracked issues #1–#8: fix committed and pushed, still open on GitHub
 
-Each row below has a code fix in the uncommitted working tree on
-`feature/ai-reviewed-model-history` with a CLI regression added. The targeted
-hung-LibreOffice and duplicate-candidate platform regressions pass, but the full
-live suite has not run and the CLI live suite aborts at module import, so per-case
-live verification is pending. The GitHub issue stays open until the branch is
-committed and merges; do not report it as closed or fully verified before then.
+Each row below has a code fix committed and pushed on
+`feature/ai-reviewed-model-history` (commit `43ab374`) with a CLI regression
+added. The targeted hung-LibreOffice and duplicate-candidate platform regressions
+pass, but the full live suite has not run and the CLI live suite aborts at module
+import, so per-case live verification is pending. The GitHub issue stays open
+until the draft PR (#17) merges; do not report it as closed or fully verified
+before then.
 
 | Priority | Area | Issue and fix on branch | Evidence | GitHub |
 | --- | --- | --- | --- | --- |
@@ -62,16 +66,16 @@ committed and merges; do not report it as closed or fully verified before then.
 | P3 | Minimal Linux LibreOffice discovery | POSIX discovery walks `PATH` directly instead of shelling out to `which`, so minimal systems still find LibreOffice. | `model/src/workbook/xlsx.ts` | [#7](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/7) |
 | P3 | MCP command help | `dcf mcp` now takes no arguments: exactly `--help`/`-h` prints usage, and any other extra argument is rejected before the stdio server starts, so a typo cannot hold the terminal. | `model/src/cli.ts` | [#8](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/8) |
 
-## Review findings #9–#16: fix in uncommitted working tree, still open on GitHub
+## Review findings #9–#16: fix committed and pushed, still open on GitHub
 
-Each row below is a new review finding with a fix in the uncommitted working
-tree on `feature/ai-reviewed-model-history`. The targeted platform regressions
-pass, but the full live suite has not run and the CLI live suite aborts at module
-import, so live verification is pending. The GitHub issue stays open until the
-branch is committed and merges; do not report any as closed or fully verified
-before then.
+Each row below is a new review finding with a fix committed and pushed on
+`feature/ai-reviewed-model-history` (commit `43ab374`, draft PR #17). The
+targeted platform regressions pass, but the full live suite has not run and the
+CLI live suite aborts at module import, so live verification is pending. The
+GitHub issue stays open until the draft PR merges; do not report any as closed or
+fully verified before then.
 
-| Priority | Area | Issue and fix in working tree | GitHub |
+| Priority | Area | Issue and fix on pushed branch | GitHub |
 | --- | --- | --- | --- |
 | P1 | Formula caches | Writing the final `AI Change Log` summary can clear cached formula results, so the last inspection may report no cached errors even though caches are missing. Recalculate after the final log write and validate that final workbook before preview returns or apply promotes it; keep the log text formula-safe. | [#9](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/9) |
 | P2 | Revision comparison | Every AI-reviewed revision adds an `AI Change Log` sheet; its narrative cells can overwhelm the real DCF changes. Exclude the reserved audit sheet from financial cell counts and sheet-added/removed deltas. | [#10](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/10) |
@@ -82,9 +86,9 @@ before then.
 | P2 | MCP errors | `proposal_apply` should distinguish approval-required, preview-required, stale-base, manual-edit, invalid-source, and engine-unavailable failures instead of collapsing them into `APPLY_FAILED`, with categories consistent between `proposal_preview` and `proposal_apply`. | [#15](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/15) |
 | P3 | Legacy libraries | A legacy library can have a `companies` table but no `revisions` table. Read-only MCP `revisions_list` should return an empty paged history without creating or migrating tables, rather than returning `LIBRARY_UNAVAILABLE`. | [#16](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/16) |
 
-No confirmed code bug is unfixed in the working tree. The sixteen GitHub issues
-above remain open until the branch is committed, merged, and the public tracker
-is updated.
+No confirmed code bug is unfixed on the pushed branch. The sixteen GitHub issues
+above remain open until the draft PR (#17) merges and the public tracker is
+updated; neither has happened.
 
 ## Product and workflow gaps
 
@@ -112,7 +116,7 @@ is updated.
   SEC identity, network access, current provider data, Python dependencies,
   and LibreOffice. It can be slow and may fail closed when provider data is
   stale or unavailable; that outcome is not proof of a formula defect. The
-  full live suite has not run for the current working-tree changes. LibreOffice
+  full live suite has not run for the pushed branch changes. LibreOffice
   is installed but headless startup hangs, and the CLI live suite aborts at
   module import, so live verification is pending; no complete live verification
   is claimed and no dated example workbooks are generated.

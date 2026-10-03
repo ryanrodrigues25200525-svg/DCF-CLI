@@ -39,7 +39,7 @@
 - [x] Run the focused live regressions and confirm each exposes the current behavior.
 - [x] Implement the smallest fixes without changing the normal successful command paths.
 - [x] Re-run the focused live cases and typecheck.
-- [ ] Link to GitHub Issues #1, #3, and #8 in the PR.
+- [x] Link to GitHub Issues #1, #3, and #8 in the PR (draft PR #17).
 
 ### Task 2: Fix platform discovery and cover metadata
 
@@ -50,7 +50,7 @@
 - [x] Implement Windows `python`/LibreOffice PATH candidates, POSIX PATH lookup without `which`, shell-appropriate login PATH setup, and an honest missing-industry cover label.
 - [x] Include the new live suite in `model/package.json`'s test command.
 - [x] Run available live checks; record Windows-only behavior that cannot be executed on this macOS host.
-- [ ] Link to GitHub Issues #2, #4, #5, #6, and #7 in the PR.
+- [x] Link to GitHub Issues #2, #4, #5, #6, and #7 in the PR (draft PR #17).
 
 ### Task 3: Persist filing context and compare revisions
 
@@ -85,15 +85,22 @@
 - [ ] Run the full live model suite, live filing-agent check, typecheck, security scan, and workbook recalculation/inspection on representative ready and input-required examples.
 - [ ] Verify formula counts, cached formula errors, source references, candidate/accepted hashes, and editable formula behavior.
 - [ ] Review the complete diff and `git diff --check`; report Windows/macOS-specific checks that could not be run locally.
-- [ ] Open one PR linked to Issues #1–#16; do not merge it automatically.
+- [x] Open one PR linked to Issues #1–#16; do not merge it automatically. Done as draft PR [#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) at commit `43ab374`; it is unmerged.
 
 ---
 
 ## Current status and blocker (3 October 2026)
 
-Work is in the uncommitted working tree on `feature/ai-reviewed-model-history`. Issues #1–#16 exist on GitHub, all sixteen fixes are implemented in this tree, and no PR is open. Checkboxes above mark only the code, docs, and test-authoring steps whose files exist; full live test/recalculation, dated examples/whitelist, complete diff review, and PR creation remain unchecked.
+Work is committed and pushed on `feature/ai-reviewed-model-history` at commit
+`43ab374`, and draft PR
+[#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) is open
+against `main`. Issues #1–#16 exist on GitHub; all sixteen fixes are on the
+pushed branch; none is merged or closed, and the draft PR is not merged.
+Checkboxes above mark only the code, docs, test-authoring, and PR-creation steps
+whose files exist; full live test/recalculation, dated examples/whitelist, and
+complete diff review remain unchecked.
 
-**Passing checks (verified in this tree):**
+**Passing checks (verified on the pushed branch):**
 
 - Typecheck.
 - Security scan.
@@ -107,6 +114,6 @@ Work is in the uncommitted working tree on `feature/ai-reviewed-model-history`. 
 - The CLI live suite aborts at module import, so its tests — including the Task 3 build/compare cases — did not run.
 - Dated AAPL/JPM/XOM/DUK example workbooks are not generated; no `examples/` directory or `examples/*.xlsx` whitelist exists.
 - Workbook recalculation/inspection on representative ready and input-required examples is not re-run.
-- Complete diff review and PR creation are not done; Windows-only behavior is unverified.
+- Complete diff review is not done and Windows-only behavior is unverified; the PR is still an unmerged draft.
 
 **Blocker:** LibreOffice is installed but headless startup hangs, which blocks the full live suite and candidate recalculation verification. This plan is not complete, and the models are not claimed to be perfect or investment-banking-grade.
