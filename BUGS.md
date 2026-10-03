@@ -7,11 +7,10 @@ product change; it is separate from model-coverage limits listed in
 
 ## GitHub tracker snapshot
 
-Checked on **3 October 2026** with `gh issue list --state all` and
-`gh pr list --state open`: **0 GitHub issues and 0 open pull requests**.
-The confirmed open bugs below are tracked in this file and do not yet have
-GitHub issue numbers. This is a repository bug register, not a claim that the
-GitHub issue tracker contains those entries. [Open the GitHub issue
+Checked on **3 October 2026** with `gh issue list --state open` and
+`gh pr list --state open`: **8 open GitHub issues and 0 open pull requests**.
+Each confirmed bug below has a matching GitHub issue. This file remains the
+local summary; the GitHub tracker holds the work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Fixed in this update
@@ -26,16 +25,16 @@ tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Confirmed open bugs
 
-| Priority | Area | Issue and impact | Workaround |
-| --- | --- | --- | --- |
-| P2 | Workbook opening | `dcf model open` can print “Opened” after the operating-system opener starts, even if the desktop session later rejects the file. This can report success on headless Linux. See `model/src/cli.ts`. | Open the workbook from the spreadsheet app or file manager and check that it actually appeared. |
-| P2 | Windows workbook support | The workbook helper falls back to `python3` on every platform. A Windows install with `python` but no `python3` shim can fail to inspect or apply workbook edits if the project venv is unavailable. See `model/src/workbook/xlsx.ts`. | Run `npm run install:all` so the project venv contains `openpyxl`. |
-| P2 | Proposal value types | CLI `--change` converts simple decimal literals to numbers, but `true`/`false` and scientific-notation values remain text; the CLI cannot clear a cell to blank. Numeric formulas can then receive the wrong cell type. See `coerceScalar()` in `model/src/cli.ts`. | Use simple decimal notation for numeric proposals; edit booleans or blanks directly in Excel. |
-| P2 | Cover metadata | The generic DCF cover falls back to “Technology” when both issuer industry and sector are missing, which can display a false classification. The same cover retains generic Deal Overview and empty author/contact fields. See `backend/app/services/excel_export/mappers/cover.py`. | Check the cover against the filed company profile; do not treat the cover label as classification evidence. |
-| P2 | Installation on bash/Linux | `npm run install:command` adds `~/.local/bin` to `~/.zprofile` only. A fresh bash/Linux terminal may not find `dcf` on `PATH`. See `scripts/install_cli.sh`. | Add `~/.local/bin` to the startup file used by the current shell. |
-| P3 | Windows LibreOffice discovery | `findSoffice()` checks `SOFFICE_PATH` and common install folders on Windows but does not search `PATH`. See `model/src/workbook/xlsx.ts`. | Set `SOFFICE_PATH` to the full `soffice.exe` path. |
-| P3 | Minimal Linux LibreOffice discovery | POSIX discovery shells out to `which`. Minimal systems without that utility may miss a valid LibreOffice install that is only on `PATH`. See `model/src/workbook/xlsx.ts`. | Set `SOFFICE_PATH` explicitly. |
-| P3 | MCP command help | `dcf mcp --help` and extra arguments are ignored; the server starts and holds the terminal instead of showing usage or rejecting the flags. See `model/src/cli.ts`. | Run `dcf --help` for CLI usage; invoke `dcf mcp` with no arguments. |
+| Priority | Area | Issue and impact | Workaround | GitHub |
+| --- | --- | --- | --- | --- |
+| P2 | Workbook opening | `dcf model open` can print “Opened” after the operating-system opener starts, even if the desktop session later rejects the file. This can report success on headless Linux. See `model/src/cli.ts`. | Open the workbook from the spreadsheet app or file manager and check that it actually appeared. | [#1](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/1) |
+| P2 | Windows workbook support | The workbook helper falls back to `python3` on every platform. A Windows install with `python` but no `python3` shim can fail to inspect or apply workbook edits if the project venv is unavailable. See `model/src/workbook/xlsx.ts`. | Run `npm run install:all` so the project venv contains `openpyxl`. | [#2](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/2) |
+| P2 | Proposal value types | CLI `--change` converts simple decimal literals to numbers, but `true`/`false` and scientific-notation values remain text; the CLI cannot clear a cell to blank. Numeric formulas can then receive the wrong cell type. See `coerceScalar()` in `model/src/cli.ts`. | Use simple decimal notation for numeric proposals; edit booleans or blanks directly in Excel. | [#3](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/3) |
+| P2 | Cover metadata | The generic DCF cover falls back to “Technology” when both issuer industry and sector are missing, which can display a false classification. The same cover retains generic Deal Overview and empty author/contact fields. See `backend/app/services/excel_export/mappers/cover.py`. | Check the cover against the filed company profile; do not treat the cover label as classification evidence. | [#4](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/4) |
+| P2 | Installation on bash/Linux | `npm run install:command` adds `~/.local/bin` to `~/.zprofile` only. A fresh bash/Linux terminal may not find `dcf` on `PATH`. See `scripts/install_cli.sh`. | Add `~/.local/bin` to the startup file used by the current shell. | [#5](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/5) |
+| P3 | Windows LibreOffice discovery | `findSoffice()` checks `SOFFICE_PATH` and common install folders on Windows but does not search `PATH`. See `model/src/workbook/xlsx.ts`. | Set `SOFFICE_PATH` to the full `soffice.exe` path. | [#6](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/6) |
+| P3 | Minimal Linux LibreOffice discovery | POSIX discovery shells out to `which`. Minimal systems without that utility may miss a valid LibreOffice install that is only on `PATH`. See `model/src/workbook/xlsx.ts`. | Set `SOFFICE_PATH` explicitly. | [#7](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/7) |
+| P3 | MCP command help | `dcf mcp --help` and extra arguments are ignored; the server starts and holds the terminal instead of showing usage or rejecting the flags. See `model/src/cli.ts`. | Run `dcf --help` for CLI usage; invoke `dcf mcp` with no arguments. | [#8](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/8) |
 
 ## Product and workflow gaps
 
