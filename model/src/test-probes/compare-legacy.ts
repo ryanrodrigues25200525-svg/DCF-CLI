@@ -46,7 +46,7 @@ async function attempt(fn: () => unknown): Promise<{ ok: boolean; message: strin
   const tablesIdx = cliArgs.indexOf('--tables');
   if (tablesIdx >= 0 && cliArgs[tablesIdx + 1]) {
     const dir = cliArgs[tablesIdx + 1] as string;
-    const db = new DatabaseSync(join(dir, 'library.db'), { readOnly: true });
+    const db = new DatabaseSync(join(dir, 'library.db'));
     try {
       out['tables'] = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: unknown }>)
         .map((r) => String(r.name)).sort();
@@ -84,7 +84,7 @@ async function attempt(fn: () => unknown): Promise<{ ok: boolean; message: strin
     setup.close();
   }
   const tablesBefore: string[] = (() => {
-    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const db = new DatabaseSync(dbPath);
     try {
       return (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: unknown }>)
         .map((r) => String(r.name)).sort();
@@ -103,7 +103,7 @@ async function attempt(fn: () => unknown): Promise<{ ok: boolean; message: strin
     lib.close();
   }
   const tablesAfter: string[] = (() => {
-    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const db = new DatabaseSync(dbPath);
     try {
       return (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: unknown }>)
         .map((r) => String(r.name)).sort();
