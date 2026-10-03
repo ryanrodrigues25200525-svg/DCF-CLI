@@ -18,7 +18,14 @@ def _map_cover_sheet(cover: Worksheet, payload: dict[str, Any], ticker: str, com
     author_name = ui_meta.get("author")
     author_email = ui_meta.get("authorEmail")
     _safe_set(cover, "C9", _display_company_label(company_name, ticker))
-    _safe_set_or_clear(cover, "C10", company.get("industry") or company.get("sector") or "Technology")
+    industry = company.get("industry")
+    sector = company.get("sector")
+    classification = industry if isinstance(industry, str) and industry.strip() else sector
+    _safe_set_or_clear(
+        cover,
+        "C10",
+        classification if isinstance(classification, str) and classification.strip() else "Not disclosed",
+    )
     _safe_set(cover, "B12", "Scenario")
     _safe_set(cover, "C12", 1)
     _safe_set(cover, "C20", datetime.now().date())

@@ -44,6 +44,35 @@ function isExecutableFile(p: string): boolean {
   }
 }
 
+/** Executable names to try for a base command, honoring PATHEXT on Windows. */
+function executableNames(base: string): string[] {
+  if (process.platform !== "win32") return [base];
+  const extensions = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+  return Array.from(new Set([base, ...extensions.map((ext) => `${base}${ext}`)]));
+}
+
+/**
+ * Resolve `base` on `PATH` without shelling out to `which`/`where`.
+ * Returns the first executable candidate, or null when PATH is unset or empty.
+ */
+function findExecutableOnPath(base: string): string | null {
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return null;
+  const separator = process.platform === "win32" ? ";" : ":";
+  for (const dir of pathEnv.split(separator)) {
+    if (!dir) continue;
+    for (const name of executableNames(base)) {
+      const candidate = path.join(dir, name);
+      if (existsSync(candidate) && isExecutableFile(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 function canImportOpenpyxl(python: string): boolean {
   try {
     const r = spawnSync(python, ["-c", "import openpyxl"], {
@@ -86,13 +115,18 @@ function findRepoVenvPython(): string | null {
 
 /**
  * backend/.venv/bin/python (or Scripts/python.exe on win32),
- * else python3 if openpyxl is importable, else null.
+ * else `python3` on POSIX or `python` on Windows when openpyxl is importable.
  */
 export function findBackendPython(): string | null {
   const venv = findRepoVenvPython();
   if (venv !== null && canImportOpenpyxl(venv)) return venv;
-  // venv binary exists but openpyxl missing -> still fall through to python3
-  if (canImportOpenpyxl("python3")) return "python3";
+  // venv binary exists but openpyxl missing -> fall through to a PATH interpreter.
+  const candidates = process.platform === "win32"
+    ? ["python", "python3", "py"]
+    : ["python3", "python"];
+  for (const candidate of candidates) {
+    if (canImportOpenpyxl(candidate)) return candidate;
+  }
   return null;
 }
 
@@ -108,36 +142,26 @@ function sofficeWorks(candidate: string): boolean {
   }
 }
 
-/** Uses `SOFFICE_PATH`, a POSIX `PATH` lookup, then common install paths. */
+/** Uses `SOFFICE_PATH`, a `PATH` lookup, then common install paths. */
 export function findSoffice(): string | null {
-  if (process.platform === 'win32') {
-    const candidates = [
-      process.env.SOFFICE_PATH ?? '',
-      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-    ].filter(Boolean);
-    for (const c of candidates) {
-      if (existsSync(c) && sofficeWorks(c)) return c;
-    }
-    return null;
-  }
   const candidates: string[] = [];
-  if (process.env.SOFFICE_PATH?.trim()) candidates.push(process.env.SOFFICE_PATH.trim());
-  try {
-    const r = spawnSync('which', ['soffice'], {encoding: 'utf8', timeout: 15_000});
-    if (r.status === 0 && typeof r.stdout === 'string') {
-      const p = r.stdout.trim().split('\n')[0]?.trim();
-      if (p) candidates.push(p);
-    }
-  } catch {
-    // ignore
+  const explicit = process.env.SOFFICE_PATH?.trim();
+  if (explicit) candidates.push(explicit);
+  const onPath = findExecutableOnPath("soffice");
+  if (onPath) candidates.push(onPath);
+  if (process.platform === "win32") {
+    candidates.push(
+      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+      "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",
+    );
+  } else {
+    candidates.push(
+      "/opt/homebrew/bin/soffice",
+      "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+      "/usr/bin/soffice",
+      "/usr/local/bin/soffice",
+    );
   }
-  candidates.push(
-    '/opt/homebrew/bin/soffice',
-    '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-    '/usr/bin/soffice',
-    '/usr/local/bin/soffice',
-  );
   for (const c of candidates) {
     if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c)) return c;
   }

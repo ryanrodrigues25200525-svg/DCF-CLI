@@ -29,15 +29,27 @@ for CLI_NAME in dcf dcfbuild; do
   fi
 done
 
-ZPROFILE="${HOME}/.zprofile"
-case ":${PATH:-}:" in
-  *":${BIN_DIR}:"*) ;;
-  *)
-    if ! { [[ -f "$ZPROFILE" ]] && grep -Fqx "$PATH_LINE" "$ZPROFILE"; }; then
-      printf '\n# DCF CLI\n%s\n' "$PATH_LINE" >> "$ZPROFILE"
+# Add ~/.local/bin to the login startup file for the user's shell.
+if [[ ":${PATH:-}:" != *":${BIN_DIR}:"* ]]; then
+  case "$(basename "${SHELL:-}")" in
+    zsh)
+      STARTUP_FILES=("${HOME}/.zprofile")
+      ;;
+    bash)
+      # Login shells read ~/.bash_profile; interactive non-login Linux terminals read ~/.bashrc.
+      STARTUP_FILES=("${HOME}/.bash_profile" "${HOME}/.bashrc")
+      ;;
+    *)
+      STARTUP_FILES=("${HOME}/.profile")
+      ;;
+  esac
+  for STARTUP_FILE in "${STARTUP_FILES[@]}"; do
+    if [[ -f "$STARTUP_FILE" ]] && grep -Fqx "$PATH_LINE" "$STARTUP_FILE"; then
+      continue
     fi
-    ;;
-esac
+    printf '\n# DCF CLI\n%s\n' "$PATH_LINE" >> "$STARTUP_FILE"
+  done
+fi
 
 printf 'Installed dcf and dcfbuild under %s\n' "$BIN_DIR"
 printf 'Open a new terminal window if the command is not on the current PATH.\n'

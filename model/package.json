@@ -11,7 +11,7 @@
     "dcf-mcp": "tsx --tsconfig tsconfig.json src/mcp/server.ts",
     "typecheck": "tsc --noEmit",
     "test:filing-agent": "tsx --tsconfig tsconfig.json scripts/check_filing_agent_accession.ts",
-    "test": "vitest run src/cli.live.test.ts"
+    "test": "vitest run src/platform.live.test.ts src/cli.live.test.ts"
   },
   "allowScripts": {
     "esbuild": true,
