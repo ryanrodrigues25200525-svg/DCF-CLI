@@ -87,6 +87,10 @@ def _map_wacc_inputs(wacc: Worksheet, payload: dict[str, Any]) -> None:
         wacc["D11"].comment = Comment(f"Market beta source: {beta_source}", "DCF Builder Pro")
     _safe_set(wacc, "D14", illiquidity_discount if illiquidity_discount is not None else 0.0)
     _safe_set(wacc, "D15", size_premium)
+    # Zero premiums must read as explicit 0.00%, never the template's "--"
+    # zero-section placeholder.
+    wacc["D14"].number_format = "#,##0.00%"
+    wacc["D15"].number_format = "#,##0.00%"
     _safe_set(wacc, "D19", cost_of_debt)
     _safe_set(wacc, "I7", "Debt ($B)")
 
@@ -144,7 +148,7 @@ def _apply_required_wacc_formulas(wacc: Worksheet, payload: dict[str, Any]) -> N
     _safe_set(wacc, "B38", "Bear Beta")
     _safe_set(wacc, "B39", "Bull Cost of Equity")
     _safe_set(wacc, "B40", "Bear Cost of Equity")
-    _force_set(wacc, "C40", "")
+    _force_set(wacc, "C40", None)
 
     if scenario_bull_beta is not None:
         _force_set(wacc, "D37", max(0.10, scenario_bull_beta))
@@ -164,6 +168,12 @@ def _apply_required_wacc_formulas(wacc: Worksheet, payload: dict[str, Any]) -> N
     _force_set(wacc, "D40", "=D9+D38*(D10)+D14+D15")
     _force_set(wacc, "D35", "=(D27*D39)+(D28*D21)")
     _force_set(wacc, "D36", "=(D27*D40)+(D28*D21)")
+    # The template leaves these value cells on General (raw 0.985 / 0.13834955
+    # display); betas read as 0.00 and costs of equity as percentages.
+    wacc["D37"].number_format = "0.00"
+    wacc["D38"].number_format = "0.00"
+    wacc["D39"].number_format = "0.00%"
+    wacc["D40"].number_format = "0.00%"
 
     # Harden peer beta table against partial/missing comp rows so D/E and
     # unlevered beta sections do not surface #DIV/0! in exported workbooks.

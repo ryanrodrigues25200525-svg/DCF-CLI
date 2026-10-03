@@ -199,6 +199,9 @@ def _map_data_review(workbook: Workbook, model: dict[str, Any]) -> None:
         for cell in sheet[row]:
             cell.font = _BODY_FONT
             cell.alignment = Alignment(vertical='top', wrap_text=cell.column >= 8)
+            if cell.column in (3, 4) and isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                if cell.value == 0 or abs(cell.value) >= 0.005:
+                    cell.number_format = '#,##0.00'
         source_lines = [math.ceil(len(str(sheet.cell(row=row, column=column).value or '')) / widths[column - 1]) for column in range(8, 12)]
         sheet.row_dimensions[row].height = max(15, min(60, 12 * max(source_lines or [1])))
     sheet.auto_filter.ref = sheet.dimensions

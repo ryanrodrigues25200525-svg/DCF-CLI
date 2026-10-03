@@ -373,6 +373,9 @@ def _map_data_review(workbook: Workbook, payload: dict[str, Any], model: dict[st
         for cell in sheet[row]:
             cell.font = _BODY_FONT
             cell.alignment = Alignment(vertical='top', wrap_text=cell.column >= 8)
+            if cell.column in (3, 4) and isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                if cell.value == 0 or abs(cell.value) >= 0.005:
+                    cell.number_format = '#,##0.00'
         wrapped_text = [str(sheet.cell(row=row, column=column).value or '') for column in range(8, 12)]
         line_count = max((math.ceil(len(value) / widths[column - 1]) for column, value in zip(range(8, 12), wrapped_text, strict=True)), default=1)
         sheet.row_dimensions[row].height = max(15, min(60, 12 * line_count))
