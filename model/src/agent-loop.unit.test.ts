@@ -91,6 +91,41 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(m['legacyTablesAfter'] ?? []).not.toContain('candidates');
   }, 180_000);
 
+  it('answers legacy libraries over MCP without migrating schemas', async () => {
+    const { mkdtemp: mkd } = await import('node:fs/promises');
+    const { tmpdir: tdir } = await import('node:os');
+    const legacyRoot = await mkd(join(tdir(), 'dcf-legacy-mcp-'));
+    try {
+      const setup = await probe('compare-legacy.ts', ['--keep', legacyRoot]);
+      expect(setup.status, setup.stderr).toBe(0);
+      const tablesBefore = await probe('compare-legacy.ts', ['--tables', legacyRoot]);
+      expect((tablesBefore.json as { tables: string[] }).tables).toEqual(['companies']);
+      const inspected = await probe('mcp-call.ts', [
+        '--tool', 'candidate_inspect', '--args', JSON.stringify({ ticker: 'LEG' }),
+        '--env', `DCF_MODELS_DIR=${legacyRoot}`,
+      ]);
+      expect(inspected.status, inspected.stderr).toBe(0);
+      const rawBody = inspected.json as { content?: Array<{ text?: string }> };
+      const body = (() => {
+        const text = rawBody?.content?.[0]?.text;
+        if (typeof text === 'string') {
+          try {
+            return JSON.parse(text) as { pendingCandidate?: null; ticker?: string };
+          } catch {
+            // Fall through to the raw body.
+          }
+        }
+        return rawBody as unknown as { pendingCandidate?: null; ticker?: string };
+      })();
+      expect(body.ticker).toBe('LEG');
+      expect(body.pendingCandidate ?? null).toBeNull();
+      const tablesAfter = await probe('compare-legacy.ts', ['--tables', legacyRoot]);
+      expect((tablesAfter.json as { tables: string[] }).tables).toEqual(['companies']);
+    } finally {
+      await rm(legacyRoot, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it('diffs two workbooks: sheets, formulas, values, identical', async () => {
     const r = await probe('compare-pair.ts', []);
     expect(r.status, r.stderr).toBe(0);

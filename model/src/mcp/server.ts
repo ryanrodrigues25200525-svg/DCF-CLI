@@ -712,6 +712,17 @@ async function toolCandidateInspect(args: Row): Promise<unknown> {
   const ticker = normTicker(args['ticker']);
   const modelsDir = await resolveModelsDir();
   if (!libraryDbPresent(modelsDir)) return { ticker, pendingCandidate: null };
+  // Legacy libraries predate the candidates table: answer from a read-only
+  // open without constructing (which would migrate base tables). The table
+  // existing means a writer already migrated; only then use the full view.
+  const ro = openDb(modelsDir, true);
+  try {
+    if (ro && !tableColumns(ro, 'candidates').includes('candidates')) {
+      return { ticker, pendingCandidate: null };
+    }
+  } finally {
+    try { ro?.close(); } catch { /* ignore */ }
+  }
   const { lib, mod } = await loadCandidateStack(modelsDir);
   try {
     return { ticker, pendingCandidate: await mod.getPendingCandidateView(lib, modelsDir, ticker) };
