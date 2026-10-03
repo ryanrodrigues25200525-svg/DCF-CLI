@@ -299,6 +299,9 @@ export interface CandidateView {
    *  null when engines are unavailable or inspection fails. This is the
    *  machine auto-review content: numbers, formulas, and formatting faults. */
   inspection: WorkbookInspection | null;
+  /** Latest detected filing from watch metadata (may be newer than the
+   *  mapped facts actually built into the candidate). */
+  watchLatest: { accession: string; updateReady: boolean } | null;
   accepted: {
     exists: boolean;
     hashMatchesBase: boolean;
@@ -350,6 +353,15 @@ async function toView(lib: ModelLibrary, root: string, ticker: string, candidate
   const checks = runStaticWorkbookChecks(currentWorkbookPath(root, ticker));
   const onDiskHash = checks.exists ? checks.sha256 : null;
   const inspection = await inspectCandidateWorkbook(workbookPath, workbookExists);
+  let watchLatest: CandidateView['watchLatest'] = null;
+  try {
+    const watch = lib.getWatch(ticker);
+    if (watch?.latest_accession) {
+      watchLatest = { accession: watch.latest_accession, updateReady: watch.update_ready === 1 };
+    }
+  } catch {
+    watchLatest = null;
+  }
   return {
     id: record.id,
     ticker,
@@ -360,6 +372,7 @@ async function toView(lib: ModelLibrary, root: string, ticker: string, candidate
     workbookExists,
     payload,
     inspection,
+    watchLatest,
     accepted: {
       exists: manifest != null,
       hashMatchesBase: payload.baseRevisionHash != null
@@ -380,6 +393,11 @@ export function formatCandidateMarkdown(view: CandidateView): string {
   lines.push(`- Route: ${p.route}  Readiness: ${p.readiness}  Hash: \`${view.workbookHash}\``);
   lines.push(`- Source: accession ${p.accession ?? '(none)'}${p.filedDate ? `, filed ${p.filedDate}` : ''}`);
   lines.push(`- Mapped period: ${p.mappedPeriod ?? 'unconfirmed — see the stored source snapshot'}`);
+  if (view.watchLatest && view.watchLatest.accession !== (p.accession ?? '')) {
+    lines.push(`- Latest detected filing: ${view.watchLatest.accession}${view.watchLatest.updateReady ? ' (update-ready)' : ''} — the model is not updated with that filing's period; the facts above are what was mapped.`);
+  } else if (view.watchLatest) {
+    lines.push(`- Latest detected filing matches the mapped facts (${view.watchLatest.accession}).`);
+  }
   lines.push(view.payload.baseRevisionHash
     ? `- Base: accepted revision \`${p.baseRevisionId ?? '(unknown)'}\` (${p.baseRevisionHash}); on-disk accepted copy ${view.accepted.hashMatchesBase ? 'matches' : 'DIFFERS — candidate is stale or the library was edited'}`
     : '- Base: none — initial build, no accepted revision exists yet');

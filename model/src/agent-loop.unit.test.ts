@@ -36,6 +36,11 @@ describe('agent autonomy loop (real services, no network)', () => {
       expect(view.inspection?.sheets).toContain('Model');
       expect(view.inspection?.formulaCount).toBeGreaterThan(0);
       expect(view.inspection?.cachedErrorCells).toEqual([]);
+      const withWatch = (r.json as { viewWithWatch: {
+        watchLatest?: { accession: string; updateReady: boolean } | null;
+      } }).viewWithWatch;
+      expect(withWatch.watchLatest?.accession).toBe('0000000000-26-000099');
+      expect(withWatch.watchLatest?.updateReady).toBe(true);
     } finally {
       const root = (r.json as { root?: string })?.root;
       if (root) await rm(root, { recursive: true, force: true });
@@ -65,6 +70,25 @@ describe('agent autonomy loop (real services, no network)', () => {
     const loud = await probe('hook-run.ts', ['--cmd', `/usr/bin/python3 -c "print('x' * 100000)"`]);
     expect(loud.status, loud.stderr).toBe(0);
     expect(((loud.json as { output: string }).output ?? '').length).toBeLessThanOrEqual(8192);
+  }, 180_000);
+
+  it('verifies revision archives and never migrates on legacy reads', async () => {
+    const r = await probe('compare-legacy.ts', []);
+    expect(r.status, r.stderr).toBe(0);
+    const m = r.json as {
+      tamperedArchive: { ok: boolean; message: string };
+      missingArchive: { ok: boolean; message: string };
+      legacyTablesAfter: string[];
+      legacyPending: null | string;
+      legacyPendingError: string | null;
+    };
+    expect(m['tamperedArchive']?.ok).toBe(false);
+    expect(m['tamperedArchive']?.message ?? '').toMatch(/does not match its recorded hash/);
+    expect(m['missingArchive']?.ok).toBe(false);
+    expect(m['missingArchive']?.message ?? '').toMatch(/missing/);
+    expect(m['legacyPending']).toBeNull();
+    expect(m['legacyPendingError']).toBeNull();
+    expect(m['legacyTablesAfter'] ?? []).not.toContain('candidates');
   }, 180_000);
 
   it('diffs two workbooks: sheets, formulas, values, identical', async () => {

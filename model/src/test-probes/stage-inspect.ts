@@ -28,7 +28,9 @@ wb.save(sys.argv[1])`, engPath], { encoding: 'utf8' });
     note: 'probe',
   });
   const view = await getPendingCandidateView(lib, root, ticker);
-  process.stdout.write(JSON.stringify({ root, candidateId: staged.candidateId, view }));
+  lib.setWatch(ticker, { last_check: new Date().toISOString(), latest_accession: '0000000000-26-000099', update_ready: true, last_error: null });
+  const viewWithWatch = await getPendingCandidateView(lib, root, ticker);
+  process.stdout.write(JSON.stringify({ root, candidateId: staged.candidateId, view, viewWithWatch }));
 } finally {
   lib.close();
 }
