@@ -47,8 +47,8 @@ Each company lives under `companies/<TICKER>/`:
 
 | Command | Effect (read-only unless noted) |
 | --- | --- |
-| `dcf build <ticker> [--output F] [--force]` | Builds via the shared TS engine, then recalculates and inspects the staged copy (sheets/formulas required, zero cached formula errors) before publishing. Saves `current.xlsx`, an immutable revision, the manifest, and a normalized snapshot. By default it also exports `YYYY-MM-DD_<TICKER>_DCF.xlsx` under `~/Downloads` (UTC build date; repeated exports get a numeric suffix); `--output` selects a different export path. Refuses on a diverged copy unless `--force`, which archives the diverged bytes first. |
-| `dcf model update <ticker> [--output F] [--force]` | Explicitly reruns the same validated build using the latest data mapped by that route; it creates a new library revision and dated export. It can also create the initial model if none exists. |
+| `dcf build <ticker> [--output F] [--force]` | Builds via the shared TS engine, then recalculates and inspects the staged copy (sheets/formulas required, zero cached formula errors) before staging a pending build candidate with route/readiness, source accession, mapped period, and base revision. Saves the normalized snapshot and, by default, exports `YYYY-MM-DD_<TICKER>_DCF.xlsx` under `~/Downloads` (UTC build date; repeated exports get a numeric suffix); `--output` selects a different export path. The accepted `current.xlsx`, manifest, and revisions stay unchanged until `model candidate-verify` + `model accept --approve`. Refuses on a diverged copy unless `--force`, which archives the diverged bytes first. |
+| `dcf model update <ticker> [--output F] [--force]` | Explicitly reruns the same validated build using the latest data mapped by that route; it stages a new pending candidate and dated export. It can also stage the initial candidate if none exists. Nothing is published before AI review + approval. |
 | `dcf model export <ticker> [--output F] [--force]` | Copies the accepted `current.xlsx` to a new dated export without fetching data or rebuilding. It refuses if the file hash differs from the accepted manifest. |
 | `dcf models list [--json]` | Lists library tickers with route/readiness |
 | `dcf model inspect <ticker> [--json]` | Manifest file + DB rows + hash verification |
@@ -57,6 +57,10 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf model propose-update <ticker> --change 'spec'` | Records a sourced proposal (status `proposed`); reads each targeted cell's current literal/formula into `priorValue`/`priorFormula` at creation and shows them in the preview; workbook untouched |
 | `dcf model apply <id> --approve [--by name]` | Applies an approved proposal (see below) |
 | `dcf model reject <id> [--reason text]` | Status-only rejection; workbook unchanged |
+| `dcf model candidate <ticker>` | Shows the pending build/update candidate: staged hash, route/readiness, source accession, mapped period, base revision, verification status |
+| `dcf model candidate-verify <id> --verification <text> --by <name>` | Records the AI review result (freshness, sources, formulas, summary; minimum 40 chars). Does not publish |
+| `dcf model accept <id> --approve [--by name]` | Promotes a verified pending candidate to the accepted revision. Requires recorded verification; stale bases and manual edits fail closed |
+| `dcf model candidate-reject <id> [--reason text]` | Status-only candidate rejection; the accepted library is never touched |
 | `dcf filings sync <ticker>` | Fetches unified model data + the SEC filings list (`GET /api/company/{ticker}/filings`, EdgarTools source); selects the latest identity-validated report filing (endpoint CIK and ticker must match the profile/request; accession prefixes are submitting-account CIKs and may belong to filing agents; Form 3/4/5/144 never model filings); stores snapshot, flags update-ready; never edits workbooks |
 | `dcf watch status` | Read-only table (enabled, update-ready, accession) |
 | `dcf watch check [ticker]` | One-shot refresh of one or all enabled tickers; snapshots only |

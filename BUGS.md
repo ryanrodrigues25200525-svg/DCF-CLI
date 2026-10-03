@@ -7,9 +7,13 @@ product change; it is separate from model-coverage limits listed in
 
 ## GitHub tracker snapshot
 
-Checked on **3 October 2026** with `gh issue list --state open` and
-`gh pr list --state open`: **8 open GitHub issues and 0 open pull requests**.
-Each confirmed bug below has a matching GitHub issue. This file remains the
+Checked on **4 October 2026** with `gh issue list --state open` and
+`gh pr list --state open`: **20 open GitHub issues and 2 open pull requests**
+(PR [#21](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/21) ready for review,
+PR [#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) draft).
+Issues #1–#8 are fixed on branch `fix/open-issues-1-8` (PR #21, live suite 82/82 green);
+issues #22 and #23 were filed during verification. Each confirmed bug below has
+a matching GitHub issue. This file remains the
 local summary; the GitHub tracker holds the work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 

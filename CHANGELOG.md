@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes recorded yet.
+### Added
+
+- Added a pending build-candidate gate: `dcf build` and `dcf model update` stage a validated candidate (route/readiness, source accession, mapped period, base revision) without publishing. `dcf model candidate`, `candidate-verify`, `accept --approve`, and `candidate-reject` record the AI review and promote only on explicit human approval; stale bases and manual edits fail closed. Mirrored as MCP tools `candidate_inspect/verify/accept/reject` with specific error codes.
+- Documented the full CLI surface (`config models-dir`, watch variants, `--json`) in README and OPERATIONS; the model-library guide remains the complete reference.
+
+### Fixed
+
+- `dcf model open` requires the opener's clean exit, reports headless Linux as path-only, and never claims an unconfirmed open (#1).
+- Python discovery tries `python`/`python3`/`py` on Windows and `python3`/`python` on POSIX (#2).
+- Proposal values type booleans, exponent numbers, and `__BLANK__` blanks; `=`-prefixed values are rejected in favor of explicit formula edits (#3, #11 partial).
+- Missing industry/sector renders as “Not disclosed”, never a guessed “Technology” (#4).
+- The installer writes an idempotent PATH line to the shell-appropriate startup files (#5).
+- LibreOffice discovery searches PATH on every platform without shelling out to `which`, with a bounded version probe (#6, #7).
+- `dcf mcp` handles `--help` and rejects extra arguments before the server starts (#8).
+- Flag-first input (`dcf build --models-dir <dir>`) reports command usage instead of a misleading ticker error (#22).
 
 ## [2.0.0] — 2026-10-03
 
