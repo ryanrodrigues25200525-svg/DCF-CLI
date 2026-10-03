@@ -1,6 +1,6 @@
 {
   "name": "dcf-cli",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Local sector-specific Excel model library with CLI and MCP review tools.",
   "engines": {

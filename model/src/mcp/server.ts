@@ -38,7 +38,7 @@ type RpcId = string | number | null | undefined;
 interface ToolDef { name: string; description: string; inputSchema: Row }
 type McpErr = { code: string; message: string };
 
-const SERVER_VERSION = '2.0.0';
+const SERVER_VERSION = '2.1.0';
 const PREVIEW_LIMIT = 4000;
 const DB_CANDIDATES = ['library.db', 'models.db', 'dcf-library.db', 'dcf.db', 'index.db'];
 const PROPOSALS_DDL = `CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT,
