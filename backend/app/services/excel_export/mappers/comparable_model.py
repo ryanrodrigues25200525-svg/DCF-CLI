@@ -261,8 +261,11 @@ def apply_incomplete_comparable_model(workbook: Workbook, payload: dict[str, Any
     if valuation_model not in {"ev_ebitda", "revenue_multiple"}:
         raise ValueError("Incomplete comparable workbook requires EV/EBITDA or EV/Revenue.")
     comparable = payload.get("comparableModel") if isinstance(payload.get("comparableModel"), dict) else {}
-    if comparable.get("method") != valuation_model or comparable.get("peerFallbackUsed") is not False:
-        raise ValueError("Incomplete comparable model requires a current non-fallback peer set.")
+    if comparable.get("method") != valuation_model:
+        raise ValueError("Incomplete comparable model requires a matching method.")
+    peer_fallback_mode = comparable.get("peerFallbackUsed") is True
+    if not peer_fallback_mode and comparable.get("peerFallbackUsed") is not False:
+        raise ValueError("Incomplete comparable workbook requires a current non-fallback peer set.")
     peer_source = str(comparable.get("peerSource") or "").strip()
     peer_fetched_at = _to_float(comparable.get("peerFetchedAtMs"))
     if (not peer_source or any(token in peer_source.lower() for token in ("default", "stale", "unavailable"))
@@ -328,6 +331,10 @@ def apply_incomplete_comparable_model(workbook: Workbook, payload: dict[str, Any
             if not math.isfinite(multiple) or multiple <= 0 or multiple >= 100:
                 continue
         seen.add(ticker)
+        if peer_fallback_mode and requirement is None:
+            # Fallback market data never enters the schedule unconfirmed: every
+            # usable fallback peer must carry an analyst confirmation requirement.
+            continue
         peer_rows.append({
             "ticker": ticker,
             "name": str(peer.get("company") or ticker),

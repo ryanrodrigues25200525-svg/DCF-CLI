@@ -666,6 +666,11 @@ function buildIncompleteInputRequirements(
         && currentSource(peerQuality.source, 'comparable-company data');
       const peerRecords = Array.isArray(data.peers) ? data.peers : [];
       const missingPeerInputs: WorkbookInputRequirement[] = [];
+      // Confirmations need a buildable bridge: without source-ready bridge
+      // facts the workbook mapper cannot stage a schedule at all, so peer
+      // confirmations would be unactionable rows on a dead shell.
+      const bridgeGaps = gaps.some((item) => item.key === 'multiple_source_ready_equity_bridge'
+        || item.key === 'multiple_live_price_and_filed_shares');
       if (currentPeerSet) {
         const seen = new Set<string>();
         for (const rawPeer of peerRecords) {
@@ -691,10 +696,49 @@ function buildIncompleteInputRequirements(
             sourceReferenceRequired: true,
           });
         }
+      } else if (!bridgeGaps) {
+        // Fallback peer universe: every usable peer needs analyst confirmation
+        // of its market data before it can enter the median. Peers without a
+        // usable EV/denominator (or the target itself) are skipped; with none
+        // usable the single qualified_peer_set requirement below applies, so a
+        // data-free universe still fails closed. Mirrors the workbook mapper's
+        // row-skipping rules so no requirement ever dangles without a row.
+        // Skipped entirely when bridge facts are missing: peer confirmations
+        // would be unactionable rows since the mapper cannot stage a schedule
+        // without the bridge.
+        const seenFallback = new Set<string>();
+        for (const rawPeer of peerRecords) {
+          const peer = asRecord(rawPeer);
+          const rawPeerTicker = peer.ticker ?? peer.symbol;
+          const peerTicker = typeof rawPeerTicker === 'string' ? rawPeerTicker.trim().toUpperCase() : '';
+          const ev = typeof (peer.enterprise_value ?? peer.enterpriseValue) === 'number'
+            ? Number(peer.enterprise_value ?? peer.enterpriseValue)
+            : null;
+          if (!peerTicker || peerTicker === data.profile.ticker?.toUpperCase() || seenFallback.has(peerTicker) || ev === null || ev <= 0) continue;
+          seenFallback.add(peerTicker);
+          if (comparablePeerMetric === 'ebitda') {
+            const revenue = typeof peer.revenue === 'number' ? Number(peer.revenue) : null;
+            if (revenue === null || !Number.isFinite(revenue) || revenue <= 0) continue;
+          } else {
+            const ebitda = typeof peer.ebitda === 'number' ? Number(peer.ebitda) : null;
+            if (ebitda === null || !Number.isFinite(ebitda) || ebitda <= 0) continue;
+          }
+          missingPeerInputs.push({
+            key: `peer_${comparablePeerMetric}:${peerTicker}`,
+            label: `${peerTicker} latest filed ${comparablePeerMetric.toUpperCase()} (confirm fallback peer data)`,
+            inputType: 'market_data',
+            sourceStatus: 'missing',
+            reason: `${gap.reason} Confirm ${peerTicker}'s enterprise value and ${comparablePeerMetric.toUpperCase()} with a source reference; unconfirmed peers stay out of the median.`,
+            ...(peerAsOf ? {asOfDate: peerAsOf} : {}),
+            unit: `${data.canonical_financials.currency || 'USD'} actual`,
+            minimumValue: 1,
+            sourceReferenceRequired: true,
+          });
+        }
       }
       if (missingPeerInputs.length > 0) {
         requirements.push(...missingPeerInputs);
-      } else {
+      } else if (currentPeerSet || !bridgeGaps) {
         requirements.push({
           key: 'qualified_peer_set',
           label: `Three current source-ready ${model === 'ev_ebitda' ? 'EV/EBITDA' : 'EV/Revenue'} peers`,
@@ -711,6 +755,12 @@ function buildIncompleteInputRequirements(
     if (['ev_ebitda', 'revenue_multiple'].includes(model)
       && ['three_current_source_ready_peers', 'ev_ebitda_route', 'revenue_multiple_route',
         'multiple_three_current_ev_ebitda_peers', 'multiple_three_current_ev_revenue_peers'].includes(gap.key)) continue;
+    // Multiple math uses peer multiples plus filed bridge facts only: operating
+    // model readiness keys (tax rate, working capital lines, driver history,
+    // filed operating lines) must never become analyst requirements for a
+    // comparable route. Bridge gaps still surface through multiple_* keys and
+    // the workbook mapper fails closed when bridge facts are truly absent.
+    if (comparablePeerMetric && !gap.key.startsWith('multiple_')) continue;
     if (model === 'bank_residual_income' && gap.key === 'minimum_cet1_ratio') {
       const latest = annual.at(-1);
       const latestRecord = asRecord(latest);
@@ -1547,18 +1597,38 @@ export function buildIncompleteExportPayload(
     : comparableMethod === 'revenue_multiple' ? historicals.revenue.at(-1) : undefined;
   const comparableRequiredInputs = requiredInputs.length > 0
     && requiredInputs.every((input) => input.key.startsWith('peer_ebitda:') || input.key.startsWith('peer_revenue:'));
+  // Fallback peer universe with usable, freshly fetched market data can still
+  // produce a confirmation schedule: every usable peer carries an analyst
+  // confirmation requirement (generated above), so nothing unconfirmed enters
+  // the median. A data-free universe (no confirmations) still fails closed.
+  const fallbackPeerRecordUsable = Boolean(
+    peerQuality
+    && ['live', 'cached'].includes(peerQuality.status)
+    && typeof peerQuality.source === 'string' && peerQuality.source.trim()
+    && !/\b(default|stale|unavailable)\b/i.test(peerQuality.source)
+    && typeof peerFetchedAtMs === 'number' && Number.isFinite(peerFetchedAtMs)
+    && peerFetchedAtMs > 0 && peerFetchedAtMs <= Date.now()
+    && Date.now() - peerFetchedAtMs <= 24 * 60 * 60 * 1000,
+  );
   const incompleteComparableModel: IncompleteComparableModelExportData | undefined = (
-    peerSetIsCurrent && comparableMethod && typeof comparableTarget === 'number'
+    comparableMethod && typeof comparableTarget === 'number'
     && Number.isFinite(comparableTarget) && comparableTarget > 0 && comparableRequiredInputs
+    && (peerSetIsCurrent || fallbackPeerRecordUsable)
   ) ? {
     method: comparableMethod,
     targetMetric: comparableTarget,
     peerStatus: peerQuality!.status as 'live' | 'cached',
     peerSource: peerQuality!.source,
-    peerFallbackUsed: false,
+    peerFallbackUsed: !peerSetIsCurrent,
     peerFetchedAtMs: peerFetchedAtMs!,
   } : undefined;
-  const currentPeers = peerSetIsCurrent ? normalizePeers(data.peers) : [];
+  // Fallback peers travel in comps only with analyst confirmation requirements
+  // (generated above); the workbook mapper skips every unconfirmed fallback
+  // peer, so a data-free universe still yields an empty peer schedule.
+  const fallbackPeerConfirmations = !peerSetIsCurrent && comparableMethod !== undefined
+    && requiredInputs.some((input) => input.key.startsWith(
+      `peer_${comparableMethod === 'ev_ebitda' ? 'ebitda' : 'revenue'}:`));
+  const currentPeers = peerSetIsCurrent || fallbackPeerConfirmations ? normalizePeers(data.peers) : [];
 
   return {
     buildStatus: 'input_required',

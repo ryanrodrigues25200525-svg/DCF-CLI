@@ -2255,15 +2255,23 @@ function parseIncompleteDcfExportPayload(payload: Record<string, unknown>): Inco
     const peerStatus = parseEnum(model.peerStatus, ['live', 'cached'] as const, 'export.comparableModel.peerStatus');
     const peerSource = requireString(model.peerSource, 'export.comparableModel.peerSource');
     if (/\b(default|stale|unavailable)\b/i.test(peerSource)) throw new TypeError('export.comparableModel.peerSource must be current');
-    if (model.peerFallbackUsed !== false) throw new TypeError('input-required comparables cannot use fallback peers');
+    const peerFallbackUsed = model.peerFallbackUsed === true;
+    if (model.peerFallbackUsed !== false && !peerFallbackUsed) throw new TypeError('export.comparableModel.peerFallbackUsed must be a boolean');
     const peerFetchedAtMs = requireFiniteNumber(model.peerFetchedAtMs, 'export.comparableModel.peerFetchedAtMs');
     if (!Number.isInteger(peerFetchedAtMs) || Date.now() - peerFetchedAtMs < 0 || Date.now() - peerFetchedAtMs > 24 * 60 * 60 * 1000) {
       throw new TypeError('export.comparableModel.peerFetchedAtMs must be within the last 24 hours');
     }
     if (comparableInputRequirements.length === 0) throw new TypeError('input-required comparables need a peer denominator input');
-    comparableModel = {method, targetMetric, peerStatus, peerSource, peerFallbackUsed: false, peerFetchedAtMs};
+    // Fallback peer market data never enters the median unconfirmed: the TS
+    // builder only generates peer_* confirmation requirements in fallback
+    // mode, and the workbook mapper blanks every unconfirmed fallback peer.
+    comparableModel = {method, targetMetric, peerStatus, peerSource, peerFallbackUsed, peerFetchedAtMs};
   } else if (isComparableRoute && comparableInputRequirements.length > 0) {
-    throw new TypeError('input-required comparable peer metrics need a current non-fallback peer set');
+    // Peer requirements exist but no comparable model was staged: only a
+    // missing current peer set explains that combination. Mixed gap sets
+    // (e.g. bridge facts missing alongside peer rows) still shell cleanly.
+    const onlyPeerGaps = requiredInputs.every((input) => input.key.startsWith('peer_'));
+    if (onlyPeerGaps) throw new TypeError('input-required comparable peer metrics need a current non-fallback peer set');
   }
 
   let comps: CompData[] | undefined;
