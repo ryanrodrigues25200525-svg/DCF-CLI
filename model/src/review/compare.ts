@@ -17,8 +17,8 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
   ModelLibrary,
-  companyDir,
   currentWorkbookPath,
+  findLibraryDb,
   normalizeTicker,
   revisionPath,
 } from '@/library/store';
@@ -149,9 +149,11 @@ function selectRevision(revisions: RevisionRecord[], selector: string, role: str
 
 /**
  * Resolve the compared pair. Defaults: --to is the accepted (manifest)
- * revision when known, else the newest; --from is that revision's parent by
- * hash when resolvable, else the next-older revision, else --to itself (a
- * single-revision library compares as an explicit no-change).
+ * revision when known, else the newest; --from is the latest strictly earlier
+ * revision whose workbook hash matches --to's parent hash (never --to
+ * itself, so identical-byte consecutive builds compare as two revisions),
+ * else the next-older revision, else --to itself (a single-revision library
+ * compares as an explicit no-change).
  */
 export function resolveRevisionPair(
   revisions: RevisionRecord[],
@@ -171,11 +173,23 @@ export function resolveRevisionPair(
   if (fromSelector) {
     from = selectRevision(revisions, fromSelector, 'from');
   } else if (to.parent_hash) {
-    from = revisions.find((r) => r.workbook_hash === to.parent_hash) ?? predecessorOf(ordered, to);
+    from = resolveParentByHash(ordered, to) ?? predecessorOf(ordered, to);
   } else {
     from = predecessorOf(ordered, to);
   }
   return {from, to};
+}
+
+/**
+ * Latest revision strictly earlier than `to` whose workbook hash matches
+ * `to`'s parent hash. Earlier-only so a revision whose parent hash equals
+ * its own hash (identical-byte consecutive builds) never resolves to itself.
+ */
+function resolveParentByHash(ordered: RevisionRecord[], to: RevisionRecord): RevisionRecord | null {
+  const index = ordered.findIndex((r) => r.id === to.id);
+  const earlier = index < 0 ? ordered : ordered.slice(0, index);
+  const matches = earlier.filter((r) => r.workbook_hash === to.parent_hash);
+  return matches.length > 0 ? matches[matches.length - 1]! : null;
 }
 
 function predecessorOf(ordered: RevisionRecord[], to: RevisionRecord): RevisionRecord {
@@ -233,10 +247,17 @@ export function freshnessNotes(ticker: string, rev: RevisionSummary): string[] {
       `latest detected filing ${form}${latest} (filed ${rev.latest.filedDate ?? 'unknown'}) was NOT mapped into this workbook` +
       (annualOnly ? ' — this is an annual-only model, not updated with the newer filing.' : '.'),
     );
+  } else if (fact && latest) {
+    const period = rev.fact.period ? ` (${rev.fact.period})` : '';
+    notes.push(
+      `${ticker} revision ${rev.id} maps facts from ${fact}${period} (filed ${rev.fact.filedDate ?? 'unknown'}); ` +
+      `this was also the latest detected filing at build time.`,
+    );
   } else if (fact) {
     const period = rev.fact.period ? ` (${rev.fact.period})` : '';
     notes.push(
-      `${ticker} revision ${rev.id} maps facts from ${fact}${period} (filed ${rev.fact.filedDate ?? 'unknown'}); no newer filing was detected at build time.`,
+      `${ticker} revision ${rev.id} maps facts from ${fact}${period} (filed ${rev.fact.filedDate ?? 'unknown'}); ` +
+      `freshness is unconfirmed — no latest-filing metadata was captured at build time, so a newer filing may exist.`,
     );
   } else {
     notes.push(
@@ -247,12 +268,19 @@ export function freshnessNotes(ticker: string, rev: RevisionSummary): string[] {
 }
 
 /**
- * Open the library for comparison. `readOnly: true` (the MCP path) opens the
- * existing SQLite file read-only with no directory creation and no schema
- * migration; the default CLI path keeps migrating opens for builds.
+ * Open the library for comparison. `readOnly: true` (the CLI compare and MCP
+ * paths) opens the existing SQLite file read-only with no directory creation
+ * and no schema migration; the default keeps migrating opens for builds.
  */
 function openLibraryFor(root: string, readOnly?: boolean): ModelLibrary {
   return readOnly ? ModelLibrary.openReadOnly(root) : new ModelLibrary(root);
+}
+
+/** Clean build-first error when no library database exists yet. Creates nothing. */
+function requireLibraryDb(root: string, ticker: string): void {
+  if (!findLibraryDb(root)) {
+    throw new Error(`No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`);
+  }
 }
 
 export interface CompareOptions {
@@ -273,6 +301,7 @@ export async function compareRevisions(
   opts?: CompareOptions,
 ): Promise<RevisionComparison> {
   const ticker = normalizeTicker(tickerRaw);
+  if (opts?.readOnly) requireLibraryDb(root, ticker);
   const lib = openLibraryFor(root, opts?.readOnly);
   try {
     const company = lib.getCompany(ticker);
@@ -356,10 +385,12 @@ export async function compareRevisions(
 
     const sourceChanged = Object.values(sourceDelta).some((d) => d.changed);
     const summary = sameRevision || (identicalBytes && !sourceChanged)
-      ? `No changes between ${from.id} and ${to.id}: same workbook bytes and same source context.`
+      ? `No changes between ${from.id} and ${to.id}: identical bytes and same source context.`
       : identicalBytes
-        ? `Workbook bytes unchanged between ${from.id} and ${to.id}; source/model context differs.`
-        : `${workbook.totalChanges} cell change(s) between ${from.id} and ${to.id}${sourceChanged ? ' plus source/model context changes' : ''}.`;
+        ? `Workbook cells unchanged between ${from.id} and ${to.id} (identical bytes)${sourceChanged ? '; source/model context differs' : ''}.`
+        : workbook.totalChanges === 0
+          ? `No formula/value cell changes between ${from.id} and ${to.id}: workbook bytes differ (file-level metadata only)${sourceChanged ? '; source/model context also differs' : ''}.`
+          : `${workbook.totalChanges} cell change(s) between ${from.id} and ${to.id}${sourceChanged ? ' plus source/model context changes' : ''}.`;
 
     return {ticker, from: fromSummary, to: toSummary, sameRevision, sourceDelta, freshness, workbook, summary};
   } finally {
@@ -378,6 +409,7 @@ export function listRevisionSummaries(
   const limit = opts?.limit ?? 20;
   if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be an integer >= 0.');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be an integer between 1 and 100.');
+  if (opts?.readOnly) requireLibraryDb(root, ticker);
   const lib = openLibraryFor(root, opts?.readOnly);
   try {
     const all = lib.listRevisions(ticker);
@@ -391,10 +423,6 @@ export function listRevisionSummaries(
   } finally {
     lib.close();
   }
-}
-
-export function companyDirFor(root: string, ticker: string): string {
-  return companyDir(root, ticker);
 }
 
 /** Human-readable compare report (mirrors the JSON payload). */
@@ -439,6 +467,10 @@ export function formatCompareMarkdown(c: RevisionComparison): string {
   lines.push('');
   if (c.workbook.identicalBytes) {
     lines.push('Workbook cells: no changes (identical bytes).');
+  } else if (c.workbook.totalChanges === 0) {
+    lines.push('Workbook cells: no formula/value changes (bytes differ only in file-level metadata).');
+    if (c.workbook.addedSheets.length > 0) lines.push(`  Added sheets: ${c.workbook.addedSheets.join(', ')}`);
+    if (c.workbook.removedSheets.length > 0) lines.push(`  Removed sheets: ${c.workbook.removedSheets.join(', ')}`);
   } else {
     lines.push(`Workbook cells: ${c.workbook.totalChanges} change(s)${c.workbook.truncated ? ' (truncated at collection cap)' : ''} showing ${c.workbook.changes.length} (offset ${c.workbook.offset}, limit ${c.workbook.limit}).`);
     if (c.workbook.addedSheets.length > 0) lines.push(`  Added sheets: ${c.workbook.addedSheets.join(', ')}`);

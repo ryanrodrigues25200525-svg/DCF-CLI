@@ -8750,6 +8750,8 @@ db.execute("INSERT INTO revisions VALUES(?,?,?,?,?,?,?)",
     ('rev-legacy-1', 'TST', 'hash-one', None, '2026-01-02T00:00:00Z', None, 'legacy row one'))
 db.execute("INSERT INTO revisions VALUES(?,?,?,?,?,?,?)",
     ('rev-legacy-2', 'TST', 'hash-two', 'hash-one', '2026-01-03T00:00:00Z', None, 'legacy row two'))
+db.execute("INSERT INTO revisions VALUES(?,?,?,?,?,?,?)",
+    ('rev-legacy-3', 'TST', 'hash-three', 'hash-one', '2026-01-04T00:00:00Z', None, 'legacy row three'))
 db.commit()
 db.close()
 import os
@@ -8757,11 +8759,18 @@ os.makedirs(root + '/companies/TST/revisions', exist_ok=True)
 first = Workbook()
 first.active.title = 'Sheet1'
 first['Sheet1']['A1'] = 1
+first.properties.creator = 'rev-one'
 first.save(root + '/companies/TST/revisions/rev-legacy-1.xlsx')
 second = Workbook()
 second.active.title = 'Sheet1'
 second['Sheet1']['A1'] = 2
+second.properties.creator = 'rev-two'
 second.save(root + '/companies/TST/revisions/rev-legacy-2.xlsx')
+third = Workbook()
+third.active.title = 'Sheet1'
+third['Sheet1']['A1'] = 1
+third.properties.creator = 'rev-three'
+third.save(root + '/companies/TST/revisions/rev-legacy-3.xlsx')
 `;
 
   interface McpTestClient {
@@ -8874,8 +8883,8 @@ second.save(root + '/companies/TST/revisions/rev-legacy-2.xlsx')
       const history = mcpResultText(await mcp.send('tools/call', {
         name: 'revisions_list', arguments: {ticker: 'TST', limit: 10},
       })) as {total: number; revisions: Array<{id: string; buildEvent: string | null; fact: {accession: string | null}; latest: {accession: string | null}; route: string | null}>};
-      expect(history.total).toBe(2);
-      expect(history.revisions.map((r) => r.id).sort()).toEqual(['rev-legacy-1', 'rev-legacy-2']);
+      expect(history.total).toBe(3);
+      expect(history.revisions.map((r) => r.id).sort()).toEqual(['rev-legacy-1', 'rev-legacy-2', 'rev-legacy-3']);
       // Older-schema rows map every missing metadata column to null.
       for (const row of history.revisions) {
         expect(row.buildEvent).toBeNull();
@@ -8893,7 +8902,47 @@ second.save(root + '/companies/TST/revisions/rev-legacy-2.xlsx')
       expect(compared.workbook.changes[0]).toMatchObject({sheet: 'Sheet1', cell: 'A1', kind: 'value'});
       expect(compared.freshness.join('\n')).toContain('predates filing-context tracking');
 
-      // Both read-only calls left the DB bytes, schema, and directory listing untouched.
+      // Same cells, different file bytes: zero formula/value changes with a
+      // distinct no-change message (not the identical-bytes wording).
+      const metaOnly = mcpResultText(await mcp.send('tools/call', {
+        name: 'model_compare', arguments: {ticker: 'TST', from: 'rev-legacy-1', to: 'rev-legacy-3', maxChanges: 10},
+      })) as {summary: string; workbook: {identicalBytes: boolean; totalChanges: number; changes: unknown[]}};
+      expect(metaOnly.workbook.identicalBytes).toBe(false);
+      expect(metaOnly.workbook.totalChanges).toBe(0);
+      expect(metaOnly.workbook.changes).toEqual([]);
+      expect(metaOnly.summary).toContain('No formula/value cell changes');
+
+      // Fractional paging is rejected, not floored.
+      const fractional = await mcp.send('tools/call', {
+        name: 'model_compare', arguments: {ticker: 'TST', from: 'rev-legacy-1', to: 'rev-legacy-2', offset: 1.5},
+      });
+      expect((fractional['error'] as {code: string} | undefined)?.code).toBe('INVALID_PAGING');
+
+      // The CLI compare path is read-only too: default pair plus the
+      // metadata-only pair render as text without migrating the old schema.
+      const cliDefault = runLibraryCli(['model', 'compare', 'TST', '--models-dir', modelsDir], home);
+      if (cliDefault.error) throw cliDefault.error;
+      const cliDefaultOutput = sanitizedOutput(`${cliDefault.stdout ?? ''}\n${cliDefault.stderr ?? ''}`);
+      expect(cliDefault.status, cliDefaultOutput).toBe(0);
+      expect(cliDefaultOutput).toContain('Compare TST: rev-legacy-1 -> rev-legacy-2');
+      expect(cliDefaultOutput).toContain('1 cell change(s)');
+      const cliMetaOnly = runLibraryCli(['model', 'compare', 'TST', '--from', 'rev-legacy-1', '--to', 'rev-legacy-3', '--models-dir', modelsDir], home);
+      if (cliMetaOnly.error) throw cliMetaOnly.error;
+      const cliMetaOnlyOutput = sanitizedOutput(`${cliMetaOnly.stdout ?? ''}\n${cliMetaOnly.stderr ?? ''}`);
+      expect(cliMetaOnly.status, cliMetaOnlyOutput).toBe(0);
+      expect(cliMetaOnlyOutput).toContain('no formula/value changes');
+
+      // A missing library fails with the build-first error and creates nothing.
+      const missingRoot = join(home, 'absent-models');
+      const missing = runLibraryCli(['model', 'compare', 'NOPE', '--models-dir', missingRoot], home);
+      if (missing.error) throw missing.error;
+      const missingOutput = sanitizedOutput(`${missing.stdout ?? ''}\n${missing.stderr ?? ''}`);
+      expect(missing.status, missingOutput).not.toBe(0);
+      expect(missingOutput).toContain('Build one first');
+      await expect(access(missingRoot)).rejects.toThrow();
+
+      // Every read-only call above left the DB bytes, schema, and directory
+      // listing untouched.
       expect(await shaFile()).toBe(bytesBefore);
       expect(await schemaOf()).toBe(schemaBefore);
       expect((await readdir(modelsDir)).sort()).toEqual(entriesBefore);
@@ -9097,6 +9146,172 @@ second.save(root + '/companies/TST/revisions/rev-legacy-2.xlsx')
           }
         }
       }
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 600_000);
+
+  // Live Task 3 review findings: identical-byte consecutive builds resolve
+  // the parent to a strictly earlier revision (never themselves), missing
+  // archives fail closed with restoration, and a downgraded copy of the real
+  // live AAPL library stays comparable read-only and migrates on write opens.
+
+  const downgradeCopyPython = String.raw`
+import shutil, sqlite3, sys
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copytree(src, dst)
+ver = tuple(int(p) for p in sqlite3.sqlite_version.split('.')[:2])
+if ver < (3, 35):
+    raise RuntimeError(f'sqlite {sqlite3.sqlite_version} cannot DROP COLUMN')
+db = sqlite3.connect(dst + '/library.db')
+cols = [r[1] for r in db.execute('PRAGMA table_info(revisions)')]
+for col in ('build_event', 'fact_accession', 'fact_filed_date', 'fact_period',
+            'latest_form', 'latest_accession', 'latest_filed_date', 'latest_report_date',
+            'route', 'readiness'):
+    if col in cols:
+        db.execute(f'ALTER TABLE revisions DROP COLUMN {col}')
+db.commit()
+db.close()
+print('downgraded')
+`;
+
+  const identicalRevisionPython = String.raw`
+import datetime, shutil, sqlite3, sys
+root, new_id = sys.argv[1], sys.argv[2]
+db = sqlite3.connect(root + '/library.db')
+cols = [d[0] for d in db.execute('SELECT * FROM revisions LIMIT 0').description]
+src = db.execute(
+    "SELECT * FROM revisions WHERE ticker='AAPL' ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
+vals = dict(zip(cols, src))
+src_id = vals['id']
+vals['id'] = new_id
+# Parent the new revision on the archived bytes, exactly like a fresh build
+# archiving the current workbook (parent_hash = previous workbook hash).
+vals['parent_hash'] = vals['workbook_hash']
+vals['created_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+names = ', '.join(vals.keys())
+db.execute(f"INSERT INTO revisions({names}) VALUES({', '.join('?' * len(vals))})", tuple(vals.values()))
+db.execute('UPDATE companies SET revision_id=? WHERE ticker=?', (new_id, 'AAPL'))
+db.commit()
+db.close()
+shutil.copyfile(
+    f'{root}/companies/AAPL/revisions/{src_id}.xlsx',
+    f'{root}/companies/AAPL/revisions/{new_id}.xlsx')
+print(f'{src_id} -> {new_id}')
+`;
+
+  const schemaColumnsPython = String.raw`
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+print(' '.join(sorted(r[1] for r in db.execute('PRAGMA table_info(revisions)'))))
+`;
+
+  it('resolves identical revisions, fails closed on missing archives, and migrates downgraded libraries (task 3 review)', async () => {
+    assertEdgarIdentityConfigured();
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-compare-review-'));
+    const modelsDir = join(home, 'models');
+    const runPython = (script: string, args: string[]): string => {
+      const result = spawnSync(pythonPath, ['-c', script, ...args], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        timeout: 120_000,
+      });
+      if (result.status !== 0) {
+        throw new Error(`Helper python failed: ${sanitizedOutput(result.stderr || result.stdout || 'unknown error')}`);
+      }
+      return String(result.stdout).trim();
+    };
+    const runJson = (args: string[]): { status: number | null; output: string; json: Record<string, unknown> } => {
+      const result = runLibraryCli(args, home);
+      if (result.error) throw result.error;
+      const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+      return {status: result.status, output, json: JSON.parse(String(result.stdout)) as Record<string, unknown>};
+    };
+    let mcp: McpTestClient | null = null;
+    let mcpDown: McpTestClient | null = null;
+    try {
+      const build = runLibraryCli(['build', 'AAPL', '--models-dir', modelsDir], home);
+      if (build.error) throw build.error;
+      expect(build.status, sanitizedOutput(`${build.stdout ?? ''}\n${build.stderr ?? ''}`)).toBe(0);
+      const update = runLibraryCli(['model', 'update', 'AAPL', '--models-dir', modelsDir], home);
+      if (update.error) throw update.error;
+      expect(update.status, sanitizedOutput(`${update.stdout ?? ''}\n${update.stderr ?? ''}`)).toBe(0);
+
+      const before = runJson(['model', 'inspect', 'AAPL', '--models-dir', modelsDir, '--json']).json as unknown as {
+        manifest: {revision_id: string};
+        revisions: Array<{id: string}>;
+      };
+      expect(before.revisions.length).toBeGreaterThanOrEqual(2);
+      const acceptedId = before.manifest.revision_id;
+      const oldestId = before.revisions[before.revisions.length - 1]!.id;
+
+      // Identical archived revision: same bytes, same hash/metadata as the
+      // accepted build, parented on it — what consecutive identical-byte
+      // builds produce. Default compare must resolve from != to.
+      const identicalId = `rev-identical-${Date.now().toString(36)}`;
+      runPython(identicalRevisionPython, [modelsDir, identicalId]);
+      const identical = runJson(['model', 'compare', 'AAPL', '--models-dir', modelsDir, '--json']).json as unknown as {
+        from: {id: string}; to: {id: string}; sameRevision: boolean;
+        summary: string;
+        workbook: {beforeHash: string; afterHash: string; identicalBytes: boolean; totalChanges: number};
+      };
+      expect(identical.to.id).toBe(identicalId);
+      expect(identical.from.id).toBe(acceptedId);
+      expect(identical.from.id).not.toBe(identical.to.id);
+      expect(identical.sameRevision).toBe(false);
+      expect(identical.workbook.identicalBytes).toBe(true);
+      expect(identical.workbook.beforeHash).toBe(identical.workbook.afterHash);
+      expect(identical.workbook.totalChanges).toBe(0);
+      expect(identical.summary).toContain('identical bytes');
+      const identicalText = runLibraryCli(['model', 'compare', 'AAPL', '--models-dir', modelsDir], home);
+      if (identicalText.error) throw identicalText.error;
+      expect(identicalText.status).toBe(0);
+      expect(sanitizedOutput(String(identicalText.stdout))).toContain('no changes (identical bytes)');
+
+      // Missing archive fails closed, then the backup is restored.
+      const oldestPath = join(modelsDir, 'companies', 'AAPL', 'revisions', `${oldestId}.xlsx`);
+      const oldestBytes = await readFile(oldestPath);
+      await rm(oldestPath);
+      const missing = runLibraryCli(['model', 'compare', 'AAPL', '--from', oldestId, '--to', identicalId, '--models-dir', modelsDir], home);
+      if (missing.error) throw missing.error;
+      const missingOutput = sanitizedOutput(`${missing.stdout ?? ''}\n${missing.stderr ?? ''}`);
+      expect(missing.status, missingOutput).not.toBe(0);
+      expect(missingOutput).toContain('missing');
+      await writeFile(oldestPath, oldestBytes);
+      await access(oldestPath);
+
+      // Downgraded copy of the real live library: old schema, real rows.
+      const downDir = join(home, 'downgraded');
+      runPython(downgradeCopyPython, [modelsDir, downDir]);
+      const downDb = join(downDir, 'library.db');
+      expect(runPython(schemaColumnsPython, [downDb])).not.toContain('build_event');
+      mcpDown = await spawnMcpTestClient(home, downDir);
+      const downHistory = mcpResultText(await mcpDown.send('tools/call', {
+        name: 'revisions_list', arguments: {ticker: 'AAPL', limit: 10},
+      })) as {total: number; revisions: Array<{id: string; buildEvent: string | null; fact: {accession: string | null}}>};
+      expect(downHistory.total).toBeGreaterThanOrEqual(3);
+      for (const row of downHistory.revisions) {
+        expect(row.buildEvent).toBeNull();
+        expect(row.fact.accession).toBeNull();
+      }
+      // Read-only compare works on the downgraded copy without migrating it.
+      const downCompared = runLibraryCli(['model', 'compare', 'AAPL', '--models-dir', downDir], home);
+      if (downCompared.error) throw downCompared.error;
+      expect(downCompared.status, sanitizedOutput(`${downCompared.stdout ?? ''}\n${downCompared.stderr ?? ''}`)).toBe(0);
+      expect(runPython(schemaColumnsPython, [downDb])).not.toContain('build_event');
+      // A write-path open migrates the downgraded copy; rows survive.
+      const downReview = runLibraryCli(['model', 'review', 'AAPL', '--models-dir', downDir], home);
+      if (downReview.error) throw downReview.error;
+      expect(downReview.status, sanitizedOutput(`${downReview.stdout ?? ''}\n${downReview.stderr ?? ''}`)).toBe(0);
+      expect(runPython(schemaColumnsPython, [downDb])).toContain('build_event');
+      const downInspected = runJson(['model', 'inspect', 'AAPL', '--models-dir', downDir, '--json']).json as unknown as {
+        hashMatchesManifest: boolean;
+        revisions: Array<{id: string}>;
+      };
+      expect(downInspected.hashMatchesManifest).toBe(true);
+      expect(downInspected.revisions.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      mcp?.close();
+      mcpDown?.close();
       await rm(home, {recursive: true, force: true});
     }
   }, 600_000);

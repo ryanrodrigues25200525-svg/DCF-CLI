@@ -594,9 +594,9 @@ export interface WorkbookDiff {
   afterSheets: string[];
   addedSheets: string[];
   removedSheets: string[];
-  /** Total cell changes across both workbooks (before paging). */
+  /** Every cell difference counted (the detail list below stays bounded). */
   totalChanges: number;
-  /** True when the change list was capped during collection. */
+  /** True when differences exceed the bounded detail list. */
   truncated: boolean;
   changes: WorkbookCellChange[];
   offset: number;
@@ -671,43 +671,45 @@ after_sheets, after_cells = snapshot(sys.argv[2])
 added_sheets = sorted(set(after_sheets) - set(before_sheets))
 removed_sheets = sorted(set(before_sheets) - set(after_sheets))
 
-changes = []
-truncated = False
+changes = 0
+listed = []
 for key in sorted(set(before_cells) | set(after_cells)):
     sheet, cell = key
+    change = None
     if key not in before_cells:
         formula, _, value = after_cells[key]
-        changes.append({'sheet': sheet, 'cell': cell, 'kind': 'added',
-                        'beforeFormula': None, 'afterFormula': formula,
-                        'beforeValue': None, 'afterValue': value})
+        change = {'sheet': sheet, 'cell': cell, 'kind': 'added',
+                  'beforeFormula': None, 'afterFormula': formula,
+                  'beforeValue': None, 'afterValue': value}
     elif key not in after_cells:
         formula, _, value = before_cells[key]
-        changes.append({'sheet': sheet, 'cell': cell, 'kind': 'removed',
-                        'beforeFormula': formula, 'afterFormula': None,
-                        'beforeValue': value, 'afterValue': None})
+        change = {'sheet': sheet, 'cell': cell, 'kind': 'removed',
+                  'beforeFormula': formula, 'afterFormula': None,
+                  'beforeValue': value, 'afterValue': None}
     else:
         before_formula, before_tag, before_value = before_cells[key]
         after_formula, after_tag, after_value = after_cells[key]
         if before_formula != after_formula:
-            changes.append({'sheet': sheet, 'cell': cell, 'kind': 'formula',
-                            'beforeFormula': before_formula, 'afterFormula': after_formula,
-                            'beforeValue': before_value, 'afterValue': after_value})
+            change = {'sheet': sheet, 'cell': cell, 'kind': 'formula',
+                      'beforeFormula': before_formula, 'afterFormula': after_formula,
+                      'beforeValue': before_value, 'afterValue': after_value}
         elif before_tag != after_tag:
-            changes.append({'sheet': sheet, 'cell': cell, 'kind': 'value',
-                            'beforeFormula': before_formula, 'afterFormula': after_formula,
-                            'beforeValue': before_value, 'afterValue': after_value})
-    if len(changes) >= HARD_CAP:
-        truncated = True
-        break
+            change = {'sheet': sheet, 'cell': cell, 'kind': 'value',
+                      'beforeFormula': before_formula, 'afterFormula': after_formula,
+                      'beforeValue': before_value, 'afterValue': after_value}
+    if change is not None:
+        changes += 1
+        if len(listed) < HARD_CAP:
+            listed.append(change)
 
 print(json.dumps({
     'beforeSheets': before_sheets,
     'afterSheets': after_sheets,
     'addedSheets': added_sheets,
     'removedSheets': removed_sheets,
-    'totalChanges': len(changes),
-    'truncated': truncated,
-    'changes': changes,
+    'totalChanges': changes,
+    'truncated': changes > len(listed),
+    'changes': listed,
 }))
 `;
 
@@ -728,8 +730,11 @@ function isDiffChange(o: unknown): o is WorkbookCellChange {
  * Deterministic, read-only cell comparison of two workbook files. Compares
  * live formulas plus cached values (so recalculation-only shifts appear as
  * value changes); blank cells are skipped. Never modifies either file.
- * Output is bounded: collection caps at WORKBOOK_DIFF_HARD_CAP and callers
- * page with offset/limit (clamped to WORKBOOK_DIFF_MAX_LIMIT).
+ * Counts every difference for totalChanges while the detail list stays
+ * bounded: the first WORKBOOK_DIFF_HARD_CAP changes are returned (truncated
+ * flags the cap) and callers page with offset/limit (clamped to
+ * WORKBOOK_DIFF_MAX_LIMIT). Fractional offsets/limits are rejected, not
+ * floored.
  */
 export async function diffWorkbookCells(
   python: string,
@@ -737,10 +742,12 @@ export async function diffWorkbookCells(
   afterPath: string,
   opts?: { offset?: number; limit?: number },
 ): Promise<WorkbookDiff> {
-  const offset = opts?.offset === undefined ? 0 : Math.floor(opts.offset);
-  const limit = opts?.limit === undefined ? WORKBOOK_DIFF_DEFAULT_LIMIT : Math.floor(opts.limit);
-  if (!Number.isInteger(offset) || offset < 0) throw new Error('diff offset must be an integer >= 0.');
-  if (!Number.isInteger(limit) || limit < 1 || limit > WORKBOOK_DIFF_MAX_LIMIT) {
+  const offset = opts?.offset ?? 0;
+  const limit = opts?.limit ?? WORKBOOK_DIFF_DEFAULT_LIMIT;
+  if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
+    throw new Error('diff offset must be an integer >= 0.');
+  }
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > WORKBOOK_DIFF_MAX_LIMIT) {
     throw new Error(`diff limit must be an integer between 1 and ${WORKBOOK_DIFF_MAX_LIMIT}.`);
   }
   let stdout: string;

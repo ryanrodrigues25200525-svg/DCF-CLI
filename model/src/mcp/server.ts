@@ -624,16 +624,9 @@ async function toolProposalReject(args: Row): Promise<unknown> {
 
 /* ---------- revision history + comparison (read-only; same data as CLI) ---------- */
 
-function libraryDbPath(modelsDir: string): string | null {
-  for (const name of DB_CANDIDATES) {
-    const p = join(modelsDir, name);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
 function pagingInt(value: unknown, name: string, min: number, max: number, fallback: number): number {
   if (value === undefined) return fallback;
+  if (typeof value === 'boolean') throw err('INVALID_PAGING', `${name} must be an integer between ${min} and ${max}`);
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(n) || n < min || n > max) {
     throw err('INVALID_PAGING', `${name} must be an integer between ${min} and ${max}`);
@@ -641,17 +634,30 @@ function pagingInt(value: unknown, name: string, min: number, max: number, fallb
   return n;
 }
 
+interface CompareModule {
+  listRevisionSummaries(r: string, t: string, o: { offset: number; limit: number; readOnly: boolean }): unknown;
+  compareRevisions(r: string, t: string, o: { from?: string; to?: string; offset: number; limit: number; readOnly: boolean }): Promise<unknown>;
+}
+
+async function loadCompareModule(): Promise<CompareModule> {
+  return (await import('../review/compare.js')) as CompareModule;
+}
+
+async function libraryDbFound(modelsDir: string): Promise<boolean> {
+  const store = (await import('../library/store.js')) as { findLibraryDb(root: string): string | null };
+  return store.findLibraryDb(modelsDir) !== null;
+}
+
 async function toolRevisionsList(args: Row): Promise<unknown> {
   const ticker = normTicker(args['ticker']);
   const modelsDir = await resolveModelsDir();
-  // Read-only guard: never create a library database for a lookup.
-  if (!libraryDbPath(modelsDir)) return {ticker, total: 0, offset: 0, limit: 20, revisions: []};
+  // Read-only guard aligned with the shared open path: never create a
+  // library database for a lookup.
+  const mod = await loadCompareModule();
+  if (!(await libraryDbFound(modelsDir))) return {ticker, total: 0, offset: 0, limit: 20, revisions: []};
   const offset = pagingInt(args['offset'], 'offset', 0, 1000000, 0);
   const limit = pagingInt(args['limit'], 'limit', 1, 100, 20);
   try {
-    const mod = await import('../review/compare.js') as {
-      listRevisionSummaries(r: string, t: string, o: { offset: number; limit: number; readOnly: boolean }): unknown;
-    };
     // True read-only: no directory creation, no schema migration.
     return mod.listRevisionSummaries(modelsDir, ticker, {offset, limit, readOnly: true});
   } catch (e) {
@@ -663,15 +669,13 @@ async function toolRevisionsList(args: Row): Promise<unknown> {
 async function toolModelCompare(args: Row): Promise<unknown> {
   const ticker = normTicker(args['ticker']);
   const modelsDir = await resolveModelsDir();
-  if (!libraryDbPath(modelsDir)) throw err('MODEL_NOT_FOUND', `No model found for ticker ${ticker}`);
+  const mod = await loadCompareModule();
+  if (!(await libraryDbFound(modelsDir))) throw err('MODEL_NOT_FOUND', `No model found for ticker ${ticker}`);
   const from = typeof args['from'] === 'string' && args['from'].trim() ? args['from'].trim() : undefined;
   const to = typeof args['to'] === 'string' && args['to'].trim() ? args['to'].trim() : undefined;
   const offset = pagingInt(args['offset'], 'offset', 0, 1000000, 0);
   const maxChanges = pagingInt(args['maxChanges'], 'maxChanges', 1, 500, 100);
   try {
-    const mod = await import('../review/compare.js') as {
-      compareRevisions(r: string, t: string, o: { from?: string; to?: string; offset: number; limit: number; readOnly: boolean }): Promise<unknown>;
-    };
     // True read-only: no directory creation, no schema migration.
     return await mod.compareRevisions(modelsDir, ticker, {from, to, offset, limit: maxChanges, readOnly: true});
   } catch (e) {

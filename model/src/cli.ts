@@ -733,7 +733,9 @@ async function cmdModelCompare(tickerRaw: string | undefined, flags: GlobalFlags
   const ticker = normalizeLibraryTicker(tickerRaw);
   const root = libraryRoot(flags.modelsDir);
   const {compareRevisions, formatCompareMarkdown} = await import('@/review/compare');
-  const compared = await compareRevisions(root, ticker, {from: flags.from, to: flags.to});
+  // Genuinely read-only: no library creation, no migration; a missing
+  // library fails with the build-first error from the compare service.
+  const compared = await compareRevisions(root, ticker, {from: flags.from, to: flags.to, readOnly: true});
   if (flags.json) {
     console.log(JSON.stringify(compared, null, 2));
     return;

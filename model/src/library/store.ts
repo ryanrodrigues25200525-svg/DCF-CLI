@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -56,6 +56,18 @@ CREATE TABLE IF NOT EXISTS snapshots(ticker TEXT, accession TEXT, filed_date TEX
 CREATE TABLE IF NOT EXISTS watch(ticker TEXT PRIMARY KEY, enabled INTEGER, last_check TEXT, latest_accession TEXT, update_ready INTEGER, last_error TEXT);
 `;
 
+/** SQLite files the read-only open path accepts, in lookup order. */
+export const LIBRARY_DB_CANDIDATES = ['library.db', 'models.db', 'dcf-library.db', 'dcf.db', 'index.db'];
+
+/** First existing library database under root, or null when no library exists. Creates nothing. */
+export function findLibraryDb(root: string): string | null {
+  for (const name of LIBRARY_DB_CANDIDATES) {
+    const candidate = join(root, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** Task 3 revision filing/event columns. All nullable so pre-Task-3 rows stay readable. */
 const REVISION_EXTRA_COLUMNS: Array<{ name: string; ddl: string }> = [
   {name: 'build_event', ddl: 'TEXT'},
@@ -74,16 +86,12 @@ const REVISION_EXTRA_COLUMNS: Array<{ name: string; ddl: string }> = [
  * Idempotent schema migration for existing SQLite libraries: CREATEs cover
  * fresh databases, and each missing Task 3 column is added only when absent
  * (checked via pragma_table_info, not version flags). Never alters data.
+ * Migration failures propagate to the caller instead of being swallowed.
  */
 export function migrateLibrarySchema(db: { exec(sql: string): void; prepare(sql: string): { all(...p: unknown[]): Array<Record<string, unknown>> } }): void {
   db.exec(SCHEMA);
-  let existing = new Set<string>();
-  try {
-    const rows = db.prepare('SELECT name FROM pragma_table_info(?)').all('revisions');
-    existing = new Set(rows.map((r) => String(r['name'])));
-  } catch {
-    return; // revisions table unusable; leave untouched
-  }
+  const rows = db.prepare('SELECT name FROM pragma_table_info(?)').all('revisions');
+  const existing = new Set(rows.map((r) => String(r['name'])));
   for (const col of REVISION_EXTRA_COLUMNS) {
     if (!existing.has(col.name)) {
       db.exec(`ALTER TABLE revisions ADD COLUMN ${col.name} ${col.ddl}`);
@@ -181,10 +189,15 @@ export class ModelLibrary {
     this.root = root;
     if (opts?.readOnly) {
       // True read-only open: no directory creation, no schema migration, and
-      // the SQLite file itself is opened read-only. Throws when the database
-      // file is absent (nothing is ever created). Missing Task 3 columns on
-      // older schemas map to null via strOrNull(undefined).
-      this.db = new DatabaseSync(join(root, 'library.db'), {readOnly: true});
+      // the SQLite file itself is opened read-only. Resolves the same
+      // candidate files as the MCP lookup. Throws when no library database
+      // exists (nothing is ever created). Missing Task 3 columns on older
+      // schemas map to null via strOrNull(undefined).
+      const found = findLibraryDb(root);
+      if (!found) {
+        throw new Error(`No model library found under ${root}. Build one first with \`dcf build <ticker>\`.`);
+      }
+      this.db = new DatabaseSync(found, {readOnly: true});
       return;
     }
     mkdirSync(root, { recursive: true });
