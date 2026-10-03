@@ -523,7 +523,7 @@ export interface IncompleteComparableModelExportData {
     targetMetric: number;
     peerStatus: 'live' | 'cached';
     peerSource: string;
-    peerFallbackUsed: false;
+    peerFallbackUsed: boolean;
     peerFetchedAtMs: number;
 }
 

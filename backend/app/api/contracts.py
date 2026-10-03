@@ -1650,8 +1650,8 @@ class IncompleteComparableModelExportData(ExportWireModel):
 
     @model_validator(mode="after")
     def validate_current_peer_source(self) -> IncompleteComparableModelExportData:
-        if self.peer_fallback_used or any(token in self.peer_source.lower() for token in ("default", "stale", "unavailable")):
-            raise ValueError("incomplete comparable exports require current non-fallback peer data")
+        if any(token in self.peer_source.lower() for token in ("default", "stale", "unavailable")):
+            raise ValueError("incomplete comparable exports require a current peer source")
         age_ms = int(time.time() * 1000) - self.peer_fetched_at_ms
         if age_ms < 0 or age_ms > 24 * 60 * 60 * 1000:
             raise ValueError("comparable peer data must be no more than 24 hours old")
@@ -2166,17 +2166,36 @@ class DcfExportRequest(ExportWireModel):
                     if self.comparable_model is None or self.comparable_model.method != self.valuation_model:
                         raise ValueError("incomplete comparable exports need a matching current peer-source record")
                     if self.comparable_model.peer_fallback_used:
-                        raise ValueError("incomplete comparable exports cannot contain fallback peer data")
-                    peers = self.comps or []
-                    peer_tickers = {
-                        str(peer.get("ticker") or "").strip().upper()
-                        for peer in peers
-                        if isinstance(peer, dict) and str(peer.get("ticker") or "").strip()
-                        and _positive_number(peer.get("ev"))
-                    }
-                    missing_peer_tickers = {item.key.split(":", 1)[1].upper() for item in peer_denominator_inputs}
-                    if len(peer_tickers | missing_peer_tickers) < 3:
-                        raise ValueError("incomplete comparable workbook requires at least three peer rows including the missing denominator")
+                        # Fallback market data never enters the median unconfirmed:
+                        # every peer with a positive EV needs a confirmation input.
+                        confirmed = {item.key.split(":", 1)[1].upper() for item in peer_denominator_inputs if ":" in item.key}
+                        peers = self.comps or []
+                        peer_tickers = {
+                            str(peer.get("ticker") or "").strip().upper()
+                            for peer in peers
+                            if isinstance(peer, dict) and str(peer.get("ticker") or "").strip()
+                            and _positive_number(peer.get("ev"))
+                        }
+                        missing_peer_tickers = {item.key.split(":", 1)[1].upper() for item in peer_denominator_inputs}
+                        if len(peer_tickers | missing_peer_tickers) < 3:
+                            raise ValueError("incomplete comparable workbook requires at least three peer rows including the missing denominator")
+                        unconfirmed = {ticker for ticker in peer_tickers if ticker not in confirmed}
+                        if unconfirmed:
+                            raise ValueError(
+                                "incomplete comparable exports on fallback peers need confirmation inputs for "
+                                + ", ".join(sorted(unconfirmed))
+                            )
+                    else:
+                        peers = self.comps or []
+                        peer_tickers = {
+                            str(peer.get("ticker") or "").strip().upper()
+                            for peer in peers
+                            if isinstance(peer, dict) and str(peer.get("ticker") or "").strip()
+                            and _positive_number(peer.get("ev"))
+                        }
+                        missing_peer_tickers = {item.key.split(":", 1)[1].upper() for item in peer_denominator_inputs}
+                        if len(peer_tickers | missing_peer_tickers) < 3:
+                            raise ValueError("incomplete comparable workbook requires at least three peer rows including the missing denominator")
                 elif self.comparable_model is not None:
                     raise ValueError("incomplete comparable source metadata requires peer denominator inputs")
             elif self.comparable_model is not None:

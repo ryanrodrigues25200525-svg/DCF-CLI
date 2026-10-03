@@ -3041,7 +3041,7 @@ describe('live dcfbuild company-model checks', () => {
     }
   }, 300_000);
 
-  it('returns an incomplete retailer shell when only the fallback peer universe is available', async () => {
+  it('returns a bridge-blocked shell when fallback peers exist but bridge facts are missing', async () => {
     assertEdgarIdentityConfigured();
     const home = await mkdtemp(join(tmpdir(), 'dcfbuild-live-peer-fallback-block-'));
     const backend = new LocalBackendProcess({
@@ -3066,11 +3066,49 @@ describe('live dcfbuild company-model checks', () => {
       expect(payload.model_eligibility.allowed_models).toEqual([payload.model_eligibility.preferred_model]);
 
       const result = await runValuationJob('TGT', client);
-      expect(result.status).toBe('input_required');
-      expect(result.results).toBeNull();
+      expect(result.status, 'TGT bridge gap shells cleanly').toBe('input_required');
+      expect(result.results, 'TGT skips valuation').toBeNull();
+      const keys = result.exportPayload.requiredInputs.map((input) => input.key);
+      // The workbook mapper cannot stage a peer schedule without the equity
+      // bridge, so no peer confirmation rows may appear: the honest sheet
+      // names the bridge gap instead of dangling peer inputs.
+      expect(keys.some((key) => key.startsWith('peer_')), 'no dangling peer rows').toBe(false);
+      expect(keys, 'bridge gap surfaced').toContain('multiple_source_ready_equity_bridge');
       expect(result.exportPayload.comps).toEqual([]);
-      expect(result.exportPayload.requiredInputs.some((input) => input.key === 'qualified_peer_set')).toBe(true);
       expect(result.workbookBytes.byteLength).toBeGreaterThan(1_000);
+    } finally {
+      await backend.stop();
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 300_000);
+
+  it('builds an incomplete MU peer schedule from fallback peers without operating-model inputs', async () => {
+    assertEdgarIdentityConfigured();
+    const home = await mkdtemp(join(tmpdir(), 'dcfbuild-live-mu-fallback-peers-'));
+    const backend = new LocalBackendProcess({
+      backendDirectory: resolve(projectRoot, 'backend'),
+      environment: {
+        ...process.env,
+        HOME: home,
+        DCF_CACHE_DB_PATH: join(home, 'financial_cache.sqlite'),
+      },
+    });
+
+    try {
+      const client = new BackendApiClient(await backend.start());
+      const result = await runValuationJob('MU', client);
+      expect(result.status, 'MU fallback peers produce an incomplete schedule').toBe('input_required');
+      expect(result.results, 'MU skips valuation').toBeNull();
+      const keys = result.exportPayload.requiredInputs.map((input) => input.key);
+      // Multiple math never needs operating-model inputs: no tax, working
+      // capital, or driver-history requirements may leak into the sheet.
+      expect(keys.some((key) => key === 'source_supported_tax_rate'
+        || key === 'working_capital_accounts_payable'
+        || key === 'three_year_operating_driver_history'), 'no operating-key leak').toBe(false);
+      const confirmations = keys.filter((key) => key.startsWith('peer_ebitda:'));
+      expect(confirmations.length, 'fallback peers need analyst confirmation').toBeGreaterThanOrEqual(3);
+      expect(result.exportPayload.comparableModel?.peerFallbackUsed, 'fallback schedule built').toBe(true);
+      expect(result.workbookBytes.byteLength).toBeGreaterThan(10_000);
     } finally {
       await backend.stop();
       await rm(home, {recursive: true, force: true});
