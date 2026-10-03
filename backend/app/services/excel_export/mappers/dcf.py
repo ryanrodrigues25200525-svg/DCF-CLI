@@ -223,6 +223,10 @@ def _map_dcf_base_inputs(dcf_base: Worksheet, payload: dict[str, Any], divisor: 
     dcf_base["F17"].number_format = "0.0%"
     dcf_base["F19"]._style = copy(dcf_base["F14"]._style)
     dcf_base["F19"].number_format = "0.0%"
+    # The WACC-link input keeps the template's bare style; give it the same
+    # input treatment as its yellow siblings (the template only styles F11).
+    dcf_base["F12"]._style = copy(dcf_base["F11"]._style)
+    dcf_base["F12"].number_format = "0.00%"
 
     margin_convergence_years = _required_positive_integer(
         assumptions.get("ebitMarginConvergenceYears") or assumptions.get("marginRampYears"),
@@ -302,6 +306,9 @@ def _sync_shared_scenario_inputs(scenario_sheet: Worksheet, dcf_base: Worksheet,
     base_nwc_change = _to_float(dcf_base["F10"].value)
     if base_nwc_change is not None:
         scenario_sheet["F10"].value = base_nwc_change * max(0.0, nwc_multiplier)
+    # The scenario WACC-link inputs keep the template's bare style; match base.
+    scenario_sheet["F12"]._style = copy(scenario_sheet["F11"]._style)
+    scenario_sheet["F12"].number_format = "0.00%"
 
 
 
@@ -909,6 +916,15 @@ def _map_sensitivity_blocks(
         _force_set(sheet, "J128", "=MEDIAN(J120:N124)")
         _force_set(sheet, "J129", "=PERCENTILE(J120:N124,0.75)")
         _force_set(sheet, "J130", "=MAX(J120:N124)")
+
+        # Sensitivity grids and their distribution stats are whole-currency
+        # values; General format would show raw decimals (e.g. 1242263.467).
+        for _row in range(120, 125):
+            for _col in ("D", "E", "F", "G", "H", "J", "K", "L", "M", "N"):
+                sheet[f"{_col}{_row}"].number_format = "#,##0"
+        for _row in range(126, 131):
+            for _col in ("C", "J"):
+                sheet[f"{_col}{_row}"].number_format = "#,##0"
 
         # Highlight low/median/high valuation outcomes with a standard red-yellow-green gradient.
         for target_range in ("D120:H124", "J120:N124"):

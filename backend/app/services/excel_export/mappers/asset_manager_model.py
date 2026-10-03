@@ -679,6 +679,9 @@ def _map_review_sheet(workbook: Workbook, payload: dict[str, Any], model: dict[s
         for cell in row_cells:
             if cell.value is not None and cell.font == Font():
                 cell.font = _BODY_FONT
+            if cell.column == 4 and isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                if cell.value == 0 or abs(cell.value) >= 0.005:
+                    cell.number_format = "#,##0.00"
             cell.alignment = Alignment(wrap_text=True, vertical="top")
     review.auto_filter.ref = f"A5:I{row}"
 

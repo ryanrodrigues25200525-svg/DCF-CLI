@@ -21,6 +21,27 @@ def _clear_template_markers(workbook: Workbook) -> None:
                 cell.value = None
 
 
+def _strip_cell_comments(workbook: Workbook) -> None:
+    """Remove every cell comment so no export carries note indicators.
+
+    Excel renders comment markers on editable inputs; the recalculation
+    round-trip already drops them from gated builds, so stripping here keeps
+    every output path visually consistent. Sources remain traceable through
+    the Data Review register and per-cell source references.
+    """
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.comment is not None:
+                    cell.comment = None
+        comments = getattr(worksheet, "_comments", None)
+        if comments:
+            try:
+                comments.clear()
+            except Exception:
+                pass
+
+
 def export_dcf_excel(payload: dict) -> bytes:
     """Build an Excel workbook from the validated template and DCF payload."""
     incomplete_operating_dcf = (
@@ -37,6 +58,7 @@ def export_dcf_excel(payload: dict) -> bytes:
         loop_mode = resolve_wacc_loop_mode(payload)
     apply_payload_to_workbook(workbook, payload)
     _clear_template_markers(workbook)
+    _strip_cell_comments(workbook)
 
     # Excel recalculates the model when the workbook opens.
     calculation = workbook.calculation

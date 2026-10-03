@@ -5,6 +5,20 @@ All notable changes to **DCF CLI** are documented in this file. Early entries de
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Workbook presentation: sensitivity grids and distribution stats render as whole
+  currency (`#,##0`); WACC Bull/Bear Beta as `0.00` and Costs of Equity as
+  percentages; zero premiums read as explicit `0.00%`; cash-flow detail as
+  whole units; Data Review mirrors at two decimals.
+- Removed all cell comments at export so no output carries note indicators;
+  sources remain traceable through Data Review registers (LibreOffice
+  recalculation already dropped them from gated builds).
+- Added `scripts/check_workbook_formatting.py`: fails on raw-decimal General
+  cells, comments, and unformatted statistic/beta rows.
+
 ## [2.1.0] — 2026-10-04
 
 > **Agent autonomy loop.** Deterministic engine builds fast across all routes;

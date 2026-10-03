@@ -287,6 +287,16 @@ def _map_cashflow_working_capital_schedule(
         _force_set(data_recalc, f"{column}40", f"={column}37+{column}38-{column}39+{column}12*$C$53")
         _force_set(data_recalc, f"{column}41", f"={column}40-{prior_recalc}40")
 
+    # Cash-flow detail reads as whole currency units; General format would show
+    # raw decimals on the forecast links (e.g. -26608.517).
+    for _row in range(35, 42):
+        for _column in RECALC_COLUMNS:
+            _cell = data_recalc[f"{_column}{_row}"]
+            if isinstance(_cell.value, (int, float)) and not isinstance(_cell.value, bool):
+                _cell.number_format = "#,##0"
+            elif isinstance(_cell.value, str) and _cell.value.startswith("="):
+                _cell.number_format = "#,##0"
+
 
 
 def _build_timeline(payload: dict[str, Any]) -> tuple[list[int | None], set[int]]:
