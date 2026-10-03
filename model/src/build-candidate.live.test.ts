@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFileCb);
 const modelRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tsxBin = join(modelRoot, 'node_modules', '.bin', 'tsx');
 const cliEntry = join(modelRoot, 'src', 'cli.ts');
+const mcpEntry = join(modelRoot, 'src', 'mcp', 'server.ts');
 
 if (!process.env.EDGAR_IDENTITY?.trim()) {
   throw new Error('Set EDGAR_IDENTITY before running the live candidate checks. Its value is never logged.');
@@ -136,6 +137,84 @@ describe('live build-candidate gate', () => {
       expect(again.exitCode).toBe(1);
     } finally {
       await rm(modelsDir, { recursive: true, force: true });
+    }
+  }, 590_000);
+
+  it('stages an AAPL candidate through MCP model_build without publishing', async () => {
+    const modelsDir = await mkdtemp(join(tmpdir(), 'dcf-cand-mcp-'));
+    const home = await mkdtemp(join(tmpdir(), 'dcf-cand-mcp-home-'));
+    const child = spawn(tsxBin, ['--tsconfig', 'tsconfig.json', mcpEntry], {
+      cwd: modelRoot,
+      env: { ...process.env, DCF_MODELS_DIR: modelsDir, HOME: home },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    try {
+      const send = (msg: unknown): void => {
+        if (!child.stdin) throw new Error('MCP server stdin is unavailable');
+        void child.stdin.write(`${JSON.stringify(msg)}\n`);
+      };
+      const responses = new Map<string | number, unknown>();
+      let buffer = '';
+      const waitFor = (id: string | number, ms: number): Promise<unknown> =>
+        new Promise((resolvePromise, rejectPromise) => {
+          const deadline = setTimeout(() => rejectPromise(new Error(`timed out waiting for MCP response ${String(id)}`)), ms);
+          const poll = (): void => {
+            if (responses.has(id)) {
+              clearTimeout(deadline);
+              resolvePromise(responses.get(id));
+              return;
+            }
+            setTimeout(poll, 250);
+          };
+          poll();
+        });
+      child.stdout.on('data', (data: Buffer) => {
+        buffer += data.toString('utf8');
+        let idx: number;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line) as { id?: string | number; result?: unknown; error?: unknown };
+            if (msg.id !== undefined) responses.set(msg.id, msg.error ?? msg.result);
+          } catch {
+            // Non-JSON server chatter is ignored.
+          }
+        }
+      });
+      send({ jsonrpc: '2.0', id: 'init', method: 'initialize', params: {} });
+      await waitFor('init', 30_000);
+      const unwrap = (msg: unknown): Record<string, unknown> => {
+        const m = msg as { content?: Array<{ text?: string }> };
+        const text = m?.content?.[0]?.text;
+        if (typeof text === 'string') {
+          try {
+            return JSON.parse(text) as Record<string, unknown>;
+          } catch {
+            // Fall through to raw message.
+          }
+        }
+        return (msg ?? {}) as Record<string, unknown>;
+      };
+      send({ jsonrpc: '2.0', id: 'build', method: 'tools/call', params: { name: 'model_build', arguments: { ticker: 'AAPL' } } });
+      const built = unwrap(await waitFor('build', 540_000)) as { candidateId: string; status: string; hash: string };
+      if ((built as { code?: string }).code) throw new Error(`model_build failed: ${JSON.stringify(built).slice(0, 500)}`);
+      expect(built.status).toBe('staged');
+      expect(typeof built.candidateId).toBe('string');
+      expect(built.candidateId.length).toBeGreaterThan(0);
+      // Staged means staged: accepted copy absent, candidate row present.
+      expect(existsSync(join(modelsDir, 'companies', 'AAPL', 'current.xlsx'))).toBe(false);
+      send({ jsonrpc: '2.0', id: 'inspect', method: 'tools/call', params: { name: 'candidate_inspect', arguments: { ticker: 'AAPL' } } });
+      const inspected = unwrap(await waitFor('inspect', 60_000)) as {
+        pendingCandidate: { id: string; payload: { verification: null } };
+      };
+      expect(inspected.pendingCandidate.id).toBe(built.candidateId);
+      expect(inspected.pendingCandidate.payload.verification).toBeNull();
+    } finally {
+      child.kill('SIGKILL');
+      await rm(modelsDir, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
     }
   }, 590_000);
 });

@@ -629,9 +629,9 @@ interface CandidateLibT {
   close(): void;
 }
 interface CandidateModT {
-  getPendingCandidateView(lib: unknown, root: string, ticker: string): unknown;
-  getCandidateViewById(lib: unknown, root: string, id: string): unknown;
-  recordCandidateVerification(lib: unknown, root: string, id: string, text: string, by: string): unknown;
+  getPendingCandidateView(lib: unknown, root: string, ticker: string): Promise<unknown>;
+  getCandidateViewById(lib: unknown, root: string, id: string): Promise<unknown>;
+  recordCandidateVerification(lib: unknown, root: string, id: string, text: string, by: string): Promise<unknown>;
   acceptCandidate(lib: unknown, root: string, id: string, by: string): Promise<Row>;
   rejectCandidate(lib: unknown, root: string, id: string, reason?: string): unknown;
 }
@@ -659,7 +659,7 @@ async function toolCandidateInspect(args: Row): Promise<unknown> {
   if (!libraryDbPresent(modelsDir)) return { ticker, pendingCandidate: null };
   const { lib, mod } = await loadCandidateStack(modelsDir);
   try {
-    return { ticker, pendingCandidate: mod.getPendingCandidateView(lib, modelsDir, ticker) };
+    return { ticker, pendingCandidate: await mod.getPendingCandidateView(lib, modelsDir, ticker) };
   } finally { closeLib(lib); }
 }
 
@@ -675,7 +675,7 @@ async function toolCandidateVerify(args: Row): Promise<unknown> {
   if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
   const { lib, mod } = await loadCandidateStack(modelsDir);
   try {
-    return mod.recordCandidateVerification(lib, modelsDir, candidateId, args['verification'] as string, args['verifiedBy'] as string);
+    return await mod.recordCandidateVerification(lib, modelsDir, candidateId, args['verification'] as string, args['verifiedBy'] as string);
   } catch (e) {
     if (isErr(e)) throw e;
     const msg = e instanceof Error ? e.message : String(e);
@@ -769,6 +769,48 @@ async function toolRevisionCompare(args: Row): Promise<unknown> {
   } finally { closeLib(lib); }
 }
 
+async function toolModelBuild(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const force = args['force'] === true;
+  const output = typeof args['output'] === 'string' && args['output'].trim()
+    ? resolve(args['output'].trim())
+    : join(homedir(), 'Downloads', `${new Date().toISOString().slice(0, 10)}_${ticker}_DCF.xlsx`);
+  const modelsDir = await resolveModelsDir();
+  const { lib } = await loadCandidateStack(modelsDir);
+  try {
+    const stagingMod = (await import('../review/build-staging.js')) as {
+      runBuildStaging(opts: {
+        lib: unknown; root: string; ticker: string; output: string; force: boolean; note?: string;
+      }): Promise<{
+        ticker: string; candidateId: string; hash: string; workbookPath: string; exportPath: string;
+        route: string; readiness: string; accession: string | null; filedDate: string | null;
+        isInitialBuild: boolean; valuationSummary: string; stdout: string[]; stderr: string[];
+      }>;
+    };
+    const staged = await stagingMod.runBuildStaging({ lib, root: modelsDir, ticker, output, force, note: 'mcp model_build' });
+    return {
+      ticker: staged.ticker,
+      candidateId: staged.candidateId,
+      status: 'staged',
+      hash: staged.hash,
+      route: staged.route,
+      readiness: staged.readiness,
+      accession: staged.accession,
+      filedDate: staged.filedDate,
+      exportPath: staged.exportPath,
+      messages: staged.stdout,
+      warnings: staged.stderr,
+    };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No Python with openpyxl|LibreOffice .* is not available/i.test(msg)) throw err('ENGINE_UNAVAILABLE', msg);
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    if (/must not overwrite|already exists|requires a /i.test(msg)) throw err('INVALID_BUILD', msg);
+    throw err('BUILD_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
 /* ---------- tool registry (inputSchema key order is part of the contract) ---------- */
 const changeSchema: Row = {
   type: 'object',
@@ -847,6 +889,12 @@ const TOOLS: ToolDef[] = [
       from: { type: 'string' }, to: { type: 'string' },
       limit: { type: 'integer', description: 'Detail rows to return (1-500, default 200)' },
     }, required: ['ticker'], additionalProperties: false } },
+  { name: 'model_build', description: 'Run a full deterministic build for a ticker (live fetch, LibreOffice recalc, candidate staging). LONG-RUNNING: may take minutes; the client must keep the request open. Publishes nothing: returns the staged candidateId for candidate_verify + candidate_accept.',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      output: { type: 'string', description: 'Dated export path (default: ~/Downloads/YYYY-MM-DD_TICKER_DCF.xlsx)' },
+      force: { type: 'boolean', description: 'Archive a diverged copy and rebuild anyway' },
+    }, required: ['ticker'], additionalProperties: false } },
 ];
 const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
@@ -856,7 +904,7 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   proposal_reject: toolProposalReject,
   candidate_inspect: toolCandidateInspect, candidate_verify: toolCandidateVerify,
   candidate_accept: toolCandidateAccept, candidate_reject: toolCandidateReject,
-  revision_compare: toolRevisionCompare,
+  revision_compare: toolRevisionCompare, model_build: toolModelBuild,
 };
 
 /* ---------- stdio JSON-RPC loop ---------- */

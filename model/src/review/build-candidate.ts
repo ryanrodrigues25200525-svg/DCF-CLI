@@ -2,7 +2,18 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { BackendApiClient, type BackendPort, type FilingsListResult } from '@/api/backend-client';
+import type { NativeUnifiedPayload } from '@/core/types';
+import type { DcfWorkbookPayload } from '@/services/exporters/excel/types';
+import { LocalBackendProcess } from '@/infrastructure/local-backend-process';
+import { assertOutputDoesNotExist, writeWorkbook } from '@/infrastructure/output-writer';
+import { formatValuationJobSuccess, runValuationJob } from '@/application/run-valuation-job';
+import { getReviewHook } from '@/library/config';
+import { buildSourceSnapshot } from '@/watch/source-snapshot';
+import { extractFilingInfo } from '@/watch/filing-source';
+import { resolveMonitorFiling } from '@/watch/source-sync';
 import {
   ModelLibrary,
   companyDir,
@@ -183,6 +194,12 @@ export function describeMappedPeriod(snapshotJson: string | null | undefined): s
 async function copyBytes(bytes: Uint8Array, path: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, bytes);
+}
+
+/** Write raw bytes to a path (creating parent dirs). Shared with the
+ *  diverged-copy archive path in build staging. */
+export async function writeBytesToPath(bytes: Uint8Array, path: string): Promise<void> {
+  await copyBytes(bytes, path);
 }
 
 /** Engine recalculation gate shared by staging: LibreOffice recalculates a
