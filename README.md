@@ -54,6 +54,15 @@ dcf model review AAPL
 dcf model open AAPL
 ```
 
+Each default build writes the accepted library copy plus a dated workbook in
+`~/Downloads`, named `YYYY-MM-DD_AAPL_DCF.xlsx` using the UTC build date.
+Repeated exports of the same ticker on one day add `_02`, `_03`, and so on.
+The library keeps its stable `companies/AAPL/current.xlsx` path.
+The filename date is an export/build date, not a substitute for the SEC filing
+period shown inside the workbook. Some specialist routes still use annual
+actuals; see [Model coverage](docs/MODEL_COVERAGE.md) before assuming a refresh
+includes a newly reported quarter.
+
 If LibreOffice is outside the normal search paths, set SOFFICE_PATH. For the
 standard macOS app install:
 
@@ -106,6 +115,9 @@ dcf build PLD
 # Recognized route with missing regulatory facts:
 # creates blank required inputs and withholds valuation
 dcf build DUK
+
+# Earnings refresh for an existing company (same validated build path)
+dcf model update JPM
 ```
 
 Current SEC and market data can change whether a route is complete on a
@@ -153,7 +165,9 @@ The pipeline separates jobs that need different standards:
 
 | Command | Use |
 | --- | --- |
-| `dcf build AAPL` | Build, recalculate, validate, and save a new library revision |
+| `dcf build AAPL` | Build or rebuild, validate, save a library revision, and create a dated export |
+| `dcf model update AAPL` | Explicitly refresh from the latest mapped SEC/market data and create a dated export |
+| `dcf model export AAPL` | Copy the accepted library revision to a dated file after review or approval |
 | `dcf models list` | Find saved company workbooks |
 | `dcf model inspect AAPL` | Check route, source accession, revision, and workbook hash |
 | `dcf model review AAPL` | Check formulas, workbook errors, sources, and missing inputs |
@@ -185,15 +199,11 @@ For all options and conflict behavior, see the
 Use ChatGPT to **review and explain a model that DCF CLI built**, rather than
 asking it to invent a workbook from scratch.
 
-1. Build and validate a model:
+1. Build and validate. Use `dcf build AAPL` for the initial model, or
+   `dcf model update AAPL` after a new filing; then run `dcf model review AAPL`.
 
-   ```bash
-   dcf build AAPL
-   dcf model review AAPL
-   ```
-
-2. Attach `companies/AAPL/current.xlsx` from your configured model-library folder to a
-   ChatGPT conversation.
+2. Attach the dated workbook path printed by the CLI, for example
+   `~/Downloads/2026-10-03_AAPL_DCF.xlsx`, to a ChatGPT conversation.
 
 3. Ask for a review with a source-first prompt such as:
 
@@ -208,10 +218,15 @@ asking it to invent a workbook from scratch.
 4. Apply analyst judgment in Excel. For a source-backed fact correction, sync
    the filing and record a proposal with `dcf model propose-update`; inspect its
    preview, then apply it only after approval with
-   `dcf model apply <proposal-id> --approve`.
+   `dcf model apply <proposal-id> --approve`. Run `dcf model export AAPL`
+   afterward to create a dated copy of the newly accepted library revision.
 
 5. Run `dcf model review AAPL` after the change and inspect the revision/hash
    before relying on the workbook.
+
+ChatGPT's free-form review notes stay in the conversation; source-backed cell
+changes become stored proposals. The CLI does not yet save a separate AI review
+report in the model library.
 
 **Editing note:** formulas in Excel are editable. The library also detects
 manual edits to `current.xlsx`; applying a proposal to a workbook whose hash has
@@ -230,7 +245,9 @@ npm --prefix model run dcf-mcp --silent
 Configure its executable and absolute project paths in a local stdio-capable
 MCP client. The server uses the same services as the CLI for model discovery,
 workbook inspection, filing checks, validation, and sourced proposals.
-Applying a proposal still requires explicit approval.
+Applying a proposal still requires explicit approval. The MCP server does not
+trigger a full model rebuild; run `dcf model update <ticker>` in the CLI first,
+then review the dated workbook with ChatGPT.
 
 For ChatGPT, the app connection needs either a reachable HTTPS MCP endpoint or
 a supported Secure MCP Tunnel. DCF CLI currently provides the local stdio
@@ -255,8 +272,10 @@ submitted through a filing agent when the current SEC response contains a
 usable mixed filing sample; otherwise the check logs a clear skip. Live
 providers can rate-limit or return stale data; model routes fail closed when
 required context is missing.
-The latest full run on 2 October 2026 passed **79/79 model tests** in
-**826.46 seconds**; the filing-agent regression check also passed.
+The latest full run on 3 October 2026 passed **82/82 live model tests** in
+**869.14 seconds**, and the mixed-list filing-agent regression passed. This
+suite verifies named live routes and controls; it does not establish universal
+company or sector coverage.
 
 ## 📚 Project docs
 

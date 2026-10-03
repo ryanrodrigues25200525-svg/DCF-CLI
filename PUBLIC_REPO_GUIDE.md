@@ -9,7 +9,8 @@ Before publishing changes:
 - Check that the README setup instructions match the current CLI command and backend requirements.
 - Preserve the model and backend lock/configuration files used for a reproducible source install.
 
-The primary interface is `dcf build <ticker>` plus the model-library commands
-documented in the README. `npm run dcf -- build <ticker>` is the from-checkout
-form. `dcfbuild <ticker> [--output <file.xlsx>] [--force]` remains the legacy
-standalone export command.
+The primary interface is `dcf build <ticker>`, `dcf model update <ticker>`,
+and the review/export commands documented in the README. Each build produces
+a date-and-ticker export plus the stable library copy. `npm run dcf -- build <ticker>`
+is the from-checkout form. `dcfbuild <ticker> [--output <file.xlsx>] [--force]`
+remains the legacy standalone export command.

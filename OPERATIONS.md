@@ -22,13 +22,21 @@ dcf model open AAPL
 
 The build starts FastAPI on a temporary loopback port, requests live source
 data, exports a formula-driven workbook, recalculates it with LibreOffice, and
-stores a new revision in the model library. `dcf model review` checks workbook
-structure, formulas, cached formula errors, required-input status, and
-source-review rows.
+stores a new revision in the model library. It also writes a dated
+`YYYY-MM-DD_AAPL_DCF.xlsx` export under `~/Downloads` (UTC build date; repeated
+same-day exports use a numeric suffix). Use `dcf model update AAPL` for an
+earnings refresh from the latest data mapped by that route. This deterministically
+builds and validates a new accepted revision; then review the dated file with
+ChatGPT/Codex. `dcf model review` checks workbook structure, formulas, cached
+formula errors, required-input status, and source-review rows.
+
+After reviewing and approving a sourced proposal, `dcf model export AAPL`
+copies the accepted library workbook to another dated upload file. It refuses
+to export a manually diverged library workbook.
 
 For a separate standalone file, use `dcfbuild AAPL --output <file.xlsx>`.
-That legacy command refuses to replace an existing file unless `--force` is
-supplied.
+Its default filename is date-and-ticker stamped; explicit output paths refuse
+to replace an existing file unless `--force` is supplied.
 
 The SQLite provider cache in `backend/data/` persists between runs. Live tests
 use temporary caches. The local service inherits `EDGAR_IDENTITY` and the

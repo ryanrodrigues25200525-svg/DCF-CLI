@@ -358,16 +358,14 @@ export function calculateDCF(
 
 function createFallbackResults(historicals: HistoricalData): DCFResults {
     const currentPrice = getSafeCurrentPrice(historicals?.price);
-    const marketCap = currentPrice * (historicals?.sharesOutstanding || 0);
-    const fallbackEv = marketCap > 0 ? marketCap * 1.1 : 100;
     return {
         forecasts: [],
         terminalValue: 0,
         pvTerminalValue: 0,
-        enterpriseValue: fallbackEv,
-        equityValue: marketCap || fallbackEv * 0.9,
-        impliedSharePrice: currentPrice || 1,
-        shareCount: historicals?.sharesOutstanding || 0,
+        enterpriseValue: null,
+        equityValue: 0,
+        impliedSharePrice: 0,
+        shareCount: 0,
         currentPrice,
         upside: 0,
         terminalValueGordon: 0,
@@ -377,6 +375,9 @@ function createFallbackResults(historicals: HistoricalData): DCFResults {
         valueCreationFlag: false,
         confidenceScore: 0,
         confidenceRank: 'Low',
-        sectorWarning: "Insufficient financial data to run model."
+        sectorWarning: 'Insufficient financial data to run model; valuation withheld.',
+        modelWarning: 'Insufficient financial data to run model; valuation withheld.',
+        isValuationSupported: false,
+        isSensitivitySupported: false,
     };
 }

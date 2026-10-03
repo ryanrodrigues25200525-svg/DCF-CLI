@@ -94,6 +94,8 @@ function usage(): string {
     '                   dcf model inspect <ticker> [--models-dir <dir>] [--json]',
     '                   dcf model open <ticker> [--models-dir <dir>]',
     '                   dcf model review <ticker> [--models-dir <dir>]',
+    '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
+    '                   dcf model export <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model propose-update <ticker> [--summary <text>] [--change <spec>]... [--accession <acc> --filed <date>] [--models-dir <dir>]',
     '                   dcf model apply <proposal-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model reject <proposal-id> [--reason <text>] [--models-dir <dir>]',
@@ -104,7 +106,7 @@ function usage(): string {
     '       npm run dcf -- <same commands>',
     '',
     'Options:',
-    '  -o, --output <file>  Output workbook (default: ~/Downloads/<ticker>_dcf.xlsx)',
+    '  -o, --output <file>  Output workbook (default: ~/Downloads/YYYY-MM-DD_<TICKER>_DCF.xlsx; numbered if repeated)',
     '  --force              Replace the output file if it already exists',
     '  --models-dir <dir>   Override the model-library root for one command',
     '  --approve            Explicit approval for `model apply` (required)',
@@ -141,9 +143,21 @@ function resolveCliOptions(parsed: ParsedCliOptions, ticker: string): CliOptions
     ticker,
     output: parsed.output
       ? resolve(INVOKER_CWD, parsed.output)
-      : join(homedir(), 'Downloads', `${ticker.toLowerCase()}_dcf.xlsx`),
+      : datedDcfOutputPath(ticker),
     force: parsed.force,
   };
+}
+
+/** Choose a unique, UTC-dated workbook name for a company export. */
+function datedDcfOutputPath(ticker: string): string {
+  const normalizedTicker = normalizeTicker(ticker);
+  const baseName = `${utcNow().slice(0, 10)}_${normalizedTicker}_DCF`;
+  const downloads = join(homedir(), 'Downloads');
+  for (let sequence = 1; ; sequence += 1) {
+    const suffix = sequence === 1 ? '' : `_${String(sequence).padStart(2, '0')}`;
+    const candidate = join(downloads, `${baseName}${suffix}.xlsx`);
+    if (!existsSync(candidate)) return candidate;
+  }
 }
 
 function parseArgs(argv: string[]): ParsedCliOptions | null {
@@ -450,26 +464,31 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
   if (!tickerRaw) throw new CliUsageError('Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]');
   const ticker = normalizeTicker(tickerRaw);
   const root = libraryRoot(flags.modelsDir);
-  const output = flags.output ? resolve(INVOKER_CWD, flags.output) : undefined;
-  if (output) assertOutputDoesNotExist(output, flags.force);
+  const output = flags.output ? resolve(INVOKER_CWD, flags.output) : datedDcfOutputPath(ticker);
+  if (resolve(output) === resolve(currentWorkbookPath(root, ticker))) {
+    throw new CliUsageError('Output must not overwrite the accepted library workbook.');
+  }
+  assertOutputDoesNotExist(output, flags.force);
   const lib = openLibrary(flags.modelsDir);
   try {
     // Conflict gate: refuse to replace a diverged library copy without --force.
     // --force archives the diverged bytes as their own revision before rebuilding.
     const existing = lib.getCompany(ticker);
     const onDiskHash = readCurrentHash(root, ticker);
-    if (onDiskHash && existing?.workbook_hash && onDiskHash !== existing.workbook_hash && !flags.force) {
+    const hasDivergedCopy = onDiskHash !== null
+      && (!existing?.workbook_hash || onDiskHash !== existing.workbook_hash);
+    if (hasDivergedCopy && !flags.force) {
       throw new Error(
         `MANUAL_EDIT_DETECTED: the saved workbook for ${ticker} differs from the accepted revision ` +
-        `(accepted ${existing.workbook_hash}, file ${onDiskHash}). Re-run with --force to archive the diverged copy as a revision and rebuild, or review it first with \`dcf model review ${ticker}\`.`,
+        `(accepted ${existing?.workbook_hash ?? 'missing or unknown'}, file ${onDiskHash}). Re-run with --force to archive the diverged copy as a revision and rebuild, or review it first with \`dcf model review ${ticker}\`.`,
       );
     }
-    if (onDiskHash && existing?.workbook_hash && onDiskHash !== existing.workbook_hash && flags.force) {
+    if (hasDivergedCopy && flags.force) {
       const divergedBytes = await readFile(currentWorkbookPath(root, ticker));
       const archived = lib.addRevision({
         ticker,
         workbook_hash: onDiskHash,
-        parent_hash: existing.workbook_hash,
+        parent_hash: existing?.workbook_hash ?? null,
         path: null,
         note: 'diverged copy archived before --force rebuild',
       });
@@ -494,12 +513,9 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     const built = buildSourceSnapshot(unified);
     const fullSnapshotJson = JSON.stringify({...built.snapshot, _ticker: ticker, _fetchedAt: utcNow()});
     const saved = await persistWorkbookRevision(lib, root, ticker, result.workbookBytes, meta, 'dcf build', fullSnapshotJson);
-    if (output) {
-      await writeWorkbook(output, saved.recalculatedBytes, flags.force);
-      console.log(formatValuationJobSuccess(result, output));
-    } else {
-      console.log(formatValuationJobSuccess(result, saved.workbookPath));
-    }
+    await writeWorkbook(output, saved.recalculatedBytes, flags.force);
+    console.log(formatValuationJobSuccess(result, output));
+    console.log(`Accepted library copy: ${saved.workbookPath}`);
     console.log(`Library: ${ticker} route=${meta.route} readiness=${meta.readiness} revision=${saved.revisionId} hash=${saved.hash}`);
     if (meta.accession) console.log(`Source: accession ${meta.accession}, filed ${meta.filedDate ?? 'unknown'}.`);
     // Manifest keeps the fact-source accession represented by the workbook.
@@ -522,6 +538,40 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
       }
     }
     for (const warning of result.warnings) console.error(`Warning: ${warning}`);
+  } finally {
+    lib.close();
+  }
+}
+
+async function cmdModelUpdate(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]');
+  const ticker = normalizeLibraryTicker(tickerRaw);
+  console.log(`Building or refreshing ${ticker} from the latest data mapped by its model route.`);
+  await cmdBuild(ticker, flags);
+}
+
+async function cmdModelExport(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model export <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]');
+  const ticker = normalizeLibraryTicker(tickerRaw);
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const manifest = lib.getCompany(ticker);
+    if (!manifest) throw new CliUsageError(`No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`);
+    const workbookPath = currentWorkbookPath(root, ticker);
+    const currentHash = readCurrentHash(root, ticker);
+    if (!currentHash) throw new Error(`The accepted workbook for ${ticker} is missing; refusing to export.`);
+    if (!manifest.workbook_hash || currentHash !== manifest.workbook_hash) {
+      throw new Error(`MANUAL_EDIT_DETECTED: ${ticker}'s current workbook differs from its accepted revision. Review the edit before exporting.`);
+    }
+    const output = flags.output ? resolve(INVOKER_CWD, flags.output) : datedDcfOutputPath(ticker);
+    if (resolve(output) === resolve(workbookPath)) {
+      throw new CliUsageError('Output must not overwrite the accepted library workbook.');
+    }
+    assertOutputDoesNotExist(output, flags.force);
+    await writeWorkbook(output, await readFile(workbookPath), flags.force);
+    console.log(`Exported accepted ${ticker} revision ${manifest.revision_id ?? '(unknown)'}.`);
+    console.log(`Workbook: ${output}`);
   } finally {
     lib.close();
   }
@@ -958,10 +1008,12 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       if (sub === 'inspect') await cmdModelInspect(args[0], flags);
       else if (sub === 'open') await cmdModelOpen(args[0], flags);
       else if (sub === 'review') await cmdModelReview(args[0], flags);
+      else if (sub === 'update') await cmdModelUpdate(args[0], flags);
+      else if (sub === 'export') await cmdModelExport(args[0], flags);
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
       else if (sub === 'apply') await cmdModelApply(args[0], flags);
       else if (sub === 'reject') await cmdModelReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|open|review|propose-update|apply|reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');

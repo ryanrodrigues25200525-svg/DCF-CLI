@@ -19,6 +19,12 @@ null to read the whole normalized snapshot), `workbook_read_cells` (live
 cached values + formulas for chosen cells), `filings_sync` (refresh snapshot
 through the shared service; never writes workbooks).
 
+When the user explicitly requests a full model refresh, run `dcf model update
+<ticker>` in the local CLI. It rebuilds and validates the model using the latest
+data mapped by that route, creates a new accepted library revision, and writes
+a date-and-ticker export. Review that dated workbook afterward; do not imply a
+route incorporated quarterly data unless its source contract supports it.
+
 ## 1. Source checks
 
 - Confirm each fact cites the filed concept, SEC accession, filed date,
@@ -78,6 +84,8 @@ Validation rejects unsourced or malformed changes; nothing is written until appr
   retained, no multi-file atomicity claimed.
 - Rejection is status-only: `dcf model reject <id>` (or MCP `proposal_reject`);
   the workbook is unchanged.
+- After a proposal is applied, `dcf model export <ticker>` writes a new dated
+  copy of the accepted revision for upload or sharing.
 - The watcher (`dcf watch check` / `dcf watch run`) only stores snapshots and
   update-ready flags; it never edits workbooks.
 - Restoring means copying `revisions/<revId>.xlsx` back, never rewriting history.

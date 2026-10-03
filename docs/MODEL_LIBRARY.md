@@ -47,7 +47,9 @@ Each company lives under `companies/<TICKER>/`:
 
 | Command | Effect (read-only unless noted) |
 | --- | --- |
-| `dcf build <ticker> [--output F] [--force]` | Builds via the shared TS engine, then recalculates the staged copy with LibreOffice and inspects it (sheets/formulas required, zero cached formula errors) BEFORE publishing; aborts leave the accepted workbook/manifest/index/revisions unchanged. Manifest accession is the fact source represented by the workbook (e.g. the 10-K); if the SEC filings list has something newer, watch queues it update-ready without touching the manifest. Saves revision + manifest + full normalized snapshot; `--output` receives the same recalculated bytes. Refuses on a diverged copy unless `--force`, which archives the diverged bytes as their own revision first |
+| `dcf build <ticker> [--output F] [--force]` | Builds via the shared TS engine, then recalculates and inspects the staged copy (sheets/formulas required, zero cached formula errors) before publishing. Saves `current.xlsx`, an immutable revision, the manifest, and a normalized snapshot. By default it also exports `YYYY-MM-DD_<TICKER>_DCF.xlsx` under `~/Downloads` (UTC build date; repeated exports get a numeric suffix); `--output` selects a different export path. Refuses on a diverged copy unless `--force`, which archives the diverged bytes first. |
+| `dcf model update <ticker> [--output F] [--force]` | Explicitly reruns the same validated build using the latest data mapped by that route; it creates a new library revision and dated export. It can also create the initial model if none exists. |
+| `dcf model export <ticker> [--output F] [--force]` | Copies the accepted `current.xlsx` to a new dated export without fetching data or rebuilding. It refuses if the file hash differs from the accepted manifest. |
 | `dcf models list [--json]` | Lists library tickers with route/readiness |
 | `dcf model inspect <ticker> [--json]` | Manifest file + DB rows + hash verification |
 | `dcf model open <ticker>` | Opens the workbook in the host app; library copy unchanged |
@@ -64,7 +66,9 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf mcp` | Start the local stdio MCP server |
 
 The legacy `dcfbuild [<ticker>]` form (no library subcommand) keeps the
-original standalone-file behavior and never touches the library.
+standalone-file behavior and never touches the library. Its default Downloads
+filename is also date-and-ticker stamped; an explicit `--output` is honored.
+The filename date is the UTC build/export date, not the SEC filing period.
 
 Change spec: `sheet|cell|proposed|rationale|source[|accession]` (accession
 defaults to the latest snapshot, but must be the accepted manifest accession

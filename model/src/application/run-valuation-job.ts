@@ -2066,7 +2066,9 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
     || !Number.isFinite(results.impliedSharePrice)
     || results.impliedSharePrice <= 0
   ) {
-    const reason = eligibility.blocked_models.find((item) => item.reason)?.reason;
+    const reason = eligibility.blocked_models.find((item) => item.reason)?.reason
+      ?? results.modelWarning
+      ?? results.sectorWarning;
     throw new Error(reason || `The DCF engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; WACC=${assumptions.wacc}; tax=${assumptions.taxRate}; EBIT margin=${assumptions.ebitMargin}; CapEx ratio=${assumptions.capexRatio}; NWC residual=${assumptions.nwcChangeRatio}; first FCFF=${results.forecasts[0]?.fcff}; final FCFF=${results.forecasts.at(-1)?.fcff}; terminal value=${results.terminalValue}; terminal growth value=${results.terminalValueGordon}).`);
   }
 

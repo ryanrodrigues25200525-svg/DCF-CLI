@@ -39,5 +39,7 @@ for tested examples and boundaries. Coverage is not universal by sector.
 
 The CLI starts FastAPI on a temporary loopback port, calls the data and export
 routes, validates/recalculates the workbook, and saves a versioned copy to the
-configured model library. The legacy `dcfbuild AAPL` command still exports a
-standalone workbook to `~/Downloads` by default.
+configured model library. A dated `YYYY-MM-DD_<TICKER>_DCF.xlsx` export is
+written to `~/Downloads` by default. `dcf model update <ticker>` repeats this
+build with the latest data mapped by that route; `dcf model export <ticker>`
+exports the accepted current revision after review.

@@ -204,12 +204,13 @@ export function calculateRoutedValuation(
     }
     case 'unlevered_dcf': {
       const result = calculateDCF(historicals, assumptions, overrides);
+      const hasForecast = result.forecasts.length > 0;
       return {
         ...result,
         companyType: eligibility.company_type,
         preferredModel: eligibility.preferred_model,
-        isValuationSupported: true,
-        isSensitivitySupported: true,
+        isValuationSupported: hasForecast,
+        isSensitivitySupported: hasForecast,
       };
     }
     case 'utility_dcf': {
