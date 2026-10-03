@@ -35,20 +35,21 @@
 
 **Files:** `model/src/cli.ts`, `model/src/cli.live.test.ts`, `model/src/review/proposal.ts`, `model/src/review/apply-service.ts`
 
-- [ ] Add live CLI regressions for accurate workbook-open status, typed proposal values (boolean, exponent, explicit blank), and `dcf mcp --help`/invalid arguments.
-- [ ] Run the focused live regressions and confirm each exposes the current behavior.
-- [ ] Implement the smallest fixes without changing the normal successful command paths.
-- [ ] Re-run the focused live cases and typecheck.
+- [x] Add live CLI regressions for accurate workbook-open status, typed proposal values (boolean, exponent, explicit blank), and `dcf mcp --help`/invalid arguments.
+- [x] Run the focused live regressions and confirm each exposes the current behavior.
+- [x] Implement the smallest fixes without changing the normal successful command paths.
+- [x] Re-run the focused live cases and typecheck.
 - [ ] Link to GitHub Issues #1, #3, and #8 in the PR.
 
 ### Task 2: Fix platform discovery and cover metadata
 
-**Files:** `model/src/workbook/xlsx.ts`, `scripts/install_cli.sh`, `backend/app/services/excel_export/mappers/cover.py`, live CLI checks as applicable.
+**Files:** `model/src/workbook/xlsx.ts`, `model/src/platform.live.test.ts`, `model/package.json`, `scripts/install_cli.sh`, `backend/app/services/excel_export/mappers/cover.py`.
 
-- [ ] Trace interpreter, LibreOffice, shell-startup, and cover metadata fallbacks; preserve explicit `SOFFICE_PATH` precedence and installer idempotence.
-- [ ] Add regression checks that can run on the current host without editing the real home directory.
-- [ ] Implement Windows `python`/LibreOffice PATH candidates, POSIX PATH lookup without `which`, shell-appropriate login PATH setup, and an honest missing-industry cover label.
-- [ ] Run available live checks; record Windows-only behavior that cannot be executed on this macOS host.
+- [x] Trace interpreter, LibreOffice, shell-startup, and cover metadata fallbacks; preserve explicit `SOFFICE_PATH` precedence and installer idempotence.
+- [x] Add a live host-integration suite for actual Python/LibreOffice discovery and run the installer with a temporary HOME; add a live-provider cover-redaction case for missing industry/sector.
+- [x] Implement Windows `python`/LibreOffice PATH candidates, POSIX PATH lookup without `which`, shell-appropriate login PATH setup, and an honest missing-industry cover label.
+- [x] Include the new live suite in `model/package.json`'s test command.
+- [x] Run available live checks; record Windows-only behavior that cannot be executed on this macOS host.
 - [ ] Link to GitHub Issues #2, #4, #5, #6, and #7 in the PR.
 
 ### Task 3: Persist filing context and compare revisions
