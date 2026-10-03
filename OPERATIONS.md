@@ -44,9 +44,11 @@ to replace an existing file unless `--force` is supplied.
 - `dcf model inspect AAPL [--json]` checks route, source accession, revision,
   and workbook hash.
 - `dcf model propose-update AAPL --change 'sheet|cell|proposed|rationale|source[|accession]'`
-  records a source-backed proposal; `dcf model apply <id> --approve` applies it
-  as a new revision and `dcf model reject <id>` rejects it without changes.
-  Applying requires explicit approval and refuses on a manually diverged copy.
+  records a source-backed proposal; `dcf model preview <id>` reviews it without
+  publishing (required); `dcf model apply <id> --approve` promotes exactly the
+  previewed edits as a new revision and `dcf model reject <id>` rejects it
+  without changes. Applying requires explicit approval and refuses on a
+  manually diverged copy.
 - `dcf model compare <ticker> [--from <rev|candidate|accepted>] [--to <rev|candidate|accepted>]`
   diffs two same-company revisions: added/removed sheets plus capped cell
   changes (added, removed, formula, value). Defaults to parent revision vs the

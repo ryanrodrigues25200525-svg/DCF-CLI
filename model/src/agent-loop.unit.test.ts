@@ -36,6 +36,11 @@ describe('agent autonomy loop (real services, no network)', () => {
       expect(view.inspection?.sheets).toContain('Model');
       expect(view.inspection?.formulaCount).toBeGreaterThan(0);
       expect(view.inspection?.cachedErrorCells).toEqual([]);
+      const withWatch = (r.json as { viewWithWatch: {
+        watchLatest?: { accession: string; updateReady: boolean } | null;
+      } }).viewWithWatch;
+      expect(withWatch.watchLatest?.accession).toBe('0000000000-26-000099');
+      expect(withWatch.watchLatest?.updateReady).toBe(true);
     } finally {
       const root = (r.json as { root?: string })?.root;
       if (root) await rm(root, { recursive: true, force: true });
@@ -67,6 +72,60 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(((loud.json as { output: string }).output ?? '').length).toBeLessThanOrEqual(8192);
   }, 180_000);
 
+  it('verifies revision archives and never migrates on legacy reads', async () => {
+    const r = await probe('compare-legacy.ts', []);
+    expect(r.status, r.stderr).toBe(0);
+    const m = r.json as {
+      tamperedArchive: { ok: boolean; message: string };
+      missingArchive: { ok: boolean; message: string };
+      legacyTablesAfter: string[];
+      legacyPending: null | string;
+      legacyPendingError: string | null;
+    };
+    expect(m['tamperedArchive']?.ok).toBe(false);
+    expect(m['tamperedArchive']?.message ?? '').toMatch(/does not match its recorded hash/);
+    expect(m['missingArchive']?.ok).toBe(false);
+    expect(m['missingArchive']?.message ?? '').toMatch(/missing/);
+    expect(m['legacyPending']).toBeNull();
+    expect(m['legacyPendingError']).toBeNull();
+    expect(m['legacyTablesAfter'] ?? []).not.toContain('candidates');
+  }, 180_000);
+
+  it('answers legacy libraries over MCP without migrating schemas', async () => {
+    const { mkdtemp: mkd } = await import('node:fs/promises');
+    const { tmpdir: tdir } = await import('node:os');
+    const legacyRoot = await mkd(join(tdir(), 'dcf-legacy-mcp-'));
+    try {
+      const setup = await probe('compare-legacy.ts', ['--keep', legacyRoot]);
+      expect(setup.status, setup.stderr).toBe(0);
+      const tablesBefore = await probe('compare-legacy.ts', ['--tables', legacyRoot]);
+      expect((tablesBefore.json as { tables: string[] }).tables).toEqual(['companies']);
+      const inspected = await probe('mcp-call.ts', [
+        '--tool', 'candidate_inspect', '--args', JSON.stringify({ ticker: 'LEG' }),
+        '--env', `DCF_MODELS_DIR=${legacyRoot}`,
+      ]);
+      expect(inspected.status, inspected.stderr).toBe(0);
+      const rawBody = inspected.json as { content?: Array<{ text?: string }> };
+      const body = (() => {
+        const text = rawBody?.content?.[0]?.text;
+        if (typeof text === 'string') {
+          try {
+            return JSON.parse(text) as { pendingCandidate?: null; ticker?: string };
+          } catch {
+            // Fall through to the raw body.
+          }
+        }
+        return rawBody as unknown as { pendingCandidate?: null; ticker?: string };
+      })();
+      expect(body.ticker).toBe('LEG');
+      expect(body.pendingCandidate ?? null).toBeNull();
+      const tablesAfter = await probe('compare-legacy.ts', ['--tables', legacyRoot]);
+      expect((tablesAfter.json as { tables: string[] }).tables).toEqual(['companies']);
+    } finally {
+      await rm(legacyRoot, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it('diffs two workbooks: sheets, formulas, values, identical', async () => {
     const r = await probe('compare-pair.ts', []);
     expect(r.status, r.stderr).toBe(0);
@@ -83,5 +142,75 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(diff.changes.some((c) => c.sheet === 'Model' && c.cell === 'B1')).toBe(false);
     expect(diff.truncated).toBe(false);
     expect(identicalTotal).toBe(0);
+  }, 180_000);
+
+  it('requires a reviewed preview before proposal promotion', async () => {
+    const r = await probe('proposal-preview-matrix.ts', []);
+    expect(r.status, r.stderr).toBe(0);
+    const m = r.json as Record<string, { ok: boolean; message?: string; hash?: string | null }>;
+    expect(m['applyWithoutPreview']?.ok).toBe(false);
+    expect(m['applyWithoutPreview']?.message ?? '').toMatch(/preview/i);
+    expect(m['preview']?.ok).toBe(true);
+    expect(m['preview']?.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(m['applyAfterPreview']?.ok).toBe(true);
+    expect(m['reapply']?.ok).toBe(false);
+    expect(m['staleApply']?.ok).toBe(false);
+    expect(m['staleApply']?.message ?? '').toMatch(/stale/i);
+    expect(m['manualApply']?.ok).toBe(false);
+    expect(m['manualApply']?.message ?? '').toMatch(/MANUAL_EDIT_DETECTED/);
+  }, 180_000);
+
+  it('reports specific MCP codes for proposal preview and apply failures', async () => {
+    const setup = await probe('proposal-mcp-matrix.ts', []);
+    expect(setup.status, setup.stderr).toBe(0);
+    const ids = setup.json as { root: string; unpreviewed: string; stale: string; manual: string };
+    const env = ['--env', `DCF_MODELS_DIR=${ids.root}`];
+    const call = async (tool: string, argsJson: string): Promise<{ code?: string; message?: string }> => {
+      const r = await probe('mcp-call.ts', ['--tool', tool, '--args', argsJson, ...env]);
+      expect(r.status, r.stderr).toBe(0);
+      const raw = r.json as { content?: Array<{ text?: string }>; code?: string; message?: string };
+      const text = raw?.content?.[0]?.text;
+      if (typeof text === 'string') {
+        try {
+          return JSON.parse(text) as { code?: string; message?: string };
+        } catch {
+          // Fall through to the raw body.
+        }
+      }
+      return raw;
+    };
+    try {
+      const noPreview = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: true }));
+      expect(noPreview.code).toBe('PREVIEW_REQUIRED');
+      const stale = await call('proposal_apply', JSON.stringify({ proposalId: ids.stale, approval: true }));
+      expect(stale.code).toBe('STALE_BASE');
+      const manual = await call('proposal_apply', JSON.stringify({ proposalId: ids.manual, approval: true }));
+      expect(manual.code).toBe('MANUAL_EDIT_DETECTED');
+      const noApproval = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: false }));
+      expect(noApproval.code).toBe('APPROVAL_REQUIRED');
+      const previewed = await call('proposal_preview', JSON.stringify({ proposalId: ids.unpreviewed }));
+      expect((previewed as unknown as { status?: string }).status ?? (previewed as unknown as { finalHash?: string }).finalHash).toBeTruthy();
+      const applied = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: true, approvedBy: 'probe' }));
+      expect((applied as unknown as { code?: string }).code ?? (applied as unknown as { status?: string }).status).toBe('applied');
+    } finally {
+      await rm(ids.root, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('rejects =-prefixed proposedValue over MCP and in cell-edit conversion', async () => {
+    const mcp = await probe('mcp-call.ts', ['--tool', 'proposal_create', '--args', JSON.stringify({
+      ticker: 'TST',
+      summary: 'sneaky formula',
+      changes: [{ sheet: 'Model', cell: 'A1', proposedValue: '=SUM(A2:A3)', rationale: 'r', source: 'SEC x', accession: '0000320193-26-000001' }],
+    })]);
+    expect(mcp.status, mcp.stderr).toBe(0);
+    // The probe prints the tool result or the JSON-RPC error body verbatim.
+    const body = mcp.json as { code?: string; message?: string };
+    expect(body.code).toBe('INVALID_PROPOSAL');
+    expect(body.message ?? '').toMatch(/proposedFormula/);
+
+    const conv = await probe('to-cell-edit.ts', []);
+    expect(conv.status, conv.stderr).toBe(0);
+    expect((conv.json as { rejected: boolean }).rejected).toBe(true);
   }, 180_000);
 });
