@@ -493,7 +493,7 @@ async function cmdModelExport(tickerRaw: string | undefined, flags: GlobalFlags)
     if (!manifest) {
       let hint = `No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`;
       try {
-        const pending = getPendingCandidateView(lib, root, ticker);
+        const pending = await getPendingCandidateView(lib, root, ticker);
         if (pending) hint += ` A pending build candidate ${pending.id} exists: verify it with \`dcf model candidate-verify ${pending.id} --verification \"...\" --by <name>\`, then \`dcf model accept ${pending.id} --approve\`.`;
       } catch {
         // Legacy library without a candidates table: plain missing-model error.
@@ -585,7 +585,7 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
     console.log(`On-disk hash matches manifest: ${payload.hashMatchesManifest ? 'yes' : 'NO — possible manual edit'}`);
     console.log(`Revisions: ${revisions.length}  Proposals: ${proposals.length}`);
     try {
-      const pending = getPendingCandidateView(lib, root, ticker);
+      const pending = await getPendingCandidateView(lib, root, ticker);
       if (pending) {
         console.log(`Pending candidate: ${pending.id} status=${pending.status} hash=${pending.workbookHash} verification=${pending.payload.verification ? 'recorded' : 'missing'}`);
       }
@@ -894,7 +894,7 @@ async function cmdModelCandidate(tickerRaw: string | undefined, flags: GlobalFla
   const root = libraryRoot(flags.modelsDir);
   const lib = openLibrary(flags.modelsDir);
   try {
-    const view = getPendingCandidateView(lib, root, ticker);
+    const view = await getPendingCandidateView(lib, root, ticker);
     if (!view) {
       console.log(`No pending build candidate for ${ticker}. Stage one with \`dcf build ${ticker}\`.`);
       return;
@@ -912,7 +912,7 @@ async function cmdCandidateVerify(candidateIdRaw: string | undefined, flags: Glo
   const root = libraryRoot(flags.modelsDir);
   const lib = openLibrary(flags.modelsDir);
   try {
-    const view = recordCandidateVerification(lib, root, candidateIdRaw, flags.verification, flags.approvedBy);
+    const view = await recordCandidateVerification(lib, root, candidateIdRaw, flags.verification, flags.approvedBy);
     console.log(`Recorded AI verification for candidate ${view.id} (reviewed by ${flags.approvedBy}).`);
     console.log(`Promote with explicit human approval: \`dcf model accept ${view.id} --approve [--by <name>]\`.`);
   } finally {

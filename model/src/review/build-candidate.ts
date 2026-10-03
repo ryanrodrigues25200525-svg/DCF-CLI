@@ -13,7 +13,7 @@ import {
 } from '@/library/store';
 import { writeManifestAtomic, type ModelManifest } from '@/library/manifest';
 import { runStaticWorkbookChecks } from '@/review/review-checks';
-import { findBackendPython, findSoffice, inspectWorkbook, recalculateWorkbook } from '@/workbook/xlsx';
+import { findBackendPython, findSoffice, inspectWorkbook, recalculateWorkbook, type WorkbookInspection } from '@/workbook/xlsx';
 
 /** Route/readiness/source facts captured when a build/update runs. */
 export interface CandidateBuildMeta {
@@ -196,6 +196,10 @@ export interface CandidateView {
   workbookPath: string;
   workbookExists: boolean;
   payload: CandidatePayload;
+  /** Deterministic workbook inspection (sheets, formulas, cached errors);
+   *  null when engines are unavailable or inspection fails. This is the
+   *  machine auto-review content: numbers, formulas, and formatting faults. */
+  inspection: WorkbookInspection | null;
   accepted: {
     exists: boolean;
     hashMatchesBase: boolean;
@@ -213,20 +217,31 @@ function parsePayload(record: { payload_json: string; id: string }): CandidatePa
 }
 
 /** Pending candidate plus the accepted state it would promote onto. */
-export function getPendingCandidateView(lib: ModelLibrary, root: string, tickerRaw: string): CandidateView | null {
+export async function getPendingCandidateView(lib: ModelLibrary, root: string, tickerRaw: string): Promise<CandidateView | null> {
   const ticker = normalizeTicker(tickerRaw);
   const record = lib.getPendingCandidate(ticker);
   if (!record) return null;
   return toView(lib, root, ticker, record.id);
 }
 
-export function getCandidateViewById(lib: ModelLibrary, root: string, candidateId: string): CandidateView {
+export async function getCandidateViewById(lib: ModelLibrary, root: string, candidateId: string): Promise<CandidateView> {
   const record = lib.getCandidate(candidateId);
   if (!record) throw new Error(`Candidate not found: ${candidateId}`);
   return toView(lib, root, record.ticker, record.id);
 }
 
-function toView(lib: ModelLibrary, root: string, ticker: string, candidateId: string): CandidateView {
+async function inspectCandidateWorkbook(workbookPath: string, workbookExists: boolean): Promise<WorkbookInspection | null> {
+  if (!workbookExists) return null;
+  const python = findBackendPython();
+  if (!python) return null;
+  try {
+    return await inspectWorkbook(python, workbookPath);
+  } catch {
+    return null;
+  }
+}
+
+async function toView(lib: ModelLibrary, root: string, ticker: string, candidateId: string): Promise<CandidateView> {
   const record = lib.getCandidate(candidateId);
   if (!record) throw new Error(`Candidate not found: ${candidateId}`);
   const payload = parsePayload(record);
@@ -235,6 +250,7 @@ function toView(lib: ModelLibrary, root: string, ticker: string, candidateId: st
   const manifest = lib.getCompany(ticker);
   const checks = runStaticWorkbookChecks(currentWorkbookPath(root, ticker));
   const onDiskHash = checks.exists ? checks.sha256 : null;
+  const inspection = await inspectCandidateWorkbook(workbookPath, workbookExists);
   return {
     id: record.id,
     ticker,
@@ -244,6 +260,7 @@ function toView(lib: ModelLibrary, root: string, ticker: string, candidateId: st
     workbookPath,
     workbookExists,
     payload,
+    inspection,
     accepted: {
       exists: manifest != null,
       hashMatchesBase: payload.baseRevisionHash != null
@@ -268,6 +285,14 @@ export function formatCandidateMarkdown(view: CandidateView): string {
     ? `- Base: accepted revision \`${p.baseRevisionId ?? '(unknown)'}\` (${p.baseRevisionHash}); on-disk accepted copy ${view.accepted.hashMatchesBase ? 'matches' : 'DIFFERS — candidate is stale or the library was edited'}`
     : '- Base: none — initial build, no accepted revision exists yet');
   lines.push(`- Workbook: ${view.workbookExists ? view.workbookPath : 'MISSING — cannot accept'}`);
+  if (view.inspection) {
+    const insp = view.inspection;
+    lines.push(`- Auto-review: ${insp.sheets.length} sheets (${insp.sheets.join(', ') || 'none'}), ${insp.formulaCount} formulas, cached errors: ${insp.cachedErrorCells.length === 0 ? 'none' : insp.cachedErrorCells.slice(0, 10).join(', ')}`);
+    if (insp.hasInputRequiredSheet) lines.push(`- Auto-review: Input Required status ${insp.inputRequiredStatus ?? 'blank'}; outputs stay blank while inputs fail`);
+    lines.push(`- Auto-review: Data Review rows: ${insp.dataReviewRows}`);
+  } else {
+    lines.push('- Auto-review: workbook inspection unavailable (engines missing); review the export directly');
+  }
   lines.push(p.verification
     ? `- Verification: recorded by ${p.verification.by} at ${p.verification.at} (${p.verification.text.length} chars)`
     : '- Verification: none recorded — AI/agent review is required before approval');
@@ -288,13 +313,13 @@ export function formatCandidateMarkdown(view: CandidateView): string {
 }
 
 /** Record the AI/agent review result on a pending candidate. */
-export function recordCandidateVerification(
+export async function recordCandidateVerification(
   lib: ModelLibrary,
   root: string,
   candidateId: string,
   text: string,
   by: string,
-): CandidateView {
+): Promise<CandidateView> {
   const record = lib.getCandidate(candidateId);
   if (!record) throw new Error(`Candidate not found: ${candidateId}`);
   if (record.status !== 'pending') throw new Error(`Candidate ${candidateId} is ${record.status}; only pending candidates can be verified.`);
