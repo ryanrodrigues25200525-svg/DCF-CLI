@@ -8673,12 +8673,31 @@ print(json.dumps({
       if (build.error) throw build.error;
       const buildOutput = sanitizedOutput(`${build.stdout ?? ''}\n${build.stderr ?? ''}`);
       expect(build.status, buildOutput).toBe(0);
+      // Build gate: the initial build stages a pending candidate and publishes
+      // nothing, so the candidate must be verified and accepted first.
+      const buildCandidate = /Staged build candidate (\S+) for AAPL/.exec(buildOutput)?.[1];
+      expect(buildCandidate, buildOutput).toBeTruthy();
+      const buildReviewText = 'Live-test review of the staged AAPL initial candidate from live SEC data. Freshness matches the staged fact source. The deterministic engine route and readiness are as reported. Staging recalculated clean with zero cached formula errors. Summary: faithful build, safe to promote.';
+      const buildVerified = runLibraryCli(['model', 'candidate-verify', buildCandidate as string, '--verification', buildReviewText, '--by', 'live-suite', '--models-dir', modelsDir], home);
+      if (buildVerified.error) throw buildVerified.error;
+      expect(buildVerified.status, sanitizedOutput(`${buildVerified.stdout ?? ''}\n${buildVerified.stderr ?? ''}`)).toBe(0);
+      const buildAccepted = runLibraryCli(['model', 'accept', buildCandidate as string, '--approve', '--by', 'live-suite', '--models-dir', modelsDir], home);
+      if (buildAccepted.error) throw buildAccepted.error;
+      expect(buildAccepted.status, sanitizedOutput(`${buildAccepted.stdout ?? ''}\n${buildAccepted.stderr ?? ''}`)).toBe(0);
 
       const update = runLibraryCli(['model', 'update', 'AAPL', '--models-dir', modelsDir], home);
       if (update.error) throw update.error;
       const updateOutput = sanitizedOutput(`${update.stdout ?? ''}\n${update.stderr ?? ''}`);
       expect(update.status, updateOutput).toBe(0);
       expect(updateOutput).toContain('route=unlevered_dcf');
+      const updateCandidate = /Staged build candidate (\S+) for AAPL/.exec(updateOutput)?.[1];
+      expect(updateCandidate, updateOutput).toBeTruthy();
+      const updateVerified = runLibraryCli(['model', 'candidate-verify', updateCandidate as string, '--verification', buildReviewText, '--by', 'live-suite', '--models-dir', modelsDir], home);
+      if (updateVerified.error) throw updateVerified.error;
+      expect(updateVerified.status, sanitizedOutput(`${updateVerified.stdout ?? ''}\n${updateVerified.stderr ?? ''}`)).toBe(0);
+      const updateAccepted = runLibraryCli(['model', 'accept', updateCandidate as string, '--approve', '--by', 'live-suite', '--models-dir', modelsDir], home);
+      if (updateAccepted.error) throw updateAccepted.error;
+      expect(updateAccepted.status, sanitizedOutput(`${updateAccepted.stdout ?? ''}\n${updateAccepted.stderr ?? ''}`)).toBe(0);
 
       const exported = runLibraryCli(['model', 'export', 'AAPL', '--models-dir', modelsDir], home);
       if (exported.error) throw exported.error;
