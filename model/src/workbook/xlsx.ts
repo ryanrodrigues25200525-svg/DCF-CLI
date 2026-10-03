@@ -44,6 +44,35 @@ function isExecutableFile(p: string): boolean {
   }
 }
 
+/** Executable names to try for a base command, honoring PATHEXT on Windows. */
+function executableNames(base: string): string[] {
+  if (process.platform !== "win32") return [base];
+  const extensions = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+  return Array.from(new Set([base, ...extensions.map((ext) => `${base}${ext}`)]));
+}
+
+/**
+ * Resolve `base` on `PATH` without shelling out to `which`/`where`.
+ * Returns the first executable candidate, or null when PATH is unset or empty.
+ */
+function findExecutableOnPath(base: string): string | null {
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return null;
+  const separator = process.platform === "win32" ? ";" : ":";
+  for (const dir of pathEnv.split(separator)) {
+    if (!dir) continue;
+    for (const name of executableNames(base)) {
+      const candidate = path.join(dir, name);
+      if (existsSync(candidate) && isExecutableFile(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 function canImportOpenpyxl(python: string): boolean {
   try {
     const r = spawnSync(python, ["-c", "import openpyxl"], {
@@ -85,22 +114,38 @@ function findRepoVenvPython(): string | null {
 }
 
 /**
- * backend/.venv/bin/python (or Scripts/python.exe on win32),
- * else python3 if openpyxl is importable, else null.
+ * backend/.venv/bin/python (or Scripts/python.exe on win32), else the first
+ * openpyxl-capable PATH interpreter in order `python3`, `python` on POSIX and
+ * `python`, `python3`, `py` on Windows.
  */
 export function findBackendPython(): string | null {
   const venv = findRepoVenvPython();
   if (venv !== null && canImportOpenpyxl(venv)) return venv;
-  // venv binary exists but openpyxl missing -> still fall through to python3
-  if (canImportOpenpyxl("python3")) return "python3";
+  // venv binary exists but openpyxl missing -> fall through to a PATH interpreter.
+  const candidates = process.platform === "win32"
+    ? ["python", "python3", "py"]
+    : ["python3", "python"];
+  for (const candidate of candidates) {
+    if (canImportOpenpyxl(candidate)) return candidate;
+  }
   return null;
 }
 
-function sofficeWorks(candidate: string): boolean {
+/**
+ * Bounded version-probe timeout for a CLI `--version` check. A working
+ * LibreOffice answers in well under a second; anything slower is a broken
+ * headless binary, so fail fast instead of blocking CLI startup. The
+ * SIGKILL kill signal guarantees the probe returns even when the candidate
+ * ignores SIGTERM or leaves a hung child process behind.
+ */
+export const SOFFICE_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+function sofficeWorks(candidate: string, timeoutMs: number): boolean {
   try {
     const r = spawnSync(candidate, ['--headless', '--version'], {
       stdio: 'ignore',
-      timeout: 60_000,
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
     });
     return r.status === 0;
   } catch {
@@ -108,38 +153,43 @@ function sofficeWorks(candidate: string): boolean {
   }
 }
 
-/** Uses `SOFFICE_PATH`, a POSIX `PATH` lookup, then common install paths. */
-export function findSoffice(): string | null {
-  if (process.platform === 'win32') {
-    const candidates = [
-      process.env.SOFFICE_PATH ?? '',
-      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-    ].filter(Boolean);
-    for (const c of candidates) {
-      if (existsSync(c) && sofficeWorks(c)) return c;
-    }
-    return null;
+/**
+ * Uses `SOFFICE_PATH`, a `PATH` lookup, then common install paths.
+ * `probeTimeoutMs` defaults to SOFFICE_VERSION_PROBE_TIMEOUT_MS and exists so
+ * tests can exercise discovery with a short, deterministic probe budget.
+ */
+export function findSoffice(options?: { probeTimeoutMs?: number }): string | null {
+  const probeTimeoutMs = options?.probeTimeoutMs ?? SOFFICE_VERSION_PROBE_TIMEOUT_MS;
+  if (typeof probeTimeoutMs !== "number" || !Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
+    throw new Error("findSoffice: probeTimeoutMs must be a positive number");
   }
   const candidates: string[] = [];
-  if (process.env.SOFFICE_PATH?.trim()) candidates.push(process.env.SOFFICE_PATH.trim());
-  try {
-    const r = spawnSync('which', ['soffice'], {encoding: 'utf8', timeout: 15_000});
-    if (r.status === 0 && typeof r.stdout === 'string') {
-      const p = r.stdout.trim().split('\n')[0]?.trim();
-      if (p) candidates.push(p);
-    }
-  } catch {
-    // ignore
+  const explicit = process.env.SOFFICE_PATH?.trim();
+  if (explicit) candidates.push(explicit);
+  const onPath = findExecutableOnPath("soffice");
+  if (onPath) candidates.push(onPath);
+  if (process.platform === "win32") {
+    candidates.push(
+      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+      "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",
+    );
+  } else {
+    candidates.push(
+      "/opt/homebrew/bin/soffice",
+      "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+      "/usr/bin/soffice",
+      "/usr/local/bin/soffice",
+    );
   }
-  candidates.push(
-    '/opt/homebrew/bin/soffice',
-    '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-    '/usr/bin/soffice',
-    '/usr/local/bin/soffice',
-  );
+  const seen = new Set<string>();
   for (const c of candidates) {
-    if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c)) return c;
+    // Deduplicate exact executable candidates before probing: SOFFICE_PATH, a
+    // PATH hit, and an install path often resolve to the same binary, and each
+    // probe of a hung candidate costs a full timeout.
+    const key = path.resolve(c);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c, probeTimeoutMs)) return c;
   }
   return null;
 }
