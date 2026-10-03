@@ -33,7 +33,7 @@
 
 ### Task 1: Fix the confirmed CLI issues
 
-**Files:** `model/src/cli.ts`, `model/src/cli.live.test.ts`
+**Files:** `model/src/cli.ts`, `model/src/cli.live.test.ts`, `model/src/review/proposal.ts`, `model/src/review/apply-service.ts`
 
 - [ ] Add live CLI regressions for accurate workbook-open status, typed proposal values (boolean, exponent, explicit blank), and `dcf mcp --help`/invalid arguments.
 - [ ] Run the focused live regressions and confirm each exposes the current behavior.

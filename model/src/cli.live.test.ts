@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8878,6 +8878,36 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       expect(failedOutput).not.toContain('Opened ');
       expect(failedOutput).toMatch(/not confirmed open|Could not open/);
 
+      // A delayed nonzero exit must fail too: success is the opener's clean
+      // exit, not merely surviving the wait window.
+      const delayedFail = join(home, 'delayed-fail.sh');
+      await writeFile(delayedFail, '#!/bin/sh\nsleep 3\nexit 1\n');
+      await chmod(delayedFail, 0o755);
+      const slowFail = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {DCF_OPEN_COMMAND: delayedFail});
+      if (slowFail.error) throw slowFail.error;
+      const slowFailOutput = sanitizedOutput(`${slowFail.stdout ?? ''}\n${slowFail.stderr ?? ''}`);
+      expect(slowFail.status, slowFailOutput).not.toBe(0);
+      expect(slowFailOutput).not.toContain('Opened ');
+      expect(slowFailOutput).toMatch(/not confirmed open|Could not open/);
+
+      // A delayed clean exit still reports success: the CLI waits for the
+      // opener instead of failing fast.
+      const delayedOk = join(home, 'delayed-ok.sh');
+      await writeFile(delayedOk, '#!/bin/sh\nsleep 3\nexit 0\n');
+      await chmod(delayedOk, 0o755);
+      const slowOk = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {DCF_OPEN_COMMAND: delayedOk});
+      if (slowOk.error) throw slowOk.error;
+      const slowOkOutput = sanitizedOutput(`${slowOk.stdout ?? ''}\n${slowOk.stderr ?? ''}`);
+      expect(slowOk.status, slowOkOutput).toBe(0);
+      expect(slowOkOutput).toContain(`Opened ${workbookPath}`);
+
+      // The test opener override is documented in the top-level usage.
+      const topHelp = runLibraryCli(['--help'], home);
+      if (topHelp.error) throw topHelp.error;
+      const topHelpOutput = sanitizedOutput(`${topHelp.stdout ?? ''}\n${topHelp.stderr ?? ''}`);
+      expect(topHelp.status, topHelpOutput).toBe(0);
+      expect(topHelpOutput).toContain('DCF_OPEN_COMMAND');
+
       // The normal desktop path still reports success for a clean launch.
       const opened = runLibraryCli(['model', 'open', 'TST', '--models-dir', modelsDir], home, {DCF_OPEN_COMMAND: 'true'});
       if (opened.error) throw opened.error;
@@ -8998,6 +9028,12 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       const extraOutput = sanitizedOutput(`${extra.stdout ?? ''}\n${extra.stderr ?? ''}`);
       expect(extra.status, extraOutput).not.toBe(0);
       expect(extraOutput).toMatch(/Unexpected|Usage/);
+
+      const shortHelp = runLibraryCli(['mcp', '-h'], home);
+      if (shortHelp.error) throw shortHelp.error;
+      const shortHelpOutput = sanitizedOutput(`${shortHelp.stdout ?? ''}\n${shortHelp.stderr ?? ''}`);
+      expect(shortHelp.status, shortHelpOutput).toBe(0);
+      expect(shortHelpOutput).toContain('dcf mcp');
     } finally {
       await rm(home, {recursive: true, force: true});
     }
@@ -9013,10 +9049,42 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 15_000));
-      // Still holding the terminal: no exit, no usage error.
-      expect(child.exitCode).toBeNull();
-      expect(child.signalCode).toBeNull();
+      const server = child;
+      // A JSON-RPC initialize round-trip proves the stdio server is serving,
+      // not merely that the process has not exited yet.
+      server.stdin!.write(`${JSON.stringify({jsonrpc: '2.0', id: 1, method: 'initialize', params: {}})}\n`);
+      const response = await new Promise<Record<string, unknown>>((resolvePromise, rejectPromise) => {
+        let buffer = '';
+        const timer = setTimeout(() => rejectPromise(new Error('Timed out waiting for the MCP initialize response')), 90_000);
+        server.stdout!.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString('utf8');
+          let index: number;
+          while ((index = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, index).trim();
+            buffer = buffer.slice(index + 1);
+            if (!line) continue;
+            try {
+              const message = JSON.parse(line) as Record<string, unknown>;
+              if (message['id'] === 1) {
+                clearTimeout(timer);
+                resolvePromise(message);
+              }
+            } catch {
+              // Ignore non-JSON lines on stdout.
+            }
+          }
+        });
+        server.once('error', (error) => {
+          clearTimeout(timer);
+          rejectPromise(error);
+        });
+        server.once('exit', (code) => {
+          clearTimeout(timer);
+          rejectPromise(new Error(`MCP server exited before answering initialize (code ${code})`));
+        });
+      });
+      const result = response['result'] as Record<string, unknown> | undefined;
+      expect((result?.['serverInfo'] as Record<string, unknown> | undefined)?.['name']).toBe('dcf-model-library');
     } finally {
       if (child?.pid) {
         try {

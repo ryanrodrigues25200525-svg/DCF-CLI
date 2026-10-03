@@ -119,6 +119,7 @@ function usage(): string {
     'If no ticker is provided to the legacy command, the CLI prompts for one.',
     'Set EDGAR_IDENTITY in the environment before running build/sync commands.',
     'Set DCF_MODELS_DIR or run `dcf config models-dir --set <dir>` for the library root.',
+    'Set DCF_OPEN_COMMAND to override the desktop opener used by `model open` (used for testing).',
   ].join('\n');
 }
 
@@ -650,6 +651,9 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
   }
 }
 
+/** Bound for waiting on the desktop opener: still running at the bound fails closed. */
+const OPEN_EXIT_TIMEOUT_MS = 15_000;
+
 async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
   if (!tickerRaw) throw new CliUsageError('Usage: dcf model open <ticker>');
   const ticker = normalizeLibraryTicker(tickerRaw);
@@ -671,7 +675,13 @@ async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): 
   const openerArgs = openerOverride !== null || process.platform !== 'win32' ? [workbookPath] : ['/c', 'start', '""', workbookPath];
   try {
     await new Promise<void>((resolvePromise, rejectPromise) => {
-      const child = spawn(opener, openerArgs, {detached: true, stdio: 'ignore'});
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(opener, openerArgs, {detached: true, stdio: 'ignore'});
+      } catch (error) {
+        rejectPromise(error);
+        return;
+      }
       let settled = false;
       const settle = (finish: () => void): void => {
         if (settled) return;
@@ -679,21 +689,24 @@ async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): 
         clearTimeout(timer);
         finish();
       };
-      // A lingering opener means it is still running (assumed launched);
-      // an early nonzero exit means the open failed.
+      // Success is the opener's clean exit, not merely surviving the wait:
+      // a nonzero exit at any point fails, and an opener that never exits
+      // fails closed instead of being reported as opened.
       const timer = setTimeout(() => settle(() => {
         child.unref();
-        resolvePromise();
-      }), 2000);
+        rejectPromise(new Error(
+          `workbook opener did not exit within ${OPEN_EXIT_TIMEOUT_MS / 1000} seconds (${opener}); the workbook open was not confirmed`,
+        ));
+      }), OPEN_EXIT_TIMEOUT_MS);
       child.once('error', (error) => settle(() => rejectPromise(error)));
       child.once('exit', (code) => {
-        if (code !== null && code !== 0) {
-          settle(() => rejectPromise(new Error(`workbook opener exited with code ${code} (${opener}); the workbook was not confirmed open`)));
-        } else {
+        if (code === 0) {
           settle(() => {
             child.unref();
             resolvePromise();
           });
+        } else {
+          settle(() => rejectPromise(new Error(`workbook opener exited with code ${code} (${opener}); the workbook was not confirmed open`)));
         }
       });
       child.once('spawn', () => {
@@ -1038,7 +1051,7 @@ async function cmdConfigModelsDir(flags: GlobalFlags): Promise<void> {
 async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
   const [command, subcommand, ...rest] = argv;
   if (!command || !LIBRARY_COMMANDS.has(command)) return false;
-  const flags = parseLibraryArgs(command === 'mcp' ? (subcommand === undefined ? rest : [subcommand, ...rest]) : rest);
+  const flags = parseLibraryArgs(command === 'mcp' ? [] : rest);
   const args = flags.positionals;
   const sub = command === 'mcp' ? undefined : subcommand;
   switch (command) {
@@ -1072,25 +1085,16 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       await cmdConfigModelsDir(flags);
       return true;
     case 'mcp': {
-      // The stdio server takes no arguments: --help/-h is handled by the
-      // usage trap in main(), anything else is rejected before startup so a
-      // typo never holds the terminal in the MCP request loop.
-      const unexpected: string[] = [...flags.positionals];
-      if (flags.modelsDir !== undefined) unexpected.push('--models-dir');
-      if (flags.json) unexpected.push('--json');
-      if (flags.force) unexpected.push('--force');
-      if (flags.approve) unexpected.push('--approve');
-      if (flags.approvedBy !== undefined) unexpected.push('--by');
-      if (flags.output !== undefined) unexpected.push('--output');
-      if (flags.summary !== undefined) unexpected.push('--summary');
-      if (flags.changes.length > 0) unexpected.push('--change');
-      if (flags.accession !== undefined) unexpected.push('--accession');
-      if (flags.filed !== undefined) unexpected.push('--filed');
-      if (flags.set !== undefined) unexpected.push('--set');
-      if (flags.reason !== undefined) unexpected.push('--reason');
-      if (flags.interval !== undefined) unexpected.push('--interval');
-      if (unexpected.length > 0) {
-        throw new CliUsageError(`Usage: dcf mcp (takes no arguments). Unexpected: ${unexpected.join(' ')}`);
+      // Raw-argv gate: the stdio server takes no arguments. Exactly --help/-h
+      // prints usage; anything else is rejected before startup so a typo never
+      // holds the terminal in the MCP request loop.
+      const tail = subcommand === undefined ? rest : [subcommand, ...rest];
+      if (tail.length === 1 && (tail[0] === '--help' || tail[0] === '-h')) {
+        console.log(usage());
+        return true;
+      }
+      if (tail.length > 0) {
+        throw new CliUsageError(`Usage: dcf mcp (takes no arguments). Unexpected: ${tail.join(' ')}`);
       }
       const {startMcpServer} = await import('@/mcp/server');
       await startMcpServer();
