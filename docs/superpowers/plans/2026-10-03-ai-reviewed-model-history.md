@@ -56,32 +56,57 @@
 
 **Files:** `model/src/library/types.ts`, `model/src/library/store.ts`, `model/src/workbook/xlsx.ts`, `model/src/cli.ts`, `model/src/mcp/server.ts`, `model/src/cli.live.test.ts`.
 
-- [ ] Add revision metadata for build event, fact accession/period, latest detected filing (form/accession/filed/report date), route/readiness, and build timestamp; migrate existing databases safely.
-- [ ] Add a shared read-only comparison service for formula/value cell changes plus source and model-readiness deltas.
-- [ ] Add `dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json]` and MCP revision-list/compare tools that return the same data.
-- [ ] Add live tests that build two revisions in an isolated library, compare them, and verify the old revision and accepted workbook remain readable.
+- [x] Add revision metadata for build event, fact accession/period, latest detected filing (form/accession/filed/report date), route/readiness, and build timestamp; migrate existing databases safely.
+- [x] Add a shared read-only comparison service for formula/value cell changes plus source and model-readiness deltas.
+- [x] Add `dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json]` and MCP revision-list/compare tools that return the same data.
+- [x] Add live tests that build two revisions in an isolated library, compare them, and verify the old revision and accepted workbook remain readable.
 
 ### Task 4: Create a validated AI candidate and change log
 
-**Files:** `model/src/review/apply-service.ts`, `model/src/cli.ts`, `model/src/mcp/server.ts`, `backend/app/services/excel_export/` workbook edit helper, `model/src/cli.live.test.ts`.
+**Files:** `model/src/review/apply-service.ts`, `model/src/review/proposal.ts`, `model/src/cli.ts`, `model/src/mcp/server.ts`, `model/src/workbook/xlsx.ts`, `model/src/cli.live.test.ts`.
 
-- [ ] Add a proposal-preview operation that applies the structured AI proposal to a separate candidate copy and adds an `AI Change Log` sheet with the AI summary, each changed sheet/cell, prior/proposed value or formula, rationale, source accession, and validation result.
-- [ ] Recalculate and validate the candidate before returning it; any error leaves the accepted workbook and revision metadata untouched.
-- [ ] Keep promotion behind the existing explicit approval command/tool; rejection leaves the accepted workbook unchanged.
-- [ ] Add live tests for candidate formula/value edits, the change-log sheet, validation failure, rejection, and approved promotion.
+- [x] Add `dcf model preview <proposal-id>` and MCP `proposal_preview`; apply the structured AI proposal to a separate candidate copy and add an `AI Change Log` sheet with the AI summary, each changed sheet/cell, prior/proposed value or formula, rationale, source accession, and validation result.
+- [x] Allow a review-only proposal with zero cell edits when it includes an AI summary and verification result; its `AI Change Log` says that no cell changes were recommended.
+- [x] Recalculate and validate the candidate before returning it; any error leaves the accepted workbook and revision metadata untouched.
+- [x] Keep candidate promotion behind the existing explicit approval command/tool; rejection leaves the accepted workbook unchanged.
+- [x] Add live tests for candidate formula/value edits, review-only candidates, the change-log sheet, validation failure, rejection, and approved promotion.
 
 ### Task 5: Make AI review repeatable and provide sample workbooks
 
 **Files:** `.superpowers/skills/dcf-model-review/SKILL.md`, `README.md`, `docs/MODEL_LIBRARY.md`, `docs/MODEL_COVERAGE.md`, `BUGS.md`, `.gitignore`, `examples/`.
 
-- [ ] Update the review workflow so every new build/update is inspected, compared with its prior revision when one exists, and summarized by ChatGPT/Codex using stored source references before any proposal is promoted.
+- [x] Update the review workflow so every new build/update is inspected, compared with its prior revision when one exists, and summarized by ChatGPT/Codex using stored source references before any proposal is promoted.
 - [ ] Generate dated live examples for AAPL, JPM, XOM, and input-required DUK; record build date, model route, source accession, and mapped period in `examples/README.md`.
 - [ ] Whitelist only `examples/*.xlsx` in `.gitignore`; keep model-library databases, identity strings, and user workbooks out of the repository.
-- [ ] Update issue links/status and document the current comparison command, AI change sheet, approval workflow, and route freshness limits.
+- [x] Update issue links/status and document the current comparison command, AI change sheet, approval workflow, and route freshness limits.
 
 ### Task 6: Final live verification and PR
 
 - [ ] Run the full live model suite, live filing-agent check, typecheck, security scan, and workbook recalculation/inspection on representative ready and input-required examples.
 - [ ] Verify formula counts, cached formula errors, source references, candidate/accepted hashes, and editable formula behavior.
 - [ ] Review the complete diff and `git diff --check`; report Windows/macOS-specific checks that could not be run locally.
-- [ ] Open one PR linked to Issues #1–#8; do not merge it automatically.
+- [ ] Open one PR linked to Issues #1–#16; do not merge it automatically.
+
+---
+
+## Current status and blocker (3 October 2026)
+
+Work is in the uncommitted working tree on `feature/ai-reviewed-model-history`. Issues #1–#16 exist on GitHub, all sixteen fixes are implemented in this tree, and no PR is open. Checkboxes above mark only the code, docs, and test-authoring steps whose files exist; full live test/recalculation, dated examples/whitelist, complete diff review, and PR creation remain unchecked.
+
+**Passing checks (verified in this tree):**
+
+- Typecheck.
+- Security scan.
+- `git diff --check`.
+- Targeted hung-LibreOffice and duplicate-candidate platform regressions.
+- Live filing-agent accession check for AAPL.
+
+**Not run / not produced (must not be reported as passing):**
+
+- `npm run test:model` returns 9 platform tests passed and 1 failed: the installed LibreOffice app hangs on `--headless --version`.
+- The CLI live suite aborts at module import, so its tests — including the Task 3 build/compare cases — did not run.
+- Dated AAPL/JPM/XOM/DUK example workbooks are not generated; no `examples/` directory or `examples/*.xlsx` whitelist exists.
+- Workbook recalculation/inspection on representative ready and input-required examples is not re-run.
+- Complete diff review and PR creation are not done; Windows-only behavior is unverified.
+
+**Blocker:** LibreOffice is installed but headless startup hangs, which blocks the full live suite and candidate recalculation verification. This plan is not complete, and the models are not claimed to be perfect or investment-banking-grade.

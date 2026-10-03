@@ -41,9 +41,8 @@ type McpErr = { code: string; message: string };
 const SERVER_VERSION = '2.0.0';
 const PREVIEW_LIMIT = 4000;
 const DB_CANDIDATES = ['library.db', 'models.db', 'dcf-library.db', 'dcf.db', 'index.db'];
-const PROPOSALS_DDL = `CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT,
-ticker TEXT NOT NULL, summary TEXT NOT NULL, changes_json TEXT NOT NULL, base_revision_hash TEXT,
-status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT NOT NULL, decided_at TEXT, approved_by TEXT)`;
+const PROPOSALS_DDL = `CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY,
+ticker TEXT, base_revision_hash TEXT, status TEXT, created_at TEXT, payload_json TEXT)`;
 
 /* ---------- models-dir resolution (reuses library config when present) ---------- */
 function fallbackModelsDir(): string {
@@ -95,6 +94,16 @@ function tableColumns(db: DatabaseLike, table: string): string[] {
     return db.prepare('SELECT name FROM pragma_table_info(?)').all(table)
       .map((r) => String(r['name']));
   } catch { return []; }
+}
+
+/** Whether `table` exists in the library DB open read-only (null when the DB cannot be read; creates nothing). */
+function libraryTableExists(modelsDir: string, table: string): boolean | null {
+  const db = openDb(modelsDir, true);
+  if (!db) return null;
+  try {
+    return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").all(table).length > 0;
+  } catch { return null; }
+  finally { try { db.close(); } catch { /* ignore */ } }
 }
 
 /** Case-insensitive lookup so minor schema renames never crash the server. */
@@ -420,19 +429,40 @@ async function toolSourceSnapshot(args: Row): Promise<unknown> {
   };
 }
 
-function validateChanges(changes: unknown): Row[] {
-  if (!Array.isArray(changes) || changes.length === 0) throw err('INVALID_PROPOSAL', 'changes must be a non-empty array');
+function validateChanges(changes: unknown, opts?: { verification?: unknown }): Row[] {
+  if (!Array.isArray(changes)) throw err('INVALID_PROPOSAL', 'changes must be an array');
+  if (changes.length === 0) {
+    // Review-only proposals carry no cell edits; they must still carry a
+    // non-empty AI summary (checked by the caller) and verification result.
+    const verification = opts?.verification;
+    if (typeof verification !== 'string' || !verification.trim()) {
+      throw err('INVALID_PROPOSAL', 'changes is empty: review-only proposals need a non-empty verification result');
+    }
+    return [];
+  }
+  const seen = new Set<string>();
   return (changes as Row[]).map((ch, i) => {
     const missing = ['sheet', 'cell', 'rationale', 'source', 'accession']
       .filter((f) => typeof ch[f] !== 'string' || !(ch[f] as string).trim());
-    const hasValue = ch['proposedValue'] !== undefined && ch['proposedValue'] !== null;
+    // Mirror the CLI exactly-one rule: an explicit null is a blank-clear
+    // value edit (not a missing value); a "=" string is a formula, never a value.
+    const hasValue = ch['proposedValue'] !== undefined;
     const hasFormula = typeof ch['proposedFormula'] === 'string' && (ch['proposedFormula'] as string).startsWith('=');
     if (!hasValue && !hasFormula) missing.push('proposedValue or proposedFormula (formula must start with "=")');
     if (hasValue && hasFormula) throw err('INVALID_PROPOSAL', `change[${i}] sets both proposedValue and proposedFormula; set exactly one`);
+    if (typeof ch['proposedValue'] === 'string' && (ch['proposedValue'] as string).startsWith('=')) {
+      throw err('INVALID_PROPOSAL', `change[${i}].proposedValue starts with "="; use proposedFormula for formula edits`);
+    }
     if (missing.length > 0) throw err('INVALID_PROPOSAL', `change[${i}] missing: ${missing.join(', ')}`);
     if (typeof ch['cell'] === 'string' && !/^[A-Z]{1,3}[1-9][0-9]{0,6}$/i.test(ch['cell'].trim())) {
       throw err('INVALID_PROPOSAL', `change[${i}].cell must be a valid Excel address (e.g. C12)`);
     }
+    if (typeof ch['accession'] === 'string' && !/^\d{10}-\d{2}-\d{6}$/.test(ch['accession'].trim())) {
+      throw err('INVALID_PROPOSAL', `change[${i}].accession must be a filed SEC accession (NNNNNNNNNN-NN-NNNNNN)`);
+    }
+    const key = `${String(ch['sheet']).toUpperCase()}!${String(ch['cell']).toUpperCase()}`;
+    if (seen.has(key)) throw err('INVALID_PROPOSAL', `change[${i}] duplicates ${key}; merge it into a single change`);
+    seen.add(key);
     return ch;
   });
 }
@@ -464,7 +494,12 @@ function newTextId(prefix: string): string {
 async function toolProposalCreate(args: Row): Promise<unknown> {
   const ticker = normTicker(args['ticker']);
   if (typeof args['summary'] !== 'string' || !args['summary'].trim()) throw err('INVALID_PROPOSAL', 'summary is required');
-  const changes = validateChanges(args['changes']);
+  const verification = typeof args['verification'] === 'string' && args['verification'].trim()
+    ? args['verification'].trim() : undefined;
+  const reviewAccession = typeof args['accession'] === 'string' && args['accession'].trim()
+    ? args['accession'].trim() : undefined;
+  const changes = validateChanges(args['changes'], {verification});
+  if (changes.length === 0 && typeof args['summary'] !== 'string') throw err('INVALID_PROPOSAL', 'summary is required');
   const modelsDir = await resolveModelsDir();
   // Base revision: explicit value or the accepted manifest hash; refuse stale bases.
   const manifest = readManifestFile(modelsDir, ticker);
@@ -502,25 +537,44 @@ async function toolProposalCreate(args: Row): Promise<unknown> {
       throw err('STALE_ACCESSION', `change[${i}] cites unknown accession ${String(changeAccession)}; run filings_sync for ${ticker} first`);
     }
   }
-  // Capture current literals/formulas BEFORE approval so review shows priors.
-  let enriched = changes;
-  try {
-    const mod = await import('../review/apply-service.js') as {
-      captureChangePriors(r: string, t: string, c: Array<{ sheet: string; cell: string }>): Promise<Array<{
-        sheet: string; cell: string; priorValue: unknown; priorFormula: string | null;
-      }>>;
-    };
-    const priors = await mod.captureChangePriors(modelsDir, ticker, changes.map((c) => ({
-      sheet: String(c['sheet']), cell: String(c['cell']),
-    })));
-    enriched = changes.map((c, i) => ({
-      ...c,
-      priorValue: priors[i]?.priorValue ?? null,
-      priorFormula: priors[i]?.priorFormula ?? null,
-    }));
-  } catch (e) {
-    throw err('PRIOR_CAPTURE_FAILED', e instanceof Error ? e.message : String(e));
+  // Review-only filing context must also be a known source for this ticker.
+  if (changes.length === 0) {
+    if (reviewAccession !== undefined && !knownAccessions.has(reviewAccession)) {
+      throw err('STALE_ACCESSION', `accession cites unknown accession ${reviewAccession}; run filings_sync for ${ticker} first`);
+    }
+    if (reviewAccession !== undefined && !/^\d{10}-\d{2}-\d{6}$/.test(reviewAccession)) {
+      throw err('INVALID_PROPOSAL', 'accession must be a filed SEC accession (NNNNNNNNNN-NN-NNNNNN)');
+    }
   }
+  // Capture current literals/formulas BEFORE approval so review shows priors.
+  // Review-only proposals have no cells to capture.
+  let enriched = changes;
+  if (changes.length > 0) {
+    try {
+      const mod = await import('../review/apply-service.js') as {
+        captureChangePriors(r: string, t: string, c: Array<{ sheet: string; cell: string }>): Promise<Array<{
+          sheet: string; cell: string; priorValue: unknown; priorFormula: string | null;
+        }>>;
+      };
+      const priors = await mod.captureChangePriors(modelsDir, ticker, changes.map((c) => ({
+        sheet: String(c['sheet']), cell: String(c['cell']),
+      })));
+      enriched = changes.map((c, i) => ({
+        ...c,
+        priorValue: priors[i]?.priorValue ?? null,
+        priorFormula: priors[i]?.priorFormula ?? null,
+      }));
+    } catch (e) {
+      throw err('PRIOR_CAPTURE_FAILED', e instanceof Error ? e.message : String(e));
+    }
+  }
+  const proposalPayload = JSON.stringify({
+    summary: args['summary'],
+    changes: enriched,
+    baseRevisionHash,
+    ...(verification !== undefined ? {verification} : {}),
+    ...(reviewAccession !== undefined ? {accession: reviewAccession} : {}),
+  });
   const db = openDb(modelsDir, false);
   if (!db) throw err('LIBRARY_UNAVAILABLE', `No library database found under ${modelsDir}`);
   try {
@@ -531,7 +585,7 @@ async function toolProposalCreate(args: Row): Promise<unknown> {
     // adaptive column mapping for older databases.
     if (cols.has('id') && cols.has('ticker') && cols.has('payload_json')) {
       const id = newTextId('prop');
-      const payload = JSON.stringify({ summary: args['summary'], changes: enriched, baseRevisionHash });
+      const payload = proposalPayload;
       const useCols = ['id', 'ticker', 'payload_json'];
       const useVals: unknown[] = [id, ticker, payload];
       if (cols.has('base_revision_hash')) { useCols.push('base_revision_hash'); useVals.push(baseRevisionHash); }
@@ -547,7 +601,7 @@ async function toolProposalCreate(args: Row): Promise<unknown> {
       [col('ticker', 'symbol'), ticker],
       [col('summary'), String(args['summary'])],
       [col('changes_json', 'changesJson', 'changes', 'payload_json', 'payload'),
-        JSON.stringify({ summary: args['summary'], changes: enriched, baseRevisionHash })],
+        proposalPayload],
       [col('base_revision_hash', 'baseRevisionHash', 'base_revision'), baseRevisionHash],
       [col('status'), 'proposed'],
       [col('created_at', 'createdAt'), new Date().toISOString()],
@@ -559,6 +613,38 @@ async function toolProposalCreate(args: Row): Promise<unknown> {
     ).run(...use.map((p) => p[1]));
     return { proposalId: Number(result.lastInsertRowid), status: 'proposed' };
   } finally { try { db.close(); } catch { /* ignore */ } }
+}
+
+/**
+ * Map a shared apply-service error message to a stable MCP error code. Preview
+ * and apply deliberately share this mapping so the same failure category never
+ * reports a different code in each tool:
+ *  - MANUAL_EDIT_DETECTED  the accepted workbook diverged from the manifest
+ *  - STALE_ACCESSION       a cited filing accession is not a stored source
+ *  - PREVIEW_REQUIRED      no usable stored candidate: re-run proposal_preview
+ *  - STALE_BASE            the proposal was drafted against an older base
+ *  - ENGINE_UNAVAILABLE    openpyxl/LibreOffice is needed but missing
+ *  - INVALID_PROPOSAL      missing/unknown/terminal-status/malformed proposal
+ *  - fallback              PREVIEW_FAILED or APPLY_FAILED for the caller
+ */
+function classifyProposalFailure(message: string, fallback: 'PREVIEW_FAILED' | 'APPLY_FAILED'): McpErr {
+  if (/MANUAL_EDIT_DETECTED/.test(message)) return err('MANUAL_EDIT_DETECTED', message);
+  if (/unknown accession|cites unknown accession/.test(message)) return err('STALE_ACCESSION', message);
+  // A stored candidate is missing or no longer matches the accepted base, the
+  // current draft, or its recorded bytes: the caller must re-run preview.
+  if (
+    /Candidate is stale|no previewed candidate|previewed against|changed since (its )?preview|Candidate path mismatch|Candidate (workbook|re-validation)|changed before promotion|changed during promotion|changed while the preview was starting|(?:re-)?run .?dcf model preview/.test(message)
+  ) {
+    return err('PREVIEW_REQUIRED', message);
+  }
+  if (/Proposal is stale|drafted against/.test(message)) return err('STALE_BASE', message);
+  if (/No Python with openpyxl|LibreOffice|soffice/.test(message)) return err('ENGINE_UNAVAILABLE', message);
+  if (
+    /Proposal not found|already applied|was rejected|cannot be applied|cannot be previewed|has status|unreadable payload|Proposal invalid|Duplicate edit|needs proposedValue|unsupported proposed value|non-finite proposed number|proposedFormula must start|no base revision/.test(message)
+  ) {
+    return err('INVALID_PROPOSAL', message);
+  }
+  return err(fallback, message);
 }
 
 async function toolProposalApply(args: Row): Promise<unknown> {
@@ -596,7 +682,72 @@ async function toolProposalApply(args: Row): Promise<unknown> {
       appliedCells: applied.applied.map((e) => `${e.sheet}!${e.cell}`),
     };
   } catch (e) {
-    throw err('APPLY_FAILED', e instanceof Error ? e.message : String(e));
+    if (isErr(e)) throw e;
+    throw classifyProposalFailure(e instanceof Error ? e.message : String(e), 'APPLY_FAILED');
+  }
+}
+
+/** Human-readable literal for an applied edit field (null/undefined => blank). */
+function previewLiteral(value: unknown): string {
+  return value === null || value === undefined ? '(blank)' : String(value);
+}
+
+async function toolProposalPreview(args: Row): Promise<unknown> {
+  const raw = args['proposalId'];
+  const proposalId: string | number = typeof raw === 'number' && Number.isInteger(raw) ? raw
+    : typeof raw === 'string' && raw.trim().length > 0 ? raw.trim()
+    : Number.NaN;
+  if (typeof proposalId === 'number' && !Number.isFinite(proposalId)) {
+    throw err('INVALID_PROPOSAL', 'proposalId is required');
+  }
+  const modelsDir = await resolveModelsDir();
+  // Read-only toward the accepted workbook: builds the validated candidate
+  // copy through the SAME shared service as `dcf model preview`.
+  try {
+    const mod = await import('../review/apply-service.js') as {
+      previewProposal(root: string, id: string): Promise<{
+        proposalId: unknown; ticker: string; baseHash: string; candidatePath: string;
+        candidateHash: string; validationSummary: string; inspectionMarkdown: string;
+        applied: Array<{
+          sheet: string; cell: string;
+          value?: string | number | boolean | null;
+          formula?: string;
+          priorValue: string | number | boolean | null;
+          priorFormula: string | null;
+        }>;
+      }>;
+    };
+    const previewed = await mod.previewProposal(modelsDir, String(proposalId));
+    return {
+      proposalId: previewed.proposalId,
+      status: 'proposed',
+      ticker: previewed.ticker,
+      baseHash: previewed.baseHash,
+      candidatePath: previewed.candidatePath,
+      candidateHash: previewed.candidateHash,
+      validationSummary: previewed.validationSummary,
+      // Deterministic inspection report (same renderer as the CLI preview).
+      inspectionMarkdown: previewed.inspectionMarkdown,
+      // Compact address list for parity with the CLI/tests...
+      previewedCells: previewed.applied.map((e) => `${e.sheet}!${e.cell}`),
+      // ...plus every applied cell's prior/proposed literal or formula so the
+      // AI/human can review the candidate without opening the workbook.
+      appliedCells: previewed.applied.map((e) => ({
+        sheet: e.sheet,
+        cell: e.cell,
+        prior: e.priorFormula ?? previewLiteral(e.priorValue),
+        proposed: e.formula ?? previewLiteral(e.value),
+        priorValue: e.priorValue,
+        priorFormula: e.priorFormula,
+        proposedValue: e.formula !== undefined ? null : (e.value ?? null),
+        proposedFormula: e.formula ?? null,
+        isFormula: e.formula !== undefined,
+      })),
+      note: 'Preview only — the accepted workbook is unchanged. Promote with proposal_apply approval=true.',
+    };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    throw classifyProposalFailure(e instanceof Error ? e.message : String(e), 'PREVIEW_FAILED');
   }
 }
 
@@ -657,6 +808,9 @@ async function toolRevisionsList(args: Row): Promise<unknown> {
   if (!(await libraryDbFound(modelsDir))) return {ticker, total: 0, offset: 0, limit: 20, revisions: []};
   const offset = pagingInt(args['offset'], 'offset', 0, 1000000, 0);
   const limit = pagingInt(args['limit'], 'limit', 1, 100, 20);
+  // A very old library can carry a companies table without a revisions table.
+  // Serve an empty page; neither this probe nor the list may create or migrate it.
+  if (libraryTableExists(modelsDir, 'revisions') === false) return {ticker, total: 0, offset, limit, revisions: []};
   try {
     // True read-only: no directory creation, no schema migration.
     return mod.listRevisionSummaries(modelsDir, ticker, {offset, limit, readOnly: true});
@@ -682,7 +836,7 @@ async function toolModelCompare(args: Row): Promise<unknown> {
     if (isErr(e)) throw e;
     const message = e instanceof Error ? e.message : String(e);
     if (/No model found|No revisions found/.test(message)) throw err('MODEL_NOT_FOUND', message);
-    if (/matches no revision|matches \d+ revisions|Revision file.*missing/i.test(message)) {
+    if (/matches no revision|matches \d+ revisions|Revision file.*missing|recorded hash/i.test(message)) {
       throw err('INVALID_REVISION', message);
     }
     if (/offset|limit/.test(message)) throw err('INVALID_PAGING', message);
@@ -734,13 +888,19 @@ const TOOLS: ToolDef[] = [
     }, required: ['ticker', 'refs'], additionalProperties: false } },
   { name: 'filings_sync', description: 'Fetch latest filing via the live backend, store the normalized snapshot, update watch status. Never writes workbooks.',
     inputSchema: { type: 'object', properties: { ...tickerProp }, required: ['ticker'], additionalProperties: false } },
-  { name: 'proposal_create', description: 'Insert a validated change proposal with status proposed.',
+  { name: 'proposal_create', description: 'Insert a validated change proposal with status proposed. Pass changes=[] with verification for a review-only proposal.',
     inputSchema: { type: 'object', properties: {
       ...tickerProp,
       summary: { type: 'string' },
       changes: { type: 'array', items: changeSchema },
+      verification: { type: 'string', description: 'AI verification result (required when changes is empty)' },
+      accession: { type: 'string', description: 'Filing accession giving source context to a review-only proposal' },
       baseRevisionHash: { type: 'string' },
     }, required: ['ticker', 'summary', 'changes'], additionalProperties: false } },
+  { name: 'proposal_preview', description: 'Build the validated candidate workbook for a proposal (adds an AI Change Log sheet, recalculates, validates) and return deterministic inspectionMarkdown plus each applied cell prior/proposed literal or formula. Preview only — never alters the accepted workbook.',
+    inputSchema: { type: 'object', properties: {
+      proposalId: { description: 'Proposal id (text id or integer row id)' },
+    }, required: ['proposalId'], additionalProperties: false } },
   { name: 'proposal_apply', description: 'Apply an approved proposal: edits a copy, recalculates, validates, publishes a new revision. Requires approval=true.',
     inputSchema: { type: 'object', properties: {
       proposalId: { description: 'Proposal id (text id or integer row id)' }, approval: { type: 'boolean' }, approvedBy: { type: 'string' },
@@ -755,7 +915,7 @@ const TOOLS: ToolDef[] = [
       offset: { type: 'integer', description: 'Start index within the history (newest first)' },
       limit: { type: 'integer', description: 'Revisions to return (1-100, default 20)' },
     }, required: ['ticker'], additionalProperties: false } },
-  { name: 'model_compare', description: 'Compare two revisions: formula/value cell changes plus source and model-readiness deltas. Same data as `dcf model compare`. Read-only; cell list is paged (offset/maxChanges 1-500).',
+  { name: 'model_compare', description: 'Compare two revisions: formula/value cell changes plus source and model-readiness deltas. Same data as `dcf model compare`. Read-only; cell list is paged (offset/maxChanges 1-500): hasMore/nextOffset point at the next detail page (stop when hasMore is false), truncated flags the hard collection cap.',
     inputSchema: { type: 'object', properties: {
       ...tickerProp,
       from: { type: 'string', description: 'From revision id (default: predecessor of to)' },
@@ -769,7 +929,7 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   workbook_validate: toolWorkbookValidate, source_snapshot: toolSourceSnapshot,
   workbook_read_cells: toolWorkbookReadCells, filings_sync: toolFilingsSync,
   proposal_create: toolProposalCreate, proposal_apply: toolProposalApply,
-  proposal_reject: toolProposalReject,
+  proposal_preview: toolProposalPreview, proposal_reject: toolProposalReject,
   revisions_list: toolRevisionsList, model_compare: toolModelCompare,
 };
 

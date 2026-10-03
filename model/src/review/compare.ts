@@ -27,6 +27,7 @@ import {
   diffWorkbookCells,
   findBackendPython,
   WORKBOOK_DIFF_DEFAULT_LIMIT,
+  WORKBOOK_DIFF_HARD_CAP,
   WORKBOOK_DIFF_MAX_LIMIT,
   type WorkbookCellChange,
 } from '@/workbook/xlsx';
@@ -114,7 +115,12 @@ export interface WorkbookComparison {
   addedSheets: string[];
   removedSheets: string[];
   totalChanges: number;
+  /** True when differences exceed the hard collection cap (not listable). */
   truncated: boolean;
+  /** True when another detail page is available at nextOffset. */
+  hasMore: boolean;
+  /** Offset for the next detail page, or null when the current page is last. */
+  nextOffset: number | null;
   offset: number;
   limit: number;
   changes: WorkbookCellChange[];
@@ -201,10 +207,22 @@ function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+function tryFileHash(path: string): string | null {
+  try {
+    return sha256File(path);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve the readable workbook file for a revision: the immutable archive
- * copy, falling back to current.xlsx only when its bytes match the revision
- * hash (reported via the file-source marker, never silently).
+ * copy, verified byte-for-byte against the recorded revision hash. A missing
+ * or diverged archive falls back to current.xlsx only when its bytes exactly
+ * match the recorded hash (reported via the file-source marker, never
+ * silently); otherwise comparison fails closed. Never creates or repairs
+ * archive files here — a diverged archive is evidence, not something to
+ * overwrite.
  */
 function resolveRevisionFile(
   root: string,
@@ -213,9 +231,24 @@ function resolveRevisionFile(
   currentHash: string | null,
 ): { path: string; source: 'archive' | 'current-fallback' } {
   const archived = revisionPath(root, ticker, rev.id);
-  if (existsSync(archived)) return {path: archived, source: 'archive'};
   const current = currentWorkbookPath(root, ticker);
-  if (currentHash !== null && currentHash === rev.workbook_hash && existsSync(current)) {
+  const currentMatches =
+    currentHash !== null && rev.workbook_hash !== '' && currentHash === rev.workbook_hash && existsSync(current);
+  if (existsSync(archived)) {
+    // No recorded hash to verify against (legacy row): nothing to check.
+    if (rev.workbook_hash === '') return {path: archived, source: 'archive'};
+    const archiveHash = tryFileHash(archived);
+    if (archiveHash !== null && archiveHash === rev.workbook_hash) {
+      return {path: archived, source: 'archive'};
+    }
+    if (currentMatches) {
+      return {path: current, source: 'current-fallback'};
+    }
+    throw new Error(
+      `Revision file for ${rev.id} does not match its recorded hash (${archived}; expected ${rev.workbook_hash}, found ${archiveHash ?? 'unreadable'}) and current.xlsx does not match it either; cannot compare. Restore the archive before comparing.`,
+    );
+  }
+  if (currentMatches) {
     return {path: current, source: 'current-fallback'};
   }
   throw new Error(
@@ -258,6 +291,13 @@ export function freshnessNotes(ticker: string, rev: RevisionSummary): string[] {
     notes.push(
       `${ticker} revision ${rev.id} maps facts from ${fact}${period} (filed ${rev.fact.filedDate ?? 'unknown'}); ` +
       `freshness is unconfirmed — no latest-filing metadata was captured at build time, so a newer filing may exist.`,
+    );
+  } else if (latest) {
+    const form = rev.latest.form ? `Form ${rev.latest.form} ` : '';
+    notes.push(
+      `${ticker} revision ${rev.id} stores no mapped fact accession; latest detected filing ${form}${latest} ` +
+      `(filed ${rev.latest.filedDate ?? 'unknown'}) — whether it was mapped into this workbook is unconfirmed; ` +
+      `compare shows workbook cells only for freshness.`,
     );
   } else {
     notes.push(
@@ -356,6 +396,8 @@ export async function compareRevisions(
         removedSheets: [],
         totalChanges: 0,
         truncated: false,
+        hasMore: false,
+        nextOffset: null,
         offset,
         limit,
         changes: [],
@@ -377,6 +419,8 @@ export async function compareRevisions(
         removedSheets: diff.removedSheets,
         totalChanges: diff.totalChanges,
         truncated: diff.truncated,
+        hasMore: diff.hasMore,
+        nextOffset: diff.nextOffset,
         offset: diff.offset,
         limit: diff.limit,
         changes: diff.changes,
@@ -472,7 +516,14 @@ export function formatCompareMarkdown(c: RevisionComparison): string {
     if (c.workbook.addedSheets.length > 0) lines.push(`  Added sheets: ${c.workbook.addedSheets.join(', ')}`);
     if (c.workbook.removedSheets.length > 0) lines.push(`  Removed sheets: ${c.workbook.removedSheets.join(', ')}`);
   } else {
-    lines.push(`Workbook cells: ${c.workbook.totalChanges} change(s)${c.workbook.truncated ? ' (truncated at collection cap)' : ''} showing ${c.workbook.changes.length} (offset ${c.workbook.offset}, limit ${c.workbook.limit}).`);
+    const pageNote = `showing ${c.workbook.changes.length} (offset ${c.workbook.offset}, limit ${c.workbook.limit})`;
+    if (c.workbook.truncated) {
+      lines.push(`Workbook cells: ${c.workbook.totalChanges} change(s) (truncated at collection cap ${WORKBOOK_DIFF_HARD_CAP}; differences past the cap are not listable) ${pageNote}${c.workbook.hasMore && c.workbook.nextOffset !== null ? ` — more pages available within the cap: rerun with offset ${c.workbook.nextOffset}.` : '.'}`);
+    } else if (c.workbook.hasMore && c.workbook.nextOffset !== null) {
+      lines.push(`Workbook cells: ${c.workbook.totalChanges} change(s) ${pageNote}. More changes available: rerun with offset ${c.workbook.nextOffset} (total ${c.workbook.totalChanges}).`);
+    } else {
+      lines.push(`Workbook cells: ${c.workbook.totalChanges} change(s) ${pageNote}.`);
+    }
     if (c.workbook.addedSheets.length > 0) lines.push(`  Added sheets: ${c.workbook.addedSheets.join(', ')}`);
     if (c.workbook.removedSheets.length > 0) lines.push(`  Removed sheets: ${c.workbook.removedSheets.join(', ')}`);
     for (const ch of c.workbook.changes) {

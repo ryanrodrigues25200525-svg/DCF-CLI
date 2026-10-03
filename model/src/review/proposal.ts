@@ -22,6 +22,10 @@ export interface ProposalDraft {
   summary: string;
   changes: ProposedChange[];
   createdAt: string;
+  /** AI verification result. Required (non-empty) when changes is empty. */
+  verification?: string;
+  /** Filing accession giving source context to a review-only (zero-edit) proposal. */
+  accession?: string;
 }
 
 export interface FilingRef {
@@ -52,6 +56,11 @@ function proposalContentError(change: ProposedChange): string | null {
   const hasValue = change.proposedValue !== undefined;
   const hasFormula = typeof change.proposedFormula === 'string' && change.proposedFormula !== '';
   if (hasValue && hasFormula) return 'set exactly one of proposedValue/proposedFormula';
+  // Formulas belong only in proposedFormula; a "="-prefixed proposedValue is
+  // ambiguous about the intended cell type and would bypass the formula gate.
+  if (typeof change.proposedValue === 'string' && change.proposedValue.startsWith('=')) {
+    return 'proposedValue starts with "="; use proposedFormula for formula edits';
+  }
   if (hasFormula && !(change.proposedFormula as string).startsWith('=')) {
     return 'proposedFormula must start with "="';
   }
@@ -63,6 +72,10 @@ function proposalContentError(change: ProposedChange): string | null {
  * Validate a proposal draft. Returns a list of error strings (empty = valid).
  * The source+accession requirement on every change is the no-invented-values
  * gate: a change without filed provenance is rejected.
+ *
+ * A review-only proposal (zero cell edits) is valid only with a non-empty AI
+ * summary and a non-empty verification result; its filing accession, when
+ * present, must still be a well-formed SEC accession.
  */
 export function validateProposalDraft(draft: ProposalDraft): string[] {
   const errors: string[] = [];
@@ -73,8 +86,22 @@ export function validateProposalDraft(draft: ProposalDraft): string[] {
   if (typeof draft.baseRevisionHash !== 'string' || draft.baseRevisionHash.trim() === '') {
     errors.push('baseRevisionHash is required.');
   }
-  if (!Array.isArray(draft.changes) || draft.changes.length === 0) {
-    errors.push('at least one change is required.');
+  if (!Array.isArray(draft.changes)) {
+    errors.push('changes must be an array.');
+    return errors;
+  }
+  if (draft.changes.length === 0) {
+    if (typeof draft.summary !== 'string' || draft.summary.trim() === '') {
+      errors.push('review-only proposals need a non-empty AI summary.');
+    }
+    const verification = (draft as { verification?: unknown }).verification;
+    if (typeof verification !== 'string' || verification.trim() === '') {
+      errors.push('review-only proposals with no cell edits need a non-empty verification result.');
+    }
+    const accession = (draft as { accession?: unknown }).accession;
+    if (accession !== undefined && (typeof accession !== 'string' || !ACCESSION_PATTERN.test(accession.trim()))) {
+      errors.push('accession must be a filed SEC accession (NNNNNNNNNN-NN-NNNNNN).');
+    }
     return errors;
   }
   draft.changes.forEach((change, index) => {
@@ -151,20 +178,31 @@ export function formatProposalMarkdown(draft: ProposalDraft): string {
   lines.push(`- Base revision: \`${draft.baseRevisionHash}\``);
   lines.push(`- Created: ${draft.createdAt}`);
   lines.push(`- Summary: ${draft.summary}`);
+  if (typeof draft.verification === 'string' && draft.verification.trim() !== '') {
+    lines.push(`- Verification: ${draft.verification}`);
+  }
+  if (typeof draft.accession === 'string' && draft.accession.trim() !== '') {
+    lines.push(`- Filing accession: ${draft.accession}`);
+  }
   lines.push('');
   lines.push('## Proposed changes');
   lines.push('');
-  lines.push('| # | Sheet | Cell | Prior | Proposed | Rationale | Source | Accession |');
-  lines.push('| - | ----- | ---- | ----- | -------- | --------- | ------ | --------- |');
-  draft.changes.forEach((change, index) => {
-    const prior = change.priorFormula ?? formatCellValue(change.priorValue);
-    const proposed = change.proposedFormula
-      ?? (change.proposedValue === null ? '(blank)' : formatCellValue(change.proposedValue));
-    lines.push(
-      `| ${index + 1} | ${change.sheet} | ${change.cell} | ${prior} | ${proposed} | ${change.rationale} | ${change.source} | ${change.accession} |`,
-    );
-  });
-  lines.push('');
+  if (draft.changes.length === 0) {
+    lines.push('No cell changes were recommended (review only).');
+    lines.push('');
+  } else {
+    lines.push('| # | Sheet | Cell | Prior | Proposed | Rationale | Source | Accession |');
+    lines.push('| - | ----- | ---- | ----- | -------- | --------- | ------ | --------- |');
+    draft.changes.forEach((change, index) => {
+      const prior = change.priorFormula ?? formatCellValue(change.priorValue);
+      const proposed = change.proposedFormula
+        ?? (change.proposedValue === null ? '(blank)' : formatCellValue(change.proposedValue));
+      lines.push(
+        `| ${index + 1} | ${change.sheet} | ${change.cell} | ${prior} | ${proposed} | ${change.rationale} | ${change.source} | ${change.accession} |`,
+      );
+    });
+    lines.push('');
+  }
   lines.push('## Validation checklist (all must pass before approval)');
   lines.push('');
   lines.push('- [ ] Source present: every change cites a filed SEC source with accession.');

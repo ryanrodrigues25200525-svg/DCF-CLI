@@ -8967,7 +8967,7 @@ third.save(root + '/companies/TST/revisions/rev-legacy-3.xlsx')
       const result = runLibraryCli(args, home);
       if (result.error) throw result.error;
       const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
-      return {status: result.status, output, json: JSON.parse(String(result.stdout)) as Record<string, unknown>};
+      return {status: result.status, output, json: JSON.parse(String(result.stdout).slice(String(result.stdout).indexOf('{'))) as Record<string, unknown>};
     };
     let mcpChild: ReturnType<typeof spawn> | null = null;
     try {
@@ -9134,6 +9134,50 @@ third.save(root + '/companies/TST/revisions/rev-legacy-3.xlsx')
       expect(typeof mcpCompared.summary).toBe('string');
       // MCP list/compare left the DB schema and content hash unchanged.
       expect(await liveDbHash()).toBe(dbHashBeforeMcp);
+
+      // Legacy compatibility: a copy of this live AAPL library with ONLY its
+      // revisions table dropped (companies intact) must serve an empty paged
+      // history through revisions_list, read-only, and must not create or
+      // migrate the missing table.
+      const legacyDir = join(home, 'legacy-no-revisions');
+      const legacyCopy = spawnSync(pythonPath, ['-c', String.raw`
+import shutil, sqlite3, sys
+shutil.copytree(sys.argv[1], sys.argv[2])
+db = sqlite3.connect(sys.argv[2] + '/library.db')
+db.execute('DROP TABLE revisions')
+db.commit()
+db.close()
+`, modelsDir, legacyDir], {cwd: projectRoot, encoding: 'utf8', timeout: 60_000});
+      if (legacyCopy.status !== 0) {
+        throw new Error(`Legacy library copy failed: ${sanitizedOutput(legacyCopy.stderr || legacyCopy.stdout || 'unknown error')}`);
+      }
+      const legacyDbPath = join(legacyDir, 'library.db');
+      const revisionsTablePresent = (): boolean => {
+        const probe = spawnSync(pythonPath, ['-c', String.raw`
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone()
+db.close()
+print(1 if row else 0)
+`, legacyDbPath], {cwd: projectRoot, encoding: 'utf8', timeout: 60_000});
+        if (probe.status !== 0) throw new Error('revisions table probe failed.');
+        return String(probe.stdout).trim() === '1';
+      };
+      expect(revisionsTablePresent()).toBe(false);
+      const legacyMcp = await spawnMcpTestClient(home, legacyDir);
+      try {
+        const legacyHistory = mcpResultText(await legacyMcp.send('tools/call', {
+          name: 'revisions_list', arguments: {ticker: 'AAPL', limit: 7},
+        })) as {ticker: string; total: number; offset: number; limit: number; revisions: unknown[]};
+        expect(legacyHistory.total).toBe(0);
+        expect(legacyHistory.revisions).toEqual([]);
+        expect(legacyHistory.offset).toBe(0);
+        expect(legacyHistory.limit).toBe(7);
+      } finally {
+        legacyMcp.close();
+      }
+      // The read-only call left the old schema alone.
+      expect(revisionsTablePresent()).toBe(false);
     } finally {
       if (mcpChild?.pid) {
         try {
@@ -9224,7 +9268,7 @@ print(' '.join(sorted(r[1] for r in db.execute('PRAGMA table_info(revisions)')))
       const result = runLibraryCli(args, home);
       if (result.error) throw result.error;
       const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
-      return {status: result.status, output, json: JSON.parse(String(result.stdout)) as Record<string, unknown>};
+      return {status: result.status, output, json: JSON.parse(String(result.stdout).slice(String(result.stdout).indexOf('{'))) as Record<string, unknown>};
     };
     let mcp: McpTestClient | null = null;
     let mcpDown: McpTestClient | null = null;
@@ -9312,6 +9356,273 @@ print(' '.join(sorted(r[1] for r in db.execute('PRAGMA table_info(revisions)')))
     } finally {
       mcp?.close();
       mcpDown?.close();
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 600_000);
+
+  // Live Task 3 DeepSeek review findings (confirmed) against live AAPL
+  // revisions only — no synthetic provider or scratch-built workbook. The
+  // derived paging probe below starts as a byte copy of a live-generated
+  // AAPL archive with three probe cells injected via zip/OOXML surgery (all
+  // existing parts and formula caches preserved), so the diff is exactly 3
+  // even when two consecutive live builds are identical.
+
+  const deepseekMetaPython = String.raw`
+import sqlite3, sys
+root = sys.argv[1]
+mode = sys.argv[2]
+db = sqlite3.connect(root + '/library.db')
+if mode == 'read':
+    row = db.execute("SELECT id, fact_accession, fact_filed_date, fact_period, latest_accession FROM revisions WHERE ticker='AAPL' ORDER BY created_at ASC, id ASC LIMIT 1").fetchone()
+    print('|'.join('' if v is None else str(v) for v in row))
+elif mode == 'null-fact':
+    db.execute("UPDATE revisions SET fact_accession=NULL, fact_filed_date=NULL, fact_period=NULL WHERE ticker='AAPL' AND id=?", (sys.argv[3],))
+    db.commit()
+    print('nulled')
+elif mode == 'restore-fact':
+    db.execute("UPDATE revisions SET fact_accession=NULLIF(?, ''), fact_filed_date=NULLIF(?, ''), fact_period=NULLIF(?, '') WHERE ticker='AAPL' AND id=?", (sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
+    db.commit()
+    print('restored')
+db.close()
+`;
+
+  const deepseekCorruptPython = String.raw`
+import sys
+import openpyxl
+path = sys.argv[1]
+wb = openpyxl.load_workbook(path)
+ws = wb.create_sheet('CorruptProbe')
+ws['A1'] = 'diverged'
+wb.save(path)
+print('corrupted')
+`;
+
+  const deepseekProbePython = String.raw`
+import datetime, hashlib, re, shutil, sqlite3, sys, zipfile
+import xml.etree.ElementTree as ET
+root, base_id, new_id = sys.argv[1], sys.argv[2], sys.argv[3]
+db = sqlite3.connect(root + '/library.db')
+cols = [d[0] for d in db.execute('SELECT * FROM revisions LIMIT 0').description]
+src = db.execute('SELECT * FROM revisions WHERE id=?', (base_id,)).fetchone()
+vals = dict(zip(cols, src))
+base_hash = vals['workbook_hash']
+dst_path = root + f'/companies/AAPL/revisions/{new_id}.xlsx'
+shutil.copyfile(root + f'/companies/AAPL/revisions/{base_id}.xlsx', dst_path)
+# OOXML sheet injection: preserve every existing workbook part byte-for-byte
+# (especially formula cached values), adding only a PagingProbe sheet with
+# three inline-string cells. openpyxl resaves clear cached values and create
+# unrelated diffs, so zip surgery is required for a deterministic 3-cell probe.
+NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+NS_RELS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+NS_CT = 'http://schemas.openxmlformats.org/package/2006/content-types'
+ET.register_namespace('', NS_MAIN)
+ET.register_namespace('r', NS_R)
+with zipfile.ZipFile(dst_path, 'r') as zin:
+    names = list(zin.namelist())
+    data = {n: zin.read(n) for n in names}
+wb = ET.fromstring(data['xl/workbook.xml'])
+sheets_el = wb.find(f'{{{NS_MAIN}}}sheets')
+if sheets_el is None:
+    raise RuntimeError('workbook has no sheets element')
+existing = sheets_el.findall(f'{{{NS_MAIN}}}sheet')
+for s in existing:
+    if s.get('name') == 'PagingProbe':
+        raise RuntimeError('PagingProbe already exists')
+max_sheet_id = max([int(s.get('sheetId', '0')) for s in existing] + [0])
+new_sheet_id = max_sheet_id + 1
+nums = []
+for n in names:
+    m = re.fullmatch(r'xl/worksheets/sheet(\d+)\.xml', n)
+    if m:
+        nums.append(int(m.group(1)))
+new_num = max(nums + [0]) + 1
+new_part = f'xl/worksheets/sheet{new_num}.xml'
+rels = ET.fromstring(data['xl/_rels/workbook.xml.rels'])
+max_rid = 0
+for r in rels.findall(f'{{{NS_RELS}}}Relationship'):
+    m = re.fullmatch(r'rId(\d+)', r.get('Id') or '')
+    if m:
+        max_rid = max(max_rid, int(m.group(1)))
+new_rid = f'rId{max_rid + 1}'
+sheet_xml = (
+    f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<worksheet xmlns="{NS_MAIN}"><sheetData>'
+    f'<row r="1"><c r="A1" t="inlineStr"><is><t>probe-one</t></is></c></row>'
+    f'<row r="2"><c r="A2" t="inlineStr"><is><t>probe-two</t></is></c></row>'
+    f'<row r="3"><c r="A3" t="inlineStr"><is><t>probe-three</t></is></c></row>'
+    f'</sheetData></worksheet>'
+).encode('utf-8')
+new_sheet_el = ET.SubElement(sheets_el, f'{{{NS_MAIN}}}sheet')
+new_sheet_el.set('name', 'PagingProbe')
+new_sheet_el.set('sheetId', str(new_sheet_id))
+new_sheet_el.set(f'{{{NS_R}}}id', new_rid)
+new_rel = ET.SubElement(rels, f'{{{NS_RELS}}}Relationship')
+new_rel.set('Id', new_rid)
+new_rel.set('Type', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet')
+new_rel.set('Target', f'worksheets/sheet{new_num}.xml')
+ct = ET.fromstring(data['[Content_Types].xml'])
+for o in ct.findall(f'{{{NS_CT}}}Override'):
+    if o.get('PartName') == f'/xl/worksheets/sheet{new_num}.xml':
+        raise RuntimeError('content type already exists')
+new_ct = ET.SubElement(ct, f'{{{NS_CT}}}Override')
+new_ct.set('PartName', f'/xl/worksheets/sheet{new_num}.xml')
+new_ct.set('ContentType', 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml')
+data['xl/workbook.xml'] = ET.tostring(wb, xml_declaration=True, encoding='UTF-8', method='xml')
+data['xl/_rels/workbook.xml.rels'] = ET.tostring(rels, xml_declaration=True, encoding='UTF-8', method='xml')
+data['[Content_Types].xml'] = ET.tostring(ct, xml_declaration=True, encoding='UTF-8', method='xml')
+data[new_part] = sheet_xml
+with zipfile.ZipFile(dst_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+    for n, b in data.items():
+        zout.writestr(n, b)
+vals['id'] = new_id
+vals['parent_hash'] = base_hash
+vals['workbook_hash'] = hashlib.sha256(open(dst_path, 'rb').read()).hexdigest()
+vals['created_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+vals['note'] = 'deepseek paging probe (live AAPL copy with probe cells)'
+names = ', '.join(vals.keys())
+db.execute(f"INSERT INTO revisions({names}) VALUES({', '.join('?' * len(vals))})", tuple(vals.values()))
+db.commit()
+db.close()
+print(new_id)
+`;
+
+  it('applies DeepSeek review findings against live AAPL revisions: freshness, archive trust, paging (task 3)', async () => {
+    assertEdgarIdentityConfigured();
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-deepseek-'));
+    const modelsDir = join(home, 'models');
+    const runPython = (script: string, args: string[]): string => {
+      const result = spawnSync(pythonPath, ['-c', script, ...args], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        timeout: 120_000,
+      });
+      if (result.status !== 0) {
+        throw new Error(`Helper python failed: ${sanitizedOutput(result.stderr || result.stdout || 'unknown error')}`);
+      }
+      return String(result.stdout).trim();
+    };
+    const runJson = (args: string[]): { status: number | null; output: string; json: Record<string, unknown> } => {
+      const result = runLibraryCli(args, home);
+      if (result.error) throw result.error;
+      const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+      return {status: result.status, output, json: JSON.parse(String(result.stdout).slice(String(result.stdout).indexOf('{'))) as Record<string, unknown>};
+    };
+    let mcp: McpTestClient | null = null;
+    try {
+      const build = runLibraryCli(['build', 'AAPL', '--models-dir', modelsDir], home);
+      if (build.error) throw build.error;
+      expect(build.status, sanitizedOutput(`${build.stdout ?? ''}\n${build.stderr ?? ''}`)).toBe(0);
+      const update = runLibraryCli(['model', 'update', 'AAPL', '--models-dir', modelsDir], home);
+      if (update.error) throw update.error;
+      expect(update.status, sanitizedOutput(`${update.stdout ?? ''}\n${update.stderr ?? ''}`)).toBe(0);
+
+      const pair = runJson(['model', 'compare', 'AAPL', '--models-dir', modelsDir, '--json']).json as unknown as {
+        from: {id: string};
+        to: {id: string};
+        freshness: string[];
+        workbook: {beforeHash: string; afterHash: string};
+      };
+      const oldestId = pair.from.id;
+      const newestId = pair.to.id;
+      expect(oldestId).toBeTruthy();
+      expect(newestId).toBeTruthy();
+      expect(oldestId).not.toBe(newestId);
+
+      // Finding 1: mapped fact accession missing but latest-filing metadata
+      // present must report the latest filing, never "predates tracking".
+      const metaParts = runPython(deepseekMetaPython, [modelsDir, 'read']).split('|');
+      const savedFact = metaParts[1] ?? '';
+      const savedFiled = metaParts[2] ?? '';
+      const savedPeriod = metaParts[3] ?? '';
+      const latestAccession = metaParts[4] ?? '';
+      expect(latestAccession).toMatch(/^\d{10}-\d{2}-\d{6}$/);
+      runPython(deepseekMetaPython, [modelsDir, 'null-fact', oldestId]);
+      const stale = runJson(['model', 'compare', 'AAPL', '--from', oldestId, '--to', newestId, '--models-dir', modelsDir, '--json']).json as unknown as {
+        freshness: string[];
+      };
+      const fromNote = stale.freshness.find((note) => note.includes(`revision ${oldestId}`)) ?? '';
+      expect(fromNote).toContain(latestAccession);
+      expect(fromNote).not.toContain('predates filing-context tracking');
+      runPython(deepseekMetaPython, [modelsDir, 'restore-fact', savedFact, savedFiled, savedPeriod, oldestId]);
+
+      // Finding 2: a diverged archive must fail closed, never be trusted.
+      const oldestPath = join(modelsDir, 'companies', 'AAPL', 'revisions', `${oldestId}.xlsx`);
+      const newestPath = join(modelsDir, 'companies', 'AAPL', 'revisions', `${newestId}.xlsx`);
+      const oldestBytes = await readFile(oldestPath);
+      const newestBytes = await readFile(newestPath);
+      runPython(deepseekCorruptPython, [oldestPath]);
+      const corrupted = runLibraryCli(['model', 'compare', 'AAPL', '--from', oldestId, '--to', newestId, '--models-dir', modelsDir], home);
+      if (corrupted.error) throw corrupted.error;
+      const corruptedOutput = sanitizedOutput(`${corrupted.stdout ?? ''}\n${corrupted.stderr ?? ''}`);
+      expect(corrupted.status, corruptedOutput).not.toBe(0);
+      expect(corruptedOutput).toMatch(/recorded hash|does not match/);
+      await writeFile(oldestPath, oldestBytes);
+
+      // A mismatched newest archive falls back to current.xlsx only because
+      // the accepted current copy still exactly matches the recorded hash.
+      runPython(deepseekCorruptPython, [newestPath]);
+      const fallback = runJson(['model', 'compare', 'AAPL', '--from', oldestId, '--to', newestId, '--models-dir', modelsDir, '--json']).json as unknown as {
+        workbook: {afterFileSource: string; afterHash: string};
+      };
+      expect(fallback.workbook.afterFileSource).toBe('current-fallback');
+      expect(fallback.workbook.afterHash).toBe(pair.workbook.afterHash);
+      await writeFile(newestPath, newestBytes);
+      await rm(newestPath);
+      const missingNew = runJson(['model', 'compare', 'AAPL', '--from', oldestId, '--to', newestId, '--models-dir', modelsDir, '--json']).json as unknown as {
+        workbook: {afterFileSource: string};
+      };
+      expect(missingNew.workbook.afterFileSource).toBe('current-fallback');
+      await writeFile(newestPath, newestBytes);
+
+      // Finding 3: a requested page that omits changes must say another
+      // detail page exists (hasMore/nextOffset), distinct from the hard
+      // collection cap (truncated).
+      const probeId = `rev-probe-${Date.now().toString(36)}`;
+      runPython(deepseekProbePython, [modelsDir, newestId, probeId]);
+      const page1 = runJson(['model', 'compare', 'AAPL', '--from', newestId, '--to', probeId, '--models-dir', modelsDir, '--limit', '1', '--json']).json as unknown as {
+        summary: string;
+        workbook: {totalChanges: number; truncated: boolean; hasMore: boolean; nextOffset: number | null; offset: number; limit: number; changes: unknown[]};
+      };
+      expect(page1.workbook.totalChanges).toBe(3);
+      expect(page1.workbook.truncated).toBe(false);
+      expect(page1.workbook.changes.length).toBe(1);
+      expect(page1.workbook.hasMore).toBe(true);
+      expect(page1.workbook.nextOffset).toBe(1);
+      const page2 = runJson(['model', 'compare', 'AAPL', '--from', newestId, '--to', probeId, '--models-dir', modelsDir, '--offset', '1', '--limit', '1', '--json']).json as unknown as {
+        workbook: {hasMore: boolean; nextOffset: number | null; changes: unknown[]};
+      };
+      expect(page2.workbook.changes.length).toBe(1);
+      expect(page2.workbook.hasMore).toBe(true);
+      expect(page2.workbook.nextOffset).toBe(2);
+      const lastPage = runJson(['model', 'compare', 'AAPL', '--from', newestId, '--to', probeId, '--models-dir', modelsDir, '--offset', '2', '--limit', '10', '--json']).json as unknown as {
+        workbook: {hasMore: boolean; nextOffset: number | null};
+      };
+      expect(lastPage.workbook.hasMore).toBe(false);
+      expect(lastPage.workbook.nextOffset).toBeNull();
+      const textPage = runLibraryCli(['model', 'compare', 'AAPL', '--from', newestId, '--to', probeId, '--limit', '1', '--models-dir', modelsDir], home);
+      if (textPage.error) throw textPage.error;
+      expect(textPage.status).toBe(0);
+      expect(sanitizedOutput(String(textPage.stdout))).toContain('offset 1');
+      mcp = await spawnMcpTestClient(home, modelsDir);
+      let offset = 0;
+      let steps = 0;
+      for (;;) {
+        const reply = await mcp.send('tools/call', {name: 'model_compare', arguments: {ticker: 'AAPL', from: newestId, to: probeId, offset, maxChanges: 1}});
+        const compared = mcpResultText(reply) as {workbook: {hasMore: boolean; nextOffset: number | null; changes: unknown[]; truncated: boolean}};
+        expect(compared.workbook.truncated).toBe(false);
+        steps += 1;
+        if (!compared.workbook.hasMore) {
+          expect(compared.workbook.nextOffset).toBeNull();
+          break;
+        }
+        expect(typeof compared.workbook.nextOffset).toBe('number');
+        offset = compared.workbook.nextOffset as number;
+        if (steps > 10) throw new Error('paging did not terminate; hasMore never cleared');
+      }
+      expect(steps).toBe(3);
+    } finally {
+      mcp?.close();
       await rm(home, {recursive: true, force: true});
     }
   }, 600_000);
@@ -9569,6 +9880,14 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       expect(byCell['B8']?.['proposedFormula']).toBe('=B2*2');
       expect('proposedValue' in (byCell['B8'] ?? {})).toBe(false);
 
+      // Promotion requires a previewed candidate: build it first, then apply.
+      const previewed = runLibraryCli(
+        ['model', 'preview', proposalId!, '--models-dir', modelsDir],
+        home,
+      );
+      if (previewed.error) throw previewed.error;
+      expect(previewed.status, sanitizedOutput(`${previewed.stdout ?? ''}\n${previewed.stderr ?? ''}`)).toBe(0);
+
       const applied = runLibraryCli(
         ['model', 'apply', proposalId!, '--approve', '--by', 'cli-regression', '--models-dir', modelsDir],
         home,
@@ -9692,4 +10011,579 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       await rm(home, {recursive: true, force: true});
     }
   }, 120_000);
+  // --- Task 4 validated AI candidate + change log (live provider) ---
+  // Builds a real AAPL workbook through the current CLI/backend in an
+  // isolated temporary library, then exercises the full proposal lifecycle
+  // (preview, validation, promotion, rejection, stale refusal, MCP parity)
+  // against that workbook. No fixture workbooks or provider doubles.
+
+  const readLiveCellsPython = String.raw`
+import json, sys
+from openpyxl import load_workbook
+path, sheet, cells = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+wb = load_workbook(path, data_only=False)
+ws = wb[sheet]
+print(json.dumps({c: ws[c].value for c in cells}))
+`;
+
+  const readCachedCellsPython = String.raw`
+import json, sys
+from openpyxl import load_workbook
+path, sheet, cells = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+wb = load_workbook(path, data_only=True)
+ws = wb[sheet]
+print(json.dumps({c: ws[c].value for c in cells}))
+`;
+
+  const readCachedErrorsPython = String.raw`
+import json, sys
+from openpyxl import load_workbook
+wb = load_workbook(sys.argv[1], data_only=True, read_only=True)
+errors = []
+for ws in wb.worksheets:
+    for row in ws.iter_rows():
+        for c in row:
+            v = c.value
+            if isinstance(v, str) and v.startswith("#"):
+                if len(errors) < 200:
+                    errors.append(f"{ws.title}!{c.coordinate}={v}")
+print(json.dumps(errors))
+`;
+
+  const readRevisionPython = String.raw`
+import json, sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = db.execute("SELECT id, workbook_hash, parent_hash, note, build_event, fact_accession, fact_filed_date, fact_period, latest_accession, route, readiness FROM revisions WHERE id=?", (sys.argv[2],)).fetchone()
+if not row:
+    raise RuntimeError('revision not found: ' + sys.argv[2])
+keys = ['id','workbook_hash','parent_hash','note','build_event','fact_accession','fact_filed_date','fact_period','latest_accession','route','readiness']
+print(json.dumps(dict(zip(keys, row))))
+`;
+
+  const readChangeLogPython = String.raw`
+import json, sys
+from openpyxl import load_workbook
+wb = load_workbook(sys.argv[1], data_only=False)
+print(json.dumps({
+    'sheets': wb.sheetnames,
+    'log': [[c.value for c in row] for row in wb['AI Change Log'].iter_rows()] if 'AI Change Log' in wb.sheetnames else None,
+}))
+`;
+
+  const readProposalByIdPython = String.raw`
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = db.execute("SELECT payload_json, status, base_revision_hash FROM proposals WHERE id=?", (sys.argv[2],)).fetchone()
+if not row:
+    raise RuntimeError('proposal not found: ' + sys.argv[2])
+print(row[0])
+print(row[1])
+print(row[2] or '')
+`;
+
+  const insertProposalPython = String.raw`
+import sys
+models_dir, pid, ticker, base_hash, payload_json = sys.argv[1:6]
+import sqlite3
+db = sqlite3.connect(models_dir + '/library.db')
+db.execute("""CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, ticker TEXT,
+  base_revision_hash TEXT, status TEXT, created_at TEXT, payload_json TEXT)""")
+db.execute("INSERT INTO proposals(id, ticker, base_revision_hash, status, created_at, payload_json) VALUES(?,?,?,?,?,?)",
+    (pid, ticker, base_hash, 'proposed', '2026-02-01T00:00:00Z', payload_json))
+db.commit()
+db.close()
+print('inserted ' + pid)
+`;
+
+  const countRevisionsPython = String.raw`
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+print(db.execute("SELECT COUNT(*) FROM revisions WHERE ticker=?", (sys.argv[2],)).fetchone()[0])
+`;
+
+  function extractProposalId(output: string): string {
+    const match = /Proposal (\S+) recorded as proposed/.exec(output);
+    if (!match?.[1]) throw new Error(`No proposal id in output: ${output}`);
+    return match[1];
+  }
+
+  function runJsonCli(args: string[], home: string): Record<string, unknown> {
+    const result = runLibraryCli(args, home);
+    if (result.error) throw result.error;
+    const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+    expect(result.status, output).toBe(0);
+    // npm prints `> pkg@ver script` banners to stdout ahead of the payload.
+    const payload = String(result.stdout).slice(String(result.stdout).indexOf('{'));
+    return JSON.parse(payload) as Record<string, unknown>;
+  }
+
+  function readProposalPayload(modelsDir: string, proposalId: string): { payload: Record<string, unknown>; status: string; baseHash: string } {
+    const dumped = spawnSync(pythonPath, ['-c', readProposalByIdPython, join(modelsDir, 'library.db'), proposalId], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Proposal read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    const [payloadJson = '{}', status = '', baseHash = ''] = String(dumped.stdout).split('\n');
+    return {payload: JSON.parse(payloadJson) as Record<string, unknown>, status, baseHash};
+  }
+
+  function readChangeLogSheet(workbookPath: string): { sheets: string[]; log: unknown[][] | null } {
+    const dumped = spawnSync(pythonPath, ['-c', readChangeLogPython, workbookPath], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Change-log read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as { sheets: string[]; log: unknown[][] | null };
+  }
+
+  function countRevisions(modelsDir: string, ticker: string): number {
+    const dumped = spawnSync(pythonPath, ['-c', countRevisionsPython, join(modelsDir, 'library.db'), ticker], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) throw new Error('Revision count failed.');
+    return Number(String(dumped.stdout).trim());
+  }
+
+  function insertDirectProposal(modelsDir: string, proposalId: string, ticker: string, baseHash: string, payload: Record<string, unknown>): void {
+    const inserted = spawnSync(pythonPath, ['-c', insertProposalPython, modelsDir, proposalId, ticker, baseHash, JSON.stringify(payload)], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (inserted.status !== 0) {
+      throw new Error(`Direct proposal insert failed: ${sanitizedOutput(inserted.stderr || inserted.stdout || 'unknown error')}`);
+    }
+  }
+
+  function readLiveCells(workbookPath: string, sheet: string, cells: string[]): Record<string, unknown> {
+    const dumped = spawnSync(pythonPath, ['-c', readLiveCellsPython, workbookPath, sheet, JSON.stringify(cells)], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Live cell read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as Record<string, unknown>;
+  }
+
+  function readCachedCells(workbookPath: string, sheet: string, cells: string[]): Record<string, unknown> {
+    const dumped = spawnSync(pythonPath, ['-c', readCachedCellsPython, workbookPath, sheet, JSON.stringify(cells)], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Cached cell read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as Record<string, unknown>;
+  }
+
+  function readCachedErrors(workbookPath: string): string[] {
+    const dumped = spawnSync(pythonPath, ['-c', readCachedErrorsPython, workbookPath], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Cached error read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as string[];
+  }
+
+  function readRevisionRow(modelsDir: string, revisionId: string): Record<string, unknown> {
+    const dumped = spawnSync(pythonPath, ['-c', readRevisionPython, join(modelsDir, 'library.db'), revisionId], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    if (dumped.status !== 0) {
+      throw new Error(`Revision read failed: ${sanitizedOutput(dumped.stderr || dumped.stdout || 'unknown error')}`);
+    }
+    return JSON.parse(String(dumped.stdout)) as Record<string, unknown>;
+  }
+
+  async function shaFile(path: string): Promise<string> {
+    return createHash('sha256').update(await readFile(path)).digest('hex');
+  }
+
+  it('previews, validates, promotes, and rejects AI proposals against a live AAPL build (task 4)', async () => {
+    assertEdgarIdentityConfigured();
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-preview-aapl-'));
+    const modelsDir = join(home, 'models');
+    let mcp: McpTestClient | null = null;
+    try {
+      // Live build in an isolated library: the only workbook under test.
+      const build = runLibraryCli(['build', 'AAPL', '--models-dir', modelsDir], home);
+      if (build.error) throw build.error;
+      const buildOutput = sanitizedOutput(`${build.stdout ?? ''}\n${build.stderr ?? ''}`);
+      expect(build.status, buildOutput).toBe(0);
+      expect(buildOutput).toContain('route=unlevered_dcf');
+
+      const inspected = runJsonCli(['model', 'inspect', 'AAPL', '--models-dir', modelsDir, '--json'], home) as unknown as {
+        manifest: { workbook_hash: string; accession: string; filed_date: string };
+        hashMatchesManifest: boolean;
+      };
+      expect(inspected.hashMatchesManifest).toBe(true);
+      const baseHash = inspected.manifest.workbook_hash;
+      const accession = inspected.manifest.accession;
+      const filedDate = inspected.manifest.filed_date;
+      expect(baseHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(accession).toMatch(/^\d{10}-\d{2}-\d{6}$/);
+      const workbookPath = join(modelsDir, 'companies', 'AAPL', 'current.xlsx');
+      const manifestPath = join(modelsDir, 'companies', 'AAPL', 'manifest.json');
+      const manifestBefore = await readFile(manifestPath, 'utf8');
+
+      // Safe edit cells on the live base model: a numeric-literal assumption
+      // for the value edit and a mirror formula that cannot error.
+      const sheet = 'DCF Model - Base (1)';
+      const live = readLiveCells(workbookPath, sheet, ['F14', 'F15', 'F16', 'F17', 'F19', 'I13', 'I15']);
+      const valueCell = ['F14', 'F15', 'F16', 'F17', 'F19'].find((c) => typeof live[c] === 'number');
+      expect(valueCell, `no numeric assumption cell found: ${JSON.stringify(live)}`).toBeTruthy();
+      const formulaCell = ['F14', 'F15', 'F16', 'F17', 'F19'].find((c) => c !== valueCell)!;
+      const valueNow = live[valueCell!] as number;
+
+      const filedArgs = filedDate ? ['--filed', filedDate] : [];
+      const propose = (summary: string, changes: string[]): string => {
+        const result = runLibraryCli([
+          'model', 'propose-update', 'AAPL', '--summary', summary,
+          ...changes.flatMap((c) => ['--change', c]),
+          '--accession', accession, ...filedArgs, '--models-dir', modelsDir,
+        ], home);
+        if (result.error) throw result.error;
+        const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+        expect(result.status, output).toBe(0);
+        return extractProposalId(output);
+      };
+      const preview = (proposalId: string): { status: number | null; output: string } => {
+        const result = runLibraryCli(['model', 'preview', proposalId, '--models-dir', modelsDir], home);
+        if (result.error) throw result.error;
+        return {status: result.status, output: sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)};
+      };
+
+      // Formula + value edits: preview validates, stores the candidate, and
+      // leaves the accepted workbook, manifest, and revisions untouched.
+      const revisionsBefore = countRevisions(modelsDir, 'AAPL');
+      const main = propose('AI review: assumption check', [
+        `${sheet}|${valueCell}|${String(valueNow)}|filed assumption reaffirmed|filed fact`,
+        `${sheet}|${formulaCell}|=${valueCell}|mirror assumption as formula|filed fact`,
+      ]);
+      const mainPreview = preview(main);
+      expect(mainPreview.status, mainPreview.output).toBe(0);
+      expect(mainPreview.output).toContain('Candidate for proposal');
+      expect(mainPreview.output).toContain('PASS: recalculated with LibreOffice');
+      expect(mainPreview.output).toContain('accepted workbook is unchanged');
+      expect(await shaFile(workbookPath)).toBe(baseHash);
+      expect(await readFile(manifestPath, 'utf8')).toBe(manifestBefore);
+      expect(countRevisions(modelsDir, 'AAPL')).toBe(revisionsBefore);
+
+      const mainCandidate = readProposalPayload(modelsDir, main).payload['candidate'] as Record<string, unknown>;
+      expect(mainCandidate['baseHash']).toBe(baseHash);
+      expect(String(mainCandidate['validation'])).toContain('PASS: recalculated with LibreOffice');
+      expect(await shaFile(String(mainCandidate['path']))).toBe(String(mainCandidate['hash']));
+      const mainLog = readChangeLogSheet(String(mainCandidate['path']));
+      expect(mainLog.sheets).toContain(sheet);
+      expect(mainLog.sheets).toContain('AI Change Log');
+      const mainFlat = JSON.stringify(mainLog.log);
+      expect(mainFlat).toContain('AI review: assumption check');
+      expect(mainFlat).toContain(valueCell!);
+      expect(mainFlat).toContain(formulaCell);
+      expect(mainFlat).toContain(`=${valueCell}`);
+      expect(mainFlat).toContain('filed assumption reaffirmed');
+      expect(mainFlat).toContain(accession);
+      expect(mainFlat).toContain('PASS: recalculated with LibreOffice');
+      // Formula-log strings stay formula-safe without a visible apostrophe:
+      // the mirrored formula is stored as inert text "=..." (no "'=").
+      expect(mainFlat).not.toContain(`'=${valueCell}`);
+      expect(mainFlat).not.toMatch(/'"=/);
+      // Cached formula results: the recalculated candidate holds no cached
+      // errors and the mirrored formula cell caches the assumed value.
+      expect(readCachedErrors(String(mainCandidate['path']))).toEqual([]);
+      const mainCached = readCachedCells(String(mainCandidate['path']), sheet, [valueCell!, formulaCell]);
+      expect(mainCached[valueCell!]).toBe(valueNow);
+      expect(mainCached[formulaCell]).toBe(valueNow);
+      // The accepted workbook is unchanged by preview; the candidate lives
+      // under proposals/, never as current.xlsx.
+      expect(String(mainCandidate['path'])).toContain(join('proposals'));
+      expect(String(mainCandidate['path'])).not.toBe(workbookPath);
+
+      // Repeatable: a second preview succeeds and still verifies.
+      const mainAgain = preview(main);
+      expect(mainAgain.status, mainAgain.output).toBe(0);
+      const mainRefreshed = readProposalPayload(modelsDir, main).payload['candidate'] as Record<string, unknown>;
+      expect(await shaFile(String(mainRefreshed['path']))).toBe(String(mainRefreshed['hash']));
+      expect(await shaFile(workbookPath)).toBe(baseHash);
+
+      // Preview backup edge: an existing non-regular candidate path is refused
+      // and never removed by a failed preview.
+      const backupEdge = propose('backup edge check', [
+        `${sheet}|${valueCell}|${String(valueNow)}|backup edge|filed fact`,
+      ]);
+      expect(preview(backupEdge).status).toBe(0);
+      const backupPath = String((readProposalPayload(modelsDir, backupEdge).payload['candidate'] as Record<string, unknown>)['path']);
+      await rm(backupPath, {force: true});
+      await mkdir(backupPath);
+      const backupRetry = preview(backupEdge);
+      expect(backupRetry.status).not.toBe(0);
+      expect(backupRetry.output).toMatch(/not a regular file|symlink|Candidate left unchanged/);
+      expect((await stat(backupPath)).isDirectory()).toBe(true);
+      await rm(backupPath, {recursive: true, force: true});
+      expect(preview(backupEdge).status).toBe(0);
+      const backupRestored = readProposalPayload(modelsDir, backupEdge).payload['candidate'] as Record<string, unknown>;
+      expect(await shaFile(String(backupRestored['path']))).toBe(String(backupRestored['hash']));
+      expect(await shaFile(workbookPath)).toBe(baseHash);
+
+      // Review-only zero edits: needs summary + verification, logs no changes.
+      const noVerification = runLibraryCli([
+        'model', 'propose-update', 'AAPL', '--review-only',
+        '--summary', 'AI review: no changes needed',
+        '--accession', accession, ...filedArgs, '--models-dir', modelsDir,
+      ], home);
+      if (noVerification.error) throw noVerification.error;
+      expect(noVerification.status).not.toBe(0);
+      const reviewOnlyProposed = runLibraryCli([
+        'model', 'propose-update', 'AAPL', '--review-only',
+        '--summary', 'AI review: live inputs already match the filed fact',
+        '--verification', 'Verified against the filed source; no cell changes recommended.',
+        '--accession', accession, ...filedArgs, '--models-dir', modelsDir,
+      ], home);
+      if (reviewOnlyProposed.error) throw reviewOnlyProposed.error;
+      const reviewOnlyOutput = sanitizedOutput(`${reviewOnlyProposed.stdout ?? ''}\n${reviewOnlyProposed.stderr ?? ''}`);
+      expect(reviewOnlyProposed.status, reviewOnlyOutput).toBe(0);
+      expect(reviewOnlyOutput).toContain('No cell changes were recommended');
+      const reviewOnly = extractProposalId(reviewOnlyOutput);
+      const reviewOnlyPreview = preview(reviewOnly);
+      expect(reviewOnlyPreview.status, reviewOnlyPreview.output).toBe(0);
+      expect(reviewOnlyPreview.output).toContain('no cell changes (review only)');
+      expect(await shaFile(workbookPath)).toBe(baseHash);
+      const reviewCandidate = readProposalPayload(modelsDir, reviewOnly).payload['candidate'] as Record<string, unknown>;
+      const reviewFlat = JSON.stringify(readChangeLogSheet(String(reviewCandidate['path'])).log);
+      expect(reviewFlat).toContain('No cell changes were recommended (review only).');
+      expect(reviewFlat).toContain('Verified against the filed source; no cell changes recommended.');
+
+      // Bad candidates: each preview fails and stores nothing.
+      const reciprocal = propose('bad candidate: divide by zero', [`${sheet}|${formulaCell}|=1/0|reciprocal|filed fact`]);
+      const reciprocalPreview = preview(reciprocal);
+      expect(reciprocalPreview.status).not.toBe(0);
+      expect(reciprocalPreview.output).toMatch(/formula errors|#DIV/);
+      const duplicate = propose('bad candidate: duplicate', [
+        `${sheet}|${valueCell}|1|first|filed fact`,
+        `${sheet}|${valueCell}|2|second|filed fact`,
+      ]);
+      const duplicatePreview = preview(duplicate);
+      expect(duplicatePreview.status).not.toBe(0);
+      expect(duplicatePreview.output).toContain('Duplicate edit');
+      insertDirectProposal(modelsDir, 'prop-task4-ghost', 'AAPL', baseHash, {
+        summary: 'bad sheet', createdAt: new Date().toISOString(),
+        changes: [{sheet: 'Ghost', cell: 'A1', priorValue: null, priorFormula: null, proposedValue: 1, rationale: 'r', source: 's', accession}],
+      });
+      const ghostPreview = preview('prop-task4-ghost');
+      expect(ghostPreview.status).not.toBe(0);
+      expect(ghostPreview.output).toMatch(/unknown sheet/i);
+      insertDirectProposal(modelsDir, 'prop-task4-source', 'AAPL', baseHash, {
+        summary: 'bad source', createdAt: new Date().toISOString(),
+        changes: [{sheet, cell: valueCell, priorValue: valueNow, priorFormula: null, proposedValue: 9, rationale: 'r', source: 's', accession: '9999999999-99-999999'}],
+      });
+      const badSourcePreview = preview('prop-task4-source');
+      expect(badSourcePreview.status).not.toBe(0);
+      expect(badSourcePreview.output).toContain('unknown accession');
+      expect(await shaFile(workbookPath)).toBe(baseHash);
+      expect(await readFile(manifestPath, 'utf8')).toBe(manifestBefore);
+      for (const id of [reciprocal, duplicate, 'prop-task4-ghost', 'prop-task4-source']) {
+        expect(readProposalPayload(modelsDir, id).payload['candidate']).toBeUndefined();
+      }
+
+      // Stale workbook: a second proposal moves the accepted copy forward,
+      // so the older preview can no longer be approved.
+      const first = propose('stale check A', [`${sheet}|${valueCell}|${String(valueNow)}|stale A|filed fact`]);
+      expect(preview(first).status).toBe(0);
+      const second = propose('stale check B', [`${sheet}|${formulaCell}|=${valueCell}|stale B|filed fact`]);
+      expect(preview(second).status).toBe(0);
+      const secondApplied = runLibraryCli(['model', 'apply', second, '--approve', '--by', 'stale-test', '--models-dir', modelsDir], home);
+      if (secondApplied.error) throw secondApplied.error;
+      expect(secondApplied.status, sanitizedOutput(`${secondApplied.stdout ?? ''}\n${secondApplied.stderr ?? ''}`)).toBe(0);
+      const movedHash = await shaFile(workbookPath);
+      expect(movedHash).not.toBe(baseHash);
+      const staleApply = runLibraryCli(['model', 'apply', first, '--approve', '--by', 'stale-test', '--models-dir', modelsDir], home);
+      if (staleApply.error) throw staleApply.error;
+      expect(staleApply.status).not.toBe(0);
+      expect(sanitizedOutput(`${staleApply.stdout ?? ''}\n${staleApply.stderr ?? ''}`)).toMatch(/stale/i);
+      expect(await shaFile(workbookPath)).toBe(movedHash);
+
+      // Stale candidate file: corruption refuses promotion; a fresh preview
+      // recovers and promotes byte-identical to the validated candidate.
+      const third = propose('stale check C', [`${sheet}|${valueCell}|${String(valueNow)}|stale C|filed fact`]);
+      expect(preview(third).status).toBe(0);
+      const thirdCandidate = readProposalPayload(modelsDir, third).payload['candidate'] as Record<string, unknown>;
+      await writeFile(String(thirdCandidate['path']), 'corrupted-bytes');
+      const corruptApply = runLibraryCli(['model', 'apply', third, '--approve', '--by', 'stale-test', '--models-dir', modelsDir], home);
+      if (corruptApply.error) throw corruptApply.error;
+      expect(corruptApply.status).not.toBe(0);
+      expect(sanitizedOutput(`${corruptApply.stdout ?? ''}\n${corruptApply.stderr ?? ''}`)).toMatch(/hash mismatch|changed since preview/);
+      expect(await shaFile(workbookPath)).toBe(movedHash);
+      expect(preview(third).status).toBe(0);
+      const freshCandidate = readProposalPayload(modelsDir, third).payload['candidate'] as Record<string, unknown>;
+      const promoted = runLibraryCli(['model', 'apply', third, '--approve', '--by', 'stale-test', '--models-dir', modelsDir], home);
+      if (promoted.error) throw promoted.error;
+      expect(promoted.status, sanitizedOutput(`${promoted.stdout ?? ''}\n${promoted.stderr ?? ''}`)).toBe(0);
+      expect(await shaFile(workbookPath)).toBe(String(freshCandidate['hash']));
+
+      // Promotion record: new revision archived, manifest matches, log kept.
+      const promotedHash = String(freshCandidate['hash']);
+      const promotedLog = readChangeLogSheet(workbookPath);
+      expect(promotedLog.sheets).toContain('AI Change Log');
+      expect(JSON.stringify(promotedLog.log)).toContain('stale C');
+      // Promoted log stays formula-safe without a visible apostrophe, and the
+      // promoted workbook holds no cached errors after the final recalculation.
+      expect(JSON.stringify(promotedLog.log)).not.toMatch(/'"=/);
+      expect(readCachedErrors(workbookPath)).toEqual([]);
+      expect(countRevisions(modelsDir, 'AAPL')).toBeGreaterThanOrEqual(2);
+      const revisionFiles = await readdir(join(modelsDir, 'companies', 'AAPL', 'revisions'));
+      expect(revisionFiles.length).toBeGreaterThanOrEqual(2);
+      let archivedMatch = false;
+      for (const file of revisionFiles) {
+        if (await shaFile(join(modelsDir, 'companies', 'AAPL', 'revisions', file)) === promotedHash) archivedMatch = true;
+      }
+      expect(archivedMatch).toBe(true);
+      const reinspected = runJsonCli(['model', 'inspect', 'AAPL', '--models-dir', modelsDir, '--json'], home) as unknown as {
+        manifest: { workbook_hash: string }; hashMatchesManifest: boolean;
+      };
+      expect(reinspected.hashMatchesManifest).toBe(true);
+      expect(reinspected.manifest.workbook_hash).toBe(promotedHash);
+      expect(readProposalPayload(modelsDir, third).status).toBe('applied');
+      // Promotion preserves prior filing/route/readiness context and records
+      // the apply event/proposal source without inventing a mapped period.
+      const appliedPayload = readProposalPayload(modelsDir, third).payload['applied'] as Record<string, unknown>;
+      const promotedRevision = readRevisionRow(modelsDir, String(appliedPayload['revisionId']));
+      expect(String(promotedRevision['note'])).toContain(`apply proposal ${third}`);
+      expect(String(promotedRevision['note'])).toContain('stale-test');
+      expect(String(promotedRevision['note'])).toContain('stale check C');
+      expect(String(promotedRevision['build_event'])).toContain(`apply proposal ${third}`);
+      expect(promotedRevision['route']).toBe('unlevered_dcf');
+      expect(promotedRevision['fact_accession']).toBe(accession);
+      expect(promotedRevision['fact_period']).toBeTruthy();
+      // Compare after promotion: the accepted revision compares read-only
+      // against its parent with cell changes and preserved source context.
+      const compared = runLibraryCli(['model', 'compare', 'AAPL', '--models-dir', modelsDir], home);
+      if (compared.error) throw compared.error;
+      const comparedOutput = sanitizedOutput(`${compared.stdout ?? ''}\n${compared.stderr ?? ''}`);
+      expect(compared.status, comparedOutput).toBe(0);
+      expect(comparedOutput).toContain('Workbook cells:');
+      expect(comparedOutput).toContain('Source/model context:');
+      const comparedJson = runJsonCli(['model', 'compare', 'AAPL', '--json', '--models-dir', modelsDir], home) as unknown as {
+        ticker: string; from: { id: string }; to: { id: string; route: string | null };
+        workbook: { totalChanges: number };
+      };
+      expect(comparedJson.ticker).toBe('AAPL');
+      expect(comparedJson.to.route).toBe('unlevered_dcf');
+      expect(comparedJson.workbook.totalChanges).toBeGreaterThanOrEqual(0);
+
+      // Approval gate + preview-required + rejection: unapproved apply fails,
+      // apply without a preview refuses promotion (no inline promote), the
+      // accepted workbook stays unchanged, rejection is status-only, and
+      // rejected proposals can never be applied.
+      const gated = propose('gate check', [`${sheet}|${valueCell}|${String(valueNow)}|gate|filed fact`]);
+      const unapproved = runLibraryCli(['model', 'apply', gated, '--models-dir', modelsDir], home);
+      if (unapproved.error) throw unapproved.error;
+      expect(unapproved.status).not.toBe(0);
+      expect(await shaFile(workbookPath)).toBe(promotedHash);
+      const noPreviewApply = runLibraryCli(['model', 'apply', gated, '--approve', '--by', 'gate-test', '--models-dir', modelsDir], home);
+      if (noPreviewApply.error) throw noPreviewApply.error;
+      expect(noPreviewApply.status).not.toBe(0);
+      expect(sanitizedOutput(`${noPreviewApply.stdout ?? ''}\n${noPreviewApply.stderr ?? ''}`)).toMatch(/preview/i);
+      expect(await shaFile(workbookPath)).toBe(promotedHash);
+      expect(readProposalPayload(modelsDir, gated).status).toBe('proposed');
+      const rejected = runLibraryCli(['model', 'reject', gated, '--reason', 'not needed', '--models-dir', modelsDir], home);
+      if (rejected.error) throw rejected.error;
+      expect(rejected.status, sanitizedOutput(`${rejected.stdout ?? ''}\n${rejected.stderr ?? ''}`)).toBe(0);
+      expect(readProposalPayload(modelsDir, gated).status).toBe('rejected');
+      const applyRejected = runLibraryCli(['model', 'apply', gated, '--approve', '--models-dir', modelsDir], home);
+      if (applyRejected.error) throw applyRejected.error;
+      expect(applyRejected.status).not.toBe(0);
+      expect(await shaFile(workbookPath)).toBe(promotedHash);
+
+      // MCP parity on the same live library: create, preview, approval gate,
+      // and promotion return the same candidate bytes the CLI would promote.
+      mcp = await spawnMcpTestClient(home, modelsDir);
+      const mcpNoVerification = await mcp.send('tools/call', {
+        name: 'proposal_create',
+        arguments: {ticker: 'AAPL', summary: 'mcp review', changes: []},
+      });
+      expect((mcpNoVerification['error'] as {code: string} | undefined)?.code).toBe('INVALID_PROPOSAL');
+      const mcpLive = readLiveCells(workbookPath, sheet, ['I13', 'I15']);
+      expect(typeof mcpLive['I13']).toBe('number');
+      const mcpCreated = mcpResultText(await mcp.send('tools/call', {
+        name: 'proposal_create',
+        arguments: {
+          ticker: 'AAPL',
+          summary: 'mcp preview parity',
+          changes: [
+            {sheet, cell: 'I13', proposedValue: mcpLive['I13'], rationale: 'mcp value', source: 'filed fact', accession},
+            {sheet, cell: 'I15', proposedFormula: '=I13', rationale: 'mcp formula', source: 'filed fact', accession},
+          ],
+        },
+      })) as {proposalId: string; status: string};
+      expect(mcpCreated.status).toBe('proposed');
+      const mcpMissing = await mcp.send('tools/call', {
+        name: 'proposal_preview', arguments: {proposalId: 'prop-does-not-exist'},
+      });
+      expect((mcpMissing['error'] as {code: string} | undefined)?.code).toBe('INVALID_PROPOSAL');
+      const mcpApplyBeforePreview = await mcp.send('tools/call', {
+        name: 'proposal_apply', arguments: {proposalId: mcpCreated.proposalId, approval: true, approvedBy: 'mcp-parity'},
+      });
+      expect((mcpApplyBeforePreview['error'] as {code: string} | undefined)?.code).toBe('PREVIEW_REQUIRED');
+      expect(await shaFile(workbookPath)).toBe(promotedHash);
+      const mcpPreviewed = mcpResultText(await mcp.send('tools/call', {
+        name: 'proposal_preview', arguments: {proposalId: mcpCreated.proposalId},
+      })) as {ticker: string; candidatePath: string; candidateHash: string; validationSummary: string; previewedCells: string[]; inspectionMarkdown: string; appliedCells: Array<{sheet: string; cell: string; prior: string; proposed: string; priorValue: unknown; priorFormula: string | null; proposedValue: unknown; proposedFormula: string | null; isFormula: boolean}>};
+      expect(mcpPreviewed.ticker).toBe('AAPL');
+      expect(mcpPreviewed.validationSummary).toContain('PASS: recalculated with LibreOffice');
+      expect([...mcpPreviewed.previewedCells].sort()).toEqual([`${sheet}!I13`, `${sheet}!I15`].sort());
+      expect(await shaFile(mcpPreviewed.candidatePath)).toBe(mcpPreviewed.candidateHash);
+      expect(await shaFile(workbookPath)).toBe(promotedHash);
+      expect(typeof mcpPreviewed.inspectionMarkdown).toBe('string');
+      expect(mcpPreviewed.inspectionMarkdown.length).toBeGreaterThan(0);
+      expect(mcpPreviewed.inspectionMarkdown).toContain('## Workbook inspection');
+      expect(mcpPreviewed.inspectionMarkdown).toContain(`${sheet}!I13`);
+      expect(mcpPreviewed.inspectionMarkdown).toContain(`${sheet}!I15`);
+      expect(mcpPreviewed.appliedCells).toHaveLength(2);
+      const mcpLiteral = mcpPreviewed.appliedCells.find((entry) => entry.cell === 'I13');
+      const mcpFormula = mcpPreviewed.appliedCells.find((entry) => entry.cell === 'I15');
+      expect(mcpLiteral).toBeTruthy();
+      expect(mcpFormula).toBeTruthy();
+      expect(mcpLiteral!.sheet).toBe(sheet);
+      expect(mcpLiteral!.isFormula).toBe(false);
+      expect(mcpLiteral!.proposedValue).toBe(mcpLive['I13']);
+      expect(mcpLiteral!.proposedFormula).toBeNull();
+      expect(mcpLiteral!.prior).toBeTruthy();
+      expect(mcpLiteral!.proposed).toBeTruthy();
+      expect(mcpFormula!.sheet).toBe(sheet);
+      expect(mcpFormula!.isFormula).toBe(true);
+      expect(mcpFormula!.proposedFormula).toBe('=I13');
+      expect(mcpFormula!.prior).toBeTruthy();
+      expect(mcpFormula!.proposed).toContain('=I13');
+      const mcpUnapproved = await mcp.send('tools/call', {
+        name: 'proposal_apply', arguments: {proposalId: mcpCreated.proposalId, approval: false},
+      });
+      expect((mcpUnapproved['error'] as {code: string} | undefined)?.code).toBe('APPROVAL_REQUIRED');
+      const mcpApplied = mcpResultText(await mcp.send('tools/call', {
+        name: 'proposal_apply', arguments: {proposalId: mcpCreated.proposalId, approval: true, approvedBy: 'mcp-parity'},
+      })) as {status: string; newHash: string};
+      expect(mcpApplied.status).toBe('applied');
+      expect(mcpApplied.newHash).toBe(mcpPreviewed.candidateHash);
+      expect(await shaFile(workbookPath)).toBe(mcpPreviewed.candidateHash);
+      expect(JSON.stringify(readChangeLogSheet(workbookPath).log)).toContain('mcp value');
+    } finally {
+      mcp?.close();
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 1_800_000);
 });

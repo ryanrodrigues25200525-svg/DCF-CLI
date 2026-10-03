@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes recorded yet.
+> **AI-reviewed model history.** Revision comparison, a validated AI candidate preview, and a mandatory explicit approval gate. These changes are implemented in the uncommitted working tree on `feature/ai-reviewed-model-history`; they are not merged to `main` and no PR is open. The full live suite has not re-run. Verified in this tree: typecheck, the security scan, `git diff --check`, the targeted hung-LibreOffice and duplicate-candidate platform regressions, and the live AAPL filing-agent accession check. Not verified: LibreOffice is installed but its headless startup hangs, and the CLI live suite aborts at module import, so those tests did not run. No dated example workbooks are generated and Windows-only behavior is unverified. These are working-tree fixes, not a claim that the models are complete or investment-banking-grade.
+
+### Added
+
+- Added `dcf model compare <ticker> [--from <rev>] [--to <rev>] [--json]` and the MCP `model_compare` / `revisions_list` tools: one read-only service that reports formula/value cell changes plus route, readiness, mapped fact period, and latest-detected-filing deltas with filing-freshness notes. Each revision now stores its build event, mapped fact accession/filed date/period, latest detected filing, route, readiness, and build timestamp; older databases migrate idempotently.
+- Added `dcf model preview <proposal-id>` (MCP `proposal_preview`): builds a separate validated candidate under `companies/<TICKER>/proposals/<id>/candidate.xlsx`, adds an `AI Change Log` sheet, recalculates cached formulas with LibreOffice, and returns inspection details, the validation summary, and each applied cell's prior/proposed literal or formula. Preview is read-only toward `current.xlsx`, `manifest.json`, and revisions.
+- Added the `AI Change Log` sheet: proposal id, ticker, base revision, AI summary, verification result, filing accession, validation result, and one row per cell change with prior/proposed value or formula, rationale, source, and accession. A review-only proposal records that no cell changes were recommended.
+
+### Changed
+
+- Made proposal preview mandatory before apply/approval. `dcf model apply <id> --approve` (MCP `proposal_apply` with `approval: true`) now requires a stored, previewed candidate and re-validates it — accepted workbook still at the preview base, draft unchanged, candidate bytes and contents re-inspected, cached formula errors re-checked — before promoting a new revision. Apply never builds a candidate inline; without a preview it refuses and points to `dcf model preview`.
+- Promotion preserves revision metadata: the new apply revision inherits the prior revision's mapped fact accession/period and filing context rather than inventing a period, and records the apply event, approver, and proposal source in its note.
+- Rejection (`dcf model reject <id>`, MCP `proposal_reject`) remains status-only; the accepted workbook is unchanged.
+
+### Fixed
+
+- Fixed the 8 tracked CLI/platform bugs (issues #1–#8): truthful `dcf model open` success reporting, Windows `python`/`py` interpreter discovery, typed proposal values (booleans, exponent notation, `__BLANK__`), honest cover metadata for missing industry/sector, bash/Linux install PATH setup, Windows and minimal-Linux LibreOffice discovery, and `dcf mcp` argument validation. The fixes are in the uncommitted working tree on `feature/ai-reviewed-model-history`; typecheck, the security scan, `git diff --check`, the targeted hung-LibreOffice and duplicate-candidate platform regressions, and the live AAPL filing-agent accession check pass, while the full live suite remains unrun. The GitHub issues stay open until the branch merges. See [BUGS.md](BUGS.md).
 
 ## [2.0.0] — 2026-10-03
 
@@ -126,5 +142,3 @@ Initial public desktop release. Published as installers on GitHub Releases (row 
 - [2.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...v2.0.0
 - [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/1.0.0...v1.3.0
 - [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/releases/tag/1.0.0
-
-[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD

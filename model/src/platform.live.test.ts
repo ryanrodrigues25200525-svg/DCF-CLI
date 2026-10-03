@@ -32,6 +32,20 @@ async function writeFakeSoffice(directory: string): Promise<string> {
   return candidate;
 }
 
+/**
+ * A stand-in soffice that ignores `--headless --version` and blocks on a child
+ * `sleep`. The shell `exec`s `/bin/sleep 20` so the sleeping process is the one
+ * the probe timeout kills — there is no TERM trap and no long-lived parent to
+ * leak. The probe must force-kill it and return promptly.
+ */
+async function writeSlowSoffice(directory: string, logPath?: string): Promise<string> {
+  const candidate = join(directory, windowsOnly ? 'soffice.exe' : 'soffice');
+  const record = logPath ? `printf 'probe\\n' >> "${logPath}"\n` : '';
+  await writeFile(candidate, `#!/bin/sh\n${record}exec /bin/sleep 20\n`);
+  await chmod(candidate, 0o755);
+  return candidate;
+}
+
 function readCoverIndustry(python: string, workbookPath: string): string | null {
   const script = [
     'import json, sys, openpyxl',
@@ -114,6 +128,57 @@ describe('live host platform integration', () => {
       await rm(pathDir, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(windowsOnly)('fails fast on a hung soffice instead of blocking CLI startup', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dcf-soffice-slow-'));
+    const originalPath = process.env.PATH;
+    const originalSofficePath = process.env.SOFFICE_PATH;
+    try {
+      // SOFFICE_PATH and the PATH hit resolve to the same hung candidate, so
+      // dedup keeps this to a single bounded probe.
+      const slow = await writeSlowSoffice(directory);
+      process.env.SOFFICE_PATH = slow;
+      process.env.PATH = directory;
+      const started = Date.now();
+      // A short probe budget keeps the regression deterministic and well under
+      // 10s even when the host also exposes hung install paths. The bounded
+      // default (SOFFICE_VERSION_PROBE_TIMEOUT_MS) is what protects startup.
+      expect(findSoffice({ probeTimeoutMs: 1_000 })).toBeNull();
+      const elapsed = Date.now() - started;
+      // The hung candidate must be killed and reported promptly, not left to
+      // block for the old 60s-per-candidate behavior.
+      expect(elapsed).toBeLessThan(5_000);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalSofficePath === undefined) delete process.env.SOFFICE_PATH;
+      else process.env.SOFFICE_PATH = originalSofficePath;
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it.skipIf(windowsOnly)('probes a duplicate executable candidate only once', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dcf-soffice-dedup-'));
+    const originalPath = process.env.PATH;
+    const originalSofficePath = process.env.SOFFICE_PATH;
+    try {
+      // A fake that records each probe then blocks, so duplicate candidates
+      // would each cost a full timeout. Dedup must keep this to one probe.
+      const log = join(directory, 'probes.log');
+      const candidate = await writeSlowSoffice(directory, log);
+      process.env.SOFFICE_PATH = candidate;
+      process.env.PATH = directory;
+      expect(findSoffice({ probeTimeoutMs: 1_000 })).toBeNull();
+      const probes = await readFile(log, 'utf8').catch(() => '');
+      expect(probes.trim().split('\n').filter(Boolean)).toHaveLength(1);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalSofficePath === undefined) delete process.env.SOFFICE_PATH;
+      else process.env.SOFFICE_PATH = originalSofficePath;
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 10_000);
 
   it.skipIf(windowsOnly)('installs CLI links and shell startup PATH with a temporary HOME, idempotently', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dcf-install-home-'));

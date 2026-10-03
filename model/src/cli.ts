@@ -28,7 +28,7 @@ import {
   writeManifestAtomic,
   type ModelManifest,
 } from '@/library/index';
-import { applyApprovedProposal, captureChangePriors, rejectProposal } from '@/review/apply-service';
+import { applyApprovedProposal, captureChangePriors, previewProposal, rejectProposal } from '@/review/apply-service';
 import { extractFilingInfo } from '@/watch/filing-source';
 import { getWatchStatus, setWatchEnabled } from '@/watch/watch-service';
 import { resolveMonitorFiling, syncFilingSnapshot } from '@/watch/source-sync';
@@ -92,12 +92,13 @@ function usage(): string {
     'Library commands:  dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf models list [--models-dir <dir>] [--json]',
     '                   dcf model inspect <ticker> [--models-dir <dir>] [--json]',
-    '                   dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json] [--models-dir <dir>]',
+    '                   dcf model compare <ticker> [--from <revision>] [--to <revision>] [--offset <n>] [--limit <n>] [--json] [--models-dir <dir>]',
     '                   dcf model open <ticker> [--models-dir <dir>]',
     '                   dcf model review <ticker> [--models-dir <dir>]',
     '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model export <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model propose-update <ticker> [--summary <text>] [--change <spec>]... [--accession <acc> --filed <date>] [--models-dir <dir>]',
+    '                   dcf model preview <proposal-id> [--models-dir <dir>]',
     '                   dcf model apply <proposal-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model reject <proposal-id> [--reason <text>] [--models-dir <dir>]',
     '                   dcf filings sync <ticker> [--models-dir <dir>]',
@@ -230,6 +231,8 @@ interface GlobalFlags {
   output?: string;
   summary?: string;
   changes: string[];
+  reviewOnly: boolean;
+  verification?: string;
   accession?: string;
   filed?: string;
   set?: string;
@@ -237,11 +240,13 @@ interface GlobalFlags {
   interval?: number;
   from?: string;
   to?: string;
+  offset?: number;
+  limit?: number;
   positionals: string[];
 }
 
 function parseLibraryArgs(argv: string[]): GlobalFlags {
-  const flags: GlobalFlags = {json: false, force: false, approve: false, changes: [], positionals: []};
+  const flags: GlobalFlags = {json: false, force: false, approve: false, reviewOnly: false, changes: [], positionals: []};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -258,12 +263,16 @@ function parseLibraryArgs(argv: string[]): GlobalFlags {
     else if (arg === '--output' || arg === '-o') flags.output = takeValue(arg);
     else if (arg === '--summary') flags.summary = takeValue(arg);
     else if (arg === '--change') flags.changes.push(takeValue(arg));
+    else if (arg === '--review-only') flags.reviewOnly = true;
+    else if (arg === '--verification') flags.verification = takeValue(arg);
     else if (arg === '--accession') flags.accession = takeValue(arg);
     else if (arg === '--filed') flags.filed = takeValue(arg);
     else if (arg === '--set') flags.set = takeValue(arg);
     else if (arg === '--reason') flags.reason = takeValue(arg);
     else if (arg === '--from') flags.from = takeValue(arg);
     else if (arg === '--to') flags.to = takeValue(arg);
+    else if (arg === '--offset') flags.offset = Number(takeValue(arg));
+    else if (arg === '--limit' || arg === '--max-changes') flags.limit = Number(takeValue(arg));
     else if (arg === '--interval') {
       const raw = takeValue(arg);
       const seconds = Number(raw);
@@ -408,6 +417,19 @@ async function persistWorkbookRevision(
   if (existsSync(workbookPath) && previous?.revision_id) {
     const archived = revisionPath(root, ticker, previous.revision_id);
     if (!existsSync(archived)) {
+      // Never backfill a prior revision archive from current.xlsx when its
+      // bytes no longer match that revision's recorded hash (e.g. manual
+      // edits since the last build): fail closed before writing anything.
+      if (previous.workbook_hash) {
+        const onDiskHash = readCurrentHash(root, ticker);
+        if (onDiskHash !== previous.workbook_hash) {
+          throw new Error(
+            `Revision archive for ${previous.revision_id} is missing and current.xlsx does not match its recorded hash ` +
+            `(recorded ${previous.workbook_hash}, file ${onDiskHash ?? 'missing'}); refusing to backfill the archive from diverged bytes. ` +
+            `Restore the archive or rebuild with \`dcf build ${ticker}\`.`,
+          );
+        }
+      }
       await mkdir(dirname(archived), {recursive: true});
       await copyFile(workbookPath, archived);
     }
@@ -729,13 +751,13 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
 const OPEN_EXIT_TIMEOUT_MS = 15_000;
 
 async function cmdModelCompare(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
-  if (!tickerRaw) throw new CliUsageError('Usage: dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json]');
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model compare <ticker> [--from <revision>] [--to <revision>] [--offset <n>] [--limit <n>] [--json]');
   const ticker = normalizeLibraryTicker(tickerRaw);
   const root = libraryRoot(flags.modelsDir);
   const {compareRevisions, formatCompareMarkdown} = await import('@/review/compare');
   // Genuinely read-only: no library creation, no migration; a missing
   // library fails with the build-first error from the compare service.
-  const compared = await compareRevisions(root, ticker, {from: flags.from, to: flags.to, readOnly: true});
+  const compared = await compareRevisions(root, ticker, {from: flags.from, to: flags.to, offset: flags.offset, limit: flags.limit, readOnly: true});
   if (flags.json) {
     console.log(JSON.stringify(compared, null, 2));
     return;
@@ -952,6 +974,9 @@ async function cmdModelProposeUpdate(tickerRaw: string | undefined, flags: Globa
     const summary = flags.summary ?? `Update ${ticker} from SEC filing ${accession}`;
     let draft: ProposalDraft;
     if (flags.changes.length > 0) {
+      if (flags.reviewOnly) {
+        throw new CliUsageError('--review-only takes no --change specs; drop --change to record a review-only proposal.');
+      }
       const parsedChanges = flags.changes.map((spec) => {
         const parsed = parseChangeSpec(spec, accession);
         // A proposed value starting with '=' is an explicit formula edit.
@@ -995,6 +1020,23 @@ async function cmdModelProposeUpdate(tickerRaw: string | undefined, flags: Globa
           priorFormula: priors[index]?.priorFormula ?? null,
         })),
       };
+    } else if (flags.reviewOnly) {
+      const verification = flags.verification?.trim() ?? '';
+      if (!verification) {
+        throw new CliUsageError('Review-only proposals need --verification <text> with the AI verification result.');
+      }
+      if (!flags.summary?.trim()) {
+        throw new CliUsageError('Review-only proposals need --summary <text> with the AI review summary.');
+      }
+      draft = {
+        ticker,
+        baseRevisionHash: baseHash,
+        summary: flags.summary.trim(),
+        createdAt: utcNow(),
+        changes: [],
+        verification,
+        accession,
+      };
     } else {
       console.log('No filed facts supplied: add one or more --change specs (sheet|cell|proposed|rationale|source[|accession]) to record sourced edits.');
       console.log('No proposal recorded.');
@@ -1005,12 +1047,28 @@ async function cmdModelProposeUpdate(tickerRaw: string | undefined, flags: Globa
       console.log(formatProposalMarkdown(draft));
       throw new CliUsageError(`Proposal invalid:\n- ${errors.join('\n- ')}`);
     }
-    const record = lib.createProposal({ticker, base_revision_hash: baseHash, payload: {summary: draft.summary, changes: draft.changes, createdAt: draft.createdAt}, status: 'proposed'});
+    const record = lib.createProposal({ticker, base_revision_hash: baseHash, payload: {
+      summary: draft.summary,
+      changes: draft.changes,
+      createdAt: draft.createdAt,
+      ...(draft.verification !== undefined ? {verification: draft.verification} : {}),
+      ...(draft.accession !== undefined ? {accession: draft.accession} : {}),
+    }, status: 'proposed'});
     console.log(formatProposalMarkdown(draft));
     console.log(`Proposal ${record.id} recorded as proposed. Approval required before apply: \`dcf model apply ${record.id} --approve\`.`);
   } finally {
     lib.close();
   }
+}
+
+async function cmdModelPreview(proposalIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!proposalIdRaw) throw new CliUsageError('Usage: dcf model preview <proposal-id> [--models-dir <dir>]');
+  const root = libraryRoot(flags.modelsDir);
+  const result = await previewProposal(root, proposalIdRaw);
+  console.log(`Candidate for proposal ${result.proposalId} (${result.ticker}): ${result.candidatePath} (hash ${result.candidateHash}).`);
+  console.log(`Base revision: ${result.baseHash}. ${result.validationSummary}.`);
+  console.log(result.inspectionMarkdown);
+  console.log(`Preview only — the accepted workbook is unchanged. Promote with \`dcf model apply ${result.proposalId} --approve\`.`);
 }
 
 async function cmdModelApply(proposalIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
@@ -1019,7 +1077,19 @@ async function cmdModelApply(proposalIdRaw: string | undefined, flags: GlobalFla
     throw new CliUsageError(`Explicit approval required: re-run with --approve to apply proposal ${proposalIdRaw}.`);
   }
   const root = libraryRoot(flags.modelsDir);
-  const result = await applyApprovedProposal(root, proposalIdRaw, flags.approvedBy ?? 'cli');
+  let result: Awaited<ReturnType<typeof applyApprovedProposal>>;
+  try {
+    result = await applyApprovedProposal(root, proposalIdRaw, flags.approvedBy ?? 'cli');
+  } catch (error) {
+    // Apply promotes a validated candidate; a missing/stale candidate, a moved
+    // base, a manual edit, or an invalid proposal is resolved by previewing the
+    // proposal first, so every apply failure points the user at that step.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${message}\nPreview first: run \`dcf model preview ${proposalIdRaw}\`, review the candidate, ` +
+      `then re-run \`dcf model apply ${proposalIdRaw} --approve\`.`,
+    );
+  }
   console.log(`Applied proposal ${result.proposalId} (approved by ${result.approvedBy}): preserved revision ${result.priorHash} and saved new revision ${result.revisionId} (${result.newHash}).`);
   console.log(result.inspectionMarkdown);
 }
@@ -1159,9 +1229,10 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'update') await cmdModelUpdate(args[0], flags);
       else if (sub === 'export') await cmdModelExport(args[0], flags);
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
+      else if (sub === 'preview') await cmdModelPreview(args[0], flags);
       else if (sub === 'apply') await cmdModelApply(args[0], flags);
       else if (sub === 'reject') await cmdModelReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');

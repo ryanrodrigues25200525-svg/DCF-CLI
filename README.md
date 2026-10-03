@@ -30,8 +30,9 @@ control of spreadsheet edits and every approved library update.
   errors, and missing-input gates before saving a revision.
 - 🗂️ Saves workbooks, manifests, revisions, filing snapshots, and proposals in
   a configurable local model library.
-- ✅ Requires explicit approval before a proposed update becomes a new accepted
-  revision.
+- ✅ Requires a separate validated candidate preview and explicit human approval
+  before a proposed update becomes a new accepted revision. Apply never builds
+  a candidate inline.
 
 DCF CLI does not claim universal coverage by sector. See the
 [model coverage guide](docs/MODEL_COVERAGE.md) for tested examples and
@@ -141,9 +142,10 @@ flowchart LR
     E --> F
     F --> G[LibreOffice recalc and validation]
     G --> H[Local library and revision]
-    H --> I[Analyst review and edits]
-    I --> J[Optional AI review or sourced proposal]
-    J --> K{Human approval}
+    H --> I[Review and compare with prior revision]
+    I --> J[Optional AI proposal: summary + sourced edits]
+    J --> P[Candidate preview + AI Change Log]
+    P --> K{Human approval}
     K --> H
 ```
 
@@ -158,8 +160,10 @@ The pipeline separates jobs that need different standards:
    Excel formulas.
 4. **Workbook checks** recalculate with LibreOffice and scan for missing
    required inputs and formula errors before the library accepts a revision.
-5. **The analyst** reviews every assumption and edits formulas or inputs in a
-   spreadsheet app. AI review is optional and cannot silently publish a change.
+5. **The analyst** reviews every assumption, compares revisions, and edits
+   formulas or inputs in a spreadsheet app. AI review is optional: a proposal
+   stays separate, a preview builds a candidate with its own `AI Change Log`,
+   and only explicit approval publishes a revision.
 
 ## 🧰 Commands you’ll use
 
@@ -171,11 +175,13 @@ The pipeline separates jobs that need different standards:
 | `dcf models list` | Find saved company workbooks |
 | `dcf model inspect AAPL` | Check route, source accession, revision, and workbook hash |
 | `dcf model review AAPL` | Check formulas, workbook errors, sources, and missing inputs |
+| `dcf model compare AAPL [--from ID] [--to ID] [--json]` | Compare two revisions: cell changes plus source/model context and filing-freshness notes |
 | `dcf model open AAPL` | Open the saved workbook in your spreadsheet app |
 | `dcf filings sync AAPL` | Refresh filing metadata and queue an update; it never edits a workbook |
 | `dcf watch run --interval 300` | Check enabled companies every 300 seconds |
-| `dcf model propose-update AAPL` | Save a source-backed proposal using one or more --change entries |
-| `dcf model apply ID --approve` | Apply the reviewed proposal as a new revision |
+| `dcf model propose-update AAPL --summary "…" --change '…'` | Save a source-backed proposal; `--review-only --summary --verification` records a review with no cell edits |
+| `dcf model preview ID` | Build a separate, validated candidate workbook with an `AI Change Log`; accepted workbook unchanged |
+| `dcf model apply ID --approve` | Promote the previewed candidate as a new revision after explicit approval (a preview is required; apply never builds inline) |
 | `dcf model reject ID` | Reject a proposal without changing the workbook |
 | `dcf mcp` | Start the local stdio MCP server |
 
@@ -199,11 +205,23 @@ For all options and conflict behavior, see the
 Use ChatGPT to **review and explain a model that DCF CLI built**, rather than
 asking it to invent a workbook from scratch.
 
-1. Build and validate. Use `dcf build AAPL` for the initial model, or
+> **The AI step is not autonomous.** No LLM runs inside the Python/TypeScript
+> engine. The ChatGPT/Codex agent reads the current model, the deterministic
+> checks, the prior-revision comparison, and the stored source snapshot, then
+> drafts a proposal; DCF CLI validates, previews, and stores what the agent
+> supplies. Never describe a workbook as AI-verified unless you asked an agent
+> to run the review.
+
+1. Build or update and validate. Use `dcf build AAPL` for the initial model, or
    `dcf model update AAPL` after a new filing; then run `dcf model review AAPL`.
+   When a previous revision exists, `dcf model compare AAPL` shows the cell
+   changes and source/model-context deltas between revisions, including whether
+   a newer filing was actually mapped into the workbook.
 
 2. Attach the dated workbook path printed by the CLI, for example
-   `~/Downloads/2026-10-03_AAPL_DCF.xlsx`, to a ChatGPT conversation.
+   `~/Downloads/2026-10-03_AAPL_DCF.xlsx`, to a ChatGPT conversation. Paste the
+   `dcf model compare` output too when you want the prior revision reviewed
+   alongside the current one.
 
 3. Ask for a review with a source-first prompt such as:
 
@@ -215,18 +233,29 @@ asking it to invent a workbook from scratch.
    > rationale, source, and SEC accession. Separate reported facts from analyst
    > assumptions and list the checks you would run after an edit.
 
-4. Apply analyst judgment in Excel. For a source-backed fact correction, sync
-   the filing and record a proposal with `dcf model propose-update`; inspect its
-   preview, then apply it only after approval with
-   `dcf model apply <proposal-id> --approve`. Run `dcf model export AAPL`
-   afterward to create a dated copy of the newly accepted library revision.
+4. Record the outcome. A source-backed factual correction becomes a proposal
+   with `dcf model propose-update` (one `--change` per edit). A review that finds
+   no cell edits can still be recorded with
+   `--review-only --summary <text> --verification <text>`. Inspect the proposal,
+   then run `dcf model preview <proposal-id>` to build a separate candidate
+   workbook with an `AI Change Log` sheet; the accepted workbook is unchanged.
+   Preview is required: it recalculates cached formulas, returns the inspection
+   details and each cell's prior/proposed value or formula, and stores the
+   candidate. Apply only after approval with
+   `dcf model apply <proposal-id> --approve` (MCP `proposal_apply` with
+   `approval: true`); apply re-validates the stored candidate — it never builds
+   one inline — and preserves the prior revision's filing/route metadata on the
+   new revision. Rejection leaves the accepted workbook unchanged. Run
+   `dcf model export AAPL` afterward to create a dated copy.
 
 5. Run `dcf model review AAPL` after the change and inspect the revision/hash
    before relying on the workbook.
 
-ChatGPT's free-form review notes stay in the conversation; source-backed cell
-changes become stored proposals. The CLI does not yet save a separate AI review
-report in the model library.
+A proposal carries the AI summary and each change's prior value or formula,
+proposed value or formula, rationale, and filing accession; review-only
+proposals also require a verification result. `dcf model preview` writes those
+plus the validation result into the candidate's `AI Change Log` sheet. Free-form
+ChatGPT conversation notes are still not exported as a separate report.
 
 **Editing note:** formulas in Excel are editable. The library also detects
 manual edits to `current.xlsx`; applying a proposal to a workbook whose hash has
@@ -244,10 +273,12 @@ npm --prefix model run dcf-mcp --silent
 
 Configure its executable and absolute project paths in a local stdio-capable
 MCP client. The server uses the same services as the CLI for model discovery,
-workbook inspection, filing checks, validation, and sourced proposals.
-Applying a proposal still requires explicit approval. The MCP server does not
-trigger a full model rebuild; run `dcf model update <ticker>` in the CLI first,
-then review the dated workbook with ChatGPT.
+workbook inspection, filing checks, revision listing and comparison, validation,
+and sourced proposals. `proposal_preview` builds the validated candidate with
+its `AI Change Log`; applying a proposal still requires explicit approval and
+runs the same shared apply path. The MCP server does not trigger a full model
+rebuild; run `dcf model update <ticker>` in the CLI first, then review the dated
+workbook with ChatGPT.
 
 For ChatGPT, the app connection needs either a reachable HTTPS MCP endpoint or
 a supported Secure MCP Tunnel. DCF CLI currently provides the local stdio
@@ -272,9 +303,10 @@ submitted through a filing agent when the current SEC response contains a
 usable mixed filing sample; otherwise the check logs a clear skip. Live
 providers can rate-limit or return stale data; model routes fail closed when
 required context is missing.
-The latest full run on 3 October 2026 passed **82/82 live model tests** in
-**869.14 seconds**, and the mixed-list filing-agent regression passed. This
-suite verifies named live routes and controls; it does not establish universal
+
+The full live suite has **not** been re-run for the current working-tree
+changes; it is pending the local LibreOffice `soffice` download. A green run
+covers the named live routes and controls only; it does not establish universal
 company or sector coverage.
 
 ## 📚 Project docs

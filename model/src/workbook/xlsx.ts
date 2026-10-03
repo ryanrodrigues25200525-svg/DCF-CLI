@@ -131,11 +131,21 @@ export function findBackendPython(): string | null {
   return null;
 }
 
-function sofficeWorks(candidate: string): boolean {
+/**
+ * Bounded version-probe timeout for a CLI `--version` check. A working
+ * LibreOffice answers in well under a second; anything slower is a broken
+ * headless binary, so fail fast instead of blocking CLI startup. The
+ * SIGKILL kill signal guarantees the probe returns even when the candidate
+ * ignores SIGTERM or leaves a hung child process behind.
+ */
+export const SOFFICE_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+function sofficeWorks(candidate: string, timeoutMs: number): boolean {
   try {
     const r = spawnSync(candidate, ['--headless', '--version'], {
       stdio: 'ignore',
-      timeout: 60_000,
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
     });
     return r.status === 0;
   } catch {
@@ -143,8 +153,16 @@ function sofficeWorks(candidate: string): boolean {
   }
 }
 
-/** Uses `SOFFICE_PATH`, a `PATH` lookup, then common install paths. */
-export function findSoffice(): string | null {
+/**
+ * Uses `SOFFICE_PATH`, a `PATH` lookup, then common install paths.
+ * `probeTimeoutMs` defaults to SOFFICE_VERSION_PROBE_TIMEOUT_MS and exists so
+ * tests can exercise discovery with a short, deterministic probe budget.
+ */
+export function findSoffice(options?: { probeTimeoutMs?: number }): string | null {
+  const probeTimeoutMs = options?.probeTimeoutMs ?? SOFFICE_VERSION_PROBE_TIMEOUT_MS;
+  if (typeof probeTimeoutMs !== "number" || !Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
+    throw new Error("findSoffice: probeTimeoutMs must be a positive number");
+  }
   const candidates: string[] = [];
   const explicit = process.env.SOFFICE_PATH?.trim();
   if (explicit) candidates.push(explicit);
@@ -163,8 +181,15 @@ export function findSoffice(): string | null {
       "/usr/local/bin/soffice",
     );
   }
+  const seen = new Set<string>();
   for (const c of candidates) {
-    if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c)) return c;
+    // Deduplicate exact executable candidates before probing: SOFFICE_PATH, a
+    // PATH hit, and an install path often resolve to the same binary, and each
+    // probe of a hung candidate costs a full timeout.
+    const key = path.resolve(c);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c, probeTimeoutMs)) return c;
   }
   return null;
 }
@@ -188,8 +213,10 @@ data_review_rows = 0
 for ws in wb.worksheets:
     for row in ws.iter_rows():
         for c in row:
-            v = c.value
-            if isinstance(v, str) and v.startswith("="):
+            # Live formulas only (data_type 'f'): text starting with "=" (for
+            # example the AI Change Log echo of a proposed formula) stays inert
+            # text and must not inflate the formula count.
+            if c.data_type == 'f':
                 formula_count += 1
 if "Input Required" in wb.sheetnames:
     try:
@@ -596,8 +623,12 @@ export interface WorkbookDiff {
   removedSheets: string[];
   /** Every cell difference counted (the detail list below stays bounded). */
   totalChanges: number;
-  /** True when differences exceed the bounded detail list. */
+  /** True when differences exceed the bounded detail list (hard collection cap). */
   truncated: boolean;
+  /** True when another detail page is available within the bounded list. */
+  hasMore: boolean;
+  /** Offset for the next detail page, or null when the current page is last. */
+  nextOffset: number | null;
   changes: WorkbookCellChange[];
   offset: number;
   limit: number;
@@ -615,6 +646,9 @@ import sys
 import openpyxl
 
 HARD_CAP = int(sys.argv[3]) if len(sys.argv) > 3 else 20000
+# Reserved sheets are excluded from cell diffs and from added/removed sheet
+# lists so revision comparisons report only model changes.
+EXCLUDE_SHEETS = set(json.loads(sys.argv[4])) if len(sys.argv) > 4 and sys.argv[4] else set()
 
 def scalar(value):
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -634,8 +668,12 @@ def snapshot(path):
     wb_formulas = openpyxl.load_workbook(path, data_only=False, read_only=True)
     wb_cached = openpyxl.load_workbook(path, data_only=True, read_only=True)
     cells = {}
+    sheet_titles = []
     try:
         for ws in wb_formulas.worksheets:
+            if ws.title in EXCLUDE_SHEETS:
+                continue
+            sheet_titles.append(ws.title)
             try:
                 cached_ws = wb_cached[ws.title]
             except KeyError:
@@ -664,7 +702,7 @@ def snapshot(path):
             wb_cached.close()
         except Exception:
             pass
-    return [ws.title for ws in wb_formulas.worksheets], cells
+    return sheet_titles, cells
 
 before_sheets, before_cells = snapshot(sys.argv[1])
 after_sheets, after_cells = snapshot(sys.argv[2])
@@ -730,20 +768,32 @@ function isDiffChange(o: unknown): o is WorkbookCellChange {
  * Deterministic, read-only cell comparison of two workbook files. Compares
  * live formulas plus cached values (so recalculation-only shifts appear as
  * value changes); blank cells are skipped. Never modifies either file.
+ * Reserved sheets (`excludeSheets`, default the `AI Change Log`) are skipped
+ * entirely, so they contribute no cell changes and never appear in the
+ * added/removed sheet lists — revision comparisons then count and page only
+ * model changes. count/totalChanges/truncated/hasMore/nextOffset are all
+ * computed over the same excluded set.
+ *
  * Counts every difference for totalChanges while the detail list stays
- * bounded: the first WORKBOOK_DIFF_HARD_CAP changes are returned (truncated
- * flags the cap) and callers page with offset/limit (clamped to
- * WORKBOOK_DIFF_MAX_LIMIT). Fractional offsets/limits are rejected, not
+ * bounded: the first WORKBOOK_DIFF_HARD_CAP changes are collected
+ * (truncated flags the hard cap — remaining differences past the cap are not
+ * listable) and callers page within the collected list with offset/limit
+ * (clamped to WORKBOOK_DIFF_MAX_LIMIT). hasMore/nextOffset describe paging:
+ * when hasMore is true another detail page exists at nextOffset; when false
+ * the current page is last, so callers stop instead of looping. A page that
+ * omits changes always reports hasMore true; truncated stays false unless
+ * the hard cap itself was hit. Fractional offsets/limits are rejected, not
  * floored.
  */
 export async function diffWorkbookCells(
   python: string,
   beforePath: string,
   afterPath: string,
-  opts?: { offset?: number; limit?: number },
+  opts?: { offset?: number; limit?: number; excludeSheets?: readonly string[] },
 ): Promise<WorkbookDiff> {
   const offset = opts?.offset ?? 0;
   const limit = opts?.limit ?? WORKBOOK_DIFF_DEFAULT_LIMIT;
+  const excludeSheets = opts?.excludeSheets ?? [AI_CHANGE_LOG_SHEET];
   if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
     throw new Error('diff offset must be an integer >= 0.');
   }
@@ -754,7 +804,7 @@ export async function diffWorkbookCells(
   try {
     const res = await execFileAsync(
       python,
-      ['-c', DIFF_SCRIPT, beforePath, afterPath, String(WORKBOOK_DIFF_HARD_CAP)],
+      ['-c', DIFF_SCRIPT, beforePath, afterPath, String(WORKBOOK_DIFF_HARD_CAP), JSON.stringify(excludeSheets)],
       {timeout: 180_000, maxBuffer: 64 * 1024 * 1024},
     );
     stdout = res.stdout;
@@ -779,6 +829,8 @@ export async function diffWorkbookCells(
     beforeValue: normalizeDiffScalar(c.beforeValue),
     afterValue: normalizeDiffScalar(c.afterValue),
   }));
+  const page = all.slice(offset, offset + limit);
+  const hasMore = offset + page.length < all.length;
   return {
     beforeSheets: (r['beforeSheets'] as unknown[]).map(String),
     afterSheets: (r['afterSheets'] as unknown[]).map(String),
@@ -786,10 +838,133 @@ export async function diffWorkbookCells(
     removedSheets: Array.isArray(r['removedSheets']) ? (r['removedSheets'] as unknown[]).map(String) : [],
     totalChanges: typeof r['totalChanges'] === 'number' ? r['totalChanges'] : all.length,
     truncated: r['truncated'] === true,
-    changes: all.slice(offset, offset + limit),
+    hasMore,
+    nextOffset: hasMore ? offset + page.length : null,
+    changes: page,
     offset,
     limit,
   };
+}
+
+// ------------------------------------------------------- AI change log ---
+
+export interface ChangeLogRow {
+  index: number;
+  sheet: string;
+  cell: string;
+  prior: string;
+  proposed: string;
+  rationale: string;
+  source: string;
+  accession: string;
+}
+
+export interface ChangeLogInput {
+  proposalId: string;
+  ticker: string;
+  baseHash: string;
+  summary: string;
+  verification: string | null;
+  filingAccession: string | null;
+  validationSummary: string;
+  rows: ChangeLogRow[];
+}
+
+export const AI_CHANGE_LOG_SHEET = 'AI Change Log';
+
+const CHANGELOG_SCRIPT = `
+import json, os, sys
+import openpyxl
+from openpyxl.styles import Font
+
+src = sys.argv[1]
+payload = json.loads(os.environ["DCF_CHANGELOG"])
+
+wb = openpyxl.load_workbook(src)
+if "AI Change Log" in wb.sheetnames:
+    # A promoted candidate leaves this sheet behind, so replacement is normal;
+    # but a user sheet that merely shares the name must never be destroyed.
+    if wb["AI Change Log"]["A1"].value != "AI Change Log":
+        raise ValueError("refusing to overwrite a user sheet named 'AI Change Log'")
+    del wb["AI Change Log"]
+ws = wb.create_sheet("AI Change Log")
+
+def set_text(r, c, v):
+    # Formula-safe text without a visible apostrophe: a value starting with
+    # "=" stored as a string (data_type "s"/inlineStr) stays inert text in
+    # Excel/LibreOffice and displays as "=..." with no leading "'". Without
+    # this, openpyxl would store it as a live formula (<f>) that recalculates
+    # and inflates the formula count.
+    cell = ws.cell(r, c, v)
+    if isinstance(v, str) and v.startswith("="):
+        cell.data_type = "s"
+    return cell
+
+bold = Font(bold=True)
+ws["A1"] = "AI Change Log"
+ws["A1"].font = bold
+meta = [
+    ("Proposal", payload.get("proposalId")),
+    ("Ticker", payload.get("ticker")),
+    ("Base revision", payload.get("baseHash")),
+    ("Summary", payload.get("summary")),
+    ("Verification", payload.get("verification")),
+    ("Filing accession", payload.get("filingAccession")),
+    ("Validation", payload.get("validationSummary")),
+]
+row = 2
+for label, value in meta:
+    ws.cell(row, 1, label).font = bold
+    set_text(row, 2, value)
+    row += 1
+header_row = row + 1
+# NOTE: the first header must not be a bare "#" — LibreOffice parses that as
+# an error literal on recalculation and the candidate would fail validation.
+headers = ["No", "Sheet", "Cell", "Prior", "Proposed", "Rationale", "Source", "Accession"]
+for col, text in enumerate(headers, start=1):
+    ws.cell(header_row, col, text).font = bold
+rows = payload.get("rows") or []
+if not rows:
+    ws.cell(header_row + 1, 1, "No cell changes were recommended (review only).")
+else:
+    for i, entry in enumerate(rows):
+        r = header_row + 1 + i
+        set_text(r, 1, entry.get("index"))
+        set_text(r, 2, entry.get("sheet"))
+        set_text(r, 3, entry.get("cell"))
+        set_text(r, 4, entry.get("prior"))
+        set_text(r, 5, entry.get("proposed"))
+        set_text(r, 6, entry.get("rationale"))
+        set_text(r, 7, entry.get("source"))
+        set_text(r, 8, entry.get("accession"))
+widths = [6, 22, 10, 22, 22, 48, 32, 24]
+for col, width in enumerate(widths, start=1):
+    ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
+
+wb.save(src)
+print(json.dumps({"sheet": "AI Change Log", "rows": len(rows)}))
+`;
+
+/**
+ * Write (or rewrite) the `AI Change Log` sheet on a candidate workbook copy.
+ * Text-only: adds no formulas and changes no other sheet. Never touches the
+ * accepted workbook — callers pass only candidate copies.
+ */
+export async function writeChangeLogSheet(
+  python: string,
+  workbookPath: string,
+  input: ChangeLogInput,
+): Promise<void> {
+  try {
+    await execFileAsync(python, ['-c', CHANGELOG_SCRIPT, workbookPath], {
+      timeout: 120_000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {...process.env, DCF_CHANGELOG: JSON.stringify(input)},
+    });
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(`writeChangeLogSheet failed for ${workbookPath}: ${String(e.stderr ?? e.message ?? err).slice(-2000)}`);
+  }
 }
 
 export function formatInspectionMarkdown(
