@@ -64,7 +64,7 @@ dcf_export_test.xlsx
 
 # generated workbooks and local implementation scratch
 *.xlsx
-!examples/*.xlsx
+!"excel models - built by dcf cli"/*.xlsx
 library.db
 library.db-*
 .superpowers/sdd/
