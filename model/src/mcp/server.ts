@@ -650,9 +650,10 @@ async function toolRevisionsList(args: Row): Promise<unknown> {
   const limit = pagingInt(args['limit'], 'limit', 1, 100, 20);
   try {
     const mod = await import('../review/compare.js') as {
-      listRevisionSummaries(r: string, t: string, o: { offset: number; limit: number }): unknown;
+      listRevisionSummaries(r: string, t: string, o: { offset: number; limit: number; readOnly: boolean }): unknown;
     };
-    return mod.listRevisionSummaries(modelsDir, ticker, {offset, limit});
+    // True read-only: no directory creation, no schema migration.
+    return mod.listRevisionSummaries(modelsDir, ticker, {offset, limit, readOnly: true});
   } catch (e) {
     if (isErr(e)) throw e;
     throw err('LIBRARY_UNAVAILABLE', e instanceof Error ? e.message : String(e));
@@ -669,9 +670,10 @@ async function toolModelCompare(args: Row): Promise<unknown> {
   const maxChanges = pagingInt(args['maxChanges'], 'maxChanges', 1, 500, 100);
   try {
     const mod = await import('../review/compare.js') as {
-      compareRevisions(r: string, t: string, o: { from?: string; to?: string; offset: number; limit: number }): Promise<unknown>;
+      compareRevisions(r: string, t: string, o: { from?: string; to?: string; offset: number; limit: number; readOnly: boolean }): Promise<unknown>;
     };
-    return await mod.compareRevisions(modelsDir, ticker, {from, to, offset, limit: maxChanges});
+    // True read-only: no directory creation, no schema migration.
+    return await mod.compareRevisions(modelsDir, ticker, {from, to, offset, limit: maxChanges, readOnly: true});
   } catch (e) {
     if (isErr(e)) throw e;
     const message = e instanceof Error ? e.message : String(e);

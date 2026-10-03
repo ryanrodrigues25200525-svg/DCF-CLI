@@ -1,8 +1,10 @@
 /**
  * Shared read-only revision comparison for the CLI (`dcf model compare`)
  * and the MCP `model_compare` / `revisions_list` tools. Never writes
- * workbooks, manifests, or index rows (opening the library may apply the
- * idempotent nullable-column migration, which alters no data).
+ * workbooks, manifests, or index rows. The MCP path additionally opens the
+ * SQLite file itself read-only with no directory creation and no schema
+ * migration (`readOnly: true`); the CLI path keeps the migrating open used
+ * by builds. Older-schema rows map missing metadata columns to null.
  *
  * Each revision records BOTH the filing actually mapped into the workbook
  * facts (fact accession/filed date/period) AND the latest detected filing at
@@ -245,16 +247,33 @@ export function freshnessNotes(ticker: string, rev: RevisionSummary): string[] {
 }
 
 /**
+ * Open the library for comparison. `readOnly: true` (the MCP path) opens the
+ * existing SQLite file read-only with no directory creation and no schema
+ * migration; the default CLI path keeps migrating opens for builds.
+ */
+function openLibraryFor(root: string, readOnly?: boolean): ModelLibrary {
+  return readOnly ? ModelLibrary.openReadOnly(root) : new ModelLibrary(root);
+}
+
+export interface CompareOptions {
+  from?: string;
+  to?: string;
+  offset?: number;
+  limit?: number;
+  readOnly?: boolean;
+}
+
+/**
  * Compare two revisions of a ticker's model. Read-only: opens the library
  * index and reads workbook files, writes nothing.
  */
 export async function compareRevisions(
   root: string,
   tickerRaw: string,
-  opts?: { from?: string; to?: string; offset?: number; limit?: number },
+  opts?: CompareOptions,
 ): Promise<RevisionComparison> {
   const ticker = normalizeTicker(tickerRaw);
-  const lib = new ModelLibrary(root);
+  const lib = openLibraryFor(root, opts?.readOnly);
   try {
     const company = lib.getCompany(ticker);
     if (!company) throw new Error(`No model found for ticker ${ticker}. Build one first with \`dcf build ${ticker}\`.`);
@@ -352,14 +371,14 @@ export async function compareRevisions(
 export function listRevisionSummaries(
   root: string,
   tickerRaw: string,
-  opts?: { offset?: number; limit?: number },
+  opts?: { offset?: number; limit?: number; readOnly?: boolean },
 ): { ticker: string; total: number; offset: number; limit: number; revisions: RevisionSummary[] } {
   const ticker = normalizeTicker(tickerRaw);
   const offset = opts?.offset ?? 0;
   const limit = opts?.limit ?? 20;
   if (!Number.isInteger(offset) || offset < 0) throw new Error('offset must be an integer >= 0.');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be an integer between 1 and 100.');
-  const lib = new ModelLibrary(root);
+  const lib = openLibraryFor(root, opts?.readOnly);
   try {
     const all = lib.listRevisions(ticker);
     return {

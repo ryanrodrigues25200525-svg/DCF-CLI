@@ -176,9 +176,17 @@ export class ModelLibrary {
   readonly root: string;
   private db: DatabaseSync;
 
-  constructor(root: string) {
+  constructor(root: string, opts?: { readOnly?: boolean }) {
     if (!root || root.trim().length === 0) throw new Error('ModelLibrary root must be a non-empty path.');
     this.root = root;
+    if (opts?.readOnly) {
+      // True read-only open: no directory creation, no schema migration, and
+      // the SQLite file itself is opened read-only. Throws when the database
+      // file is absent (nothing is ever created). Missing Task 3 columns on
+      // older schemas map to null via strOrNull(undefined).
+      this.db = new DatabaseSync(join(root, 'library.db'), {readOnly: true});
+      return;
+    }
     mkdirSync(root, { recursive: true });
     mkdirSync(join(root, 'companies'), { recursive: true });
     this.db = new DatabaseSync(join(root, 'library.db'));
@@ -187,6 +195,11 @@ export class ModelLibrary {
 
   static open(explicit?: string): ModelLibrary {
     return new ModelLibrary(explicit !== undefined ? resolveModelsDir(explicit) : getModelsDir());
+  }
+
+  /** Read-only open for inspection/compare paths (MCP tools). Never migrates. */
+  static openReadOnly(root: string): ModelLibrary {
+    return new ModelLibrary(root, {readOnly: true});
   }
 
   close(): void {

@@ -8727,6 +8727,182 @@ print(json.dumps({
   }, 600_000);
 
   // --- Task 3 revision filing metadata + comparison ---
+  // Hermetic (no provider network): a legacy-schema library served through
+  // the MCP stdio server. revisions_list maps every missing metadata column
+  // to null, model_compare diffs the archived workbooks, and both calls leave
+  // the DB bytes and directory listing untouched — the true read-only path
+  // (no directory creation, no schema migration).
+
+  const seedLegacyLibraryPython = String.raw`
+import sqlite3, sys
+from openpyxl import Workbook
+root = sys.argv[1]
+db = sqlite3.connect(root + '/library.db')
+db.execute("""CREATE TABLE companies(ticker TEXT PRIMARY KEY, route TEXT, currency TEXT,
+  unit_scale TEXT, accession TEXT, filed_date TEXT, workbook_hash TEXT, built_at TEXT,
+  readiness TEXT, workbook_path TEXT, revision_id TEXT)""")
+db.execute("""CREATE TABLE revisions(id TEXT PRIMARY KEY, ticker TEXT, workbook_hash TEXT,
+  parent_hash TEXT, created_at TEXT, path TEXT, note TEXT)""")
+db.execute("INSERT INTO companies VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    ('TST', 'test_fixture', 'USD', 'units', '0000000000-00-000001', '2026-01-15',
+     'hash-two', '2026-01-02T00:00:00Z', 'ready', root + '/companies/TST/current.xlsx', 'rev-legacy-2'))
+db.execute("INSERT INTO revisions VALUES(?,?,?,?,?,?,?)",
+    ('rev-legacy-1', 'TST', 'hash-one', None, '2026-01-02T00:00:00Z', None, 'legacy row one'))
+db.execute("INSERT INTO revisions VALUES(?,?,?,?,?,?,?)",
+    ('rev-legacy-2', 'TST', 'hash-two', 'hash-one', '2026-01-03T00:00:00Z', None, 'legacy row two'))
+db.commit()
+db.close()
+import os
+os.makedirs(root + '/companies/TST/revisions', exist_ok=True)
+first = Workbook()
+first.active.title = 'Sheet1'
+first['Sheet1']['A1'] = 1
+first.save(root + '/companies/TST/revisions/rev-legacy-1.xlsx')
+second = Workbook()
+second.active.title = 'Sheet1'
+second['Sheet1']['A1'] = 2
+second.save(root + '/companies/TST/revisions/rev-legacy-2.xlsx')
+`;
+
+  interface McpTestClient {
+    send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
+    close(): void;
+  }
+
+  async function spawnMcpTestClient(home: string, modelsDir: string): Promise<McpTestClient> {
+    const child = spawn(process.execPath, [resolve(projectRoot, 'bin/dcf.mjs'), 'mcp'], {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        HOME: home,
+        DCF_MODELS_DIR: modelsDir,
+        DCF_CACHE_DB_PATH: join(home, 'financial_cache.sqlite'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+    let nextId = 1;
+    const pending = new Map<number, (message: Record<string, unknown>) => void>();
+    let buffer = '';
+    child.stdout!.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      let index: number;
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (!line) continue;
+        try {
+          const message = JSON.parse(line) as Record<string, unknown>;
+          const resolvePromise = pending.get(message['id'] as number);
+          if (resolvePromise) {
+            pending.delete(message['id'] as number);
+            resolvePromise(message);
+          }
+        } catch {
+          // Ignore non-JSON lines on stdout.
+        }
+      }
+    });
+    const send = (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const id = nextId++;
+      return new Promise<Record<string, unknown>>((resolvePromise, rejectPromise) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          rejectPromise(new Error(`Timed out waiting for MCP ${method}`));
+        }, 90_000);
+        pending.set(id, (message) => {
+          clearTimeout(timer);
+          resolvePromise(message);
+        });
+        child.stdin!.write(`${JSON.stringify({jsonrpc: '2.0', id, method, params})}\n`);
+      });
+    };
+    const close = (): void => {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+      }
+    };
+    const initialized = await send('initialize', {});
+    expect(
+      ((initialized['result'] as Record<string, unknown>)['serverInfo'] as Record<string, unknown>)['name'],
+    ).toBe('dcf-model-library');
+    return {send, close};
+  }
+
+  function mcpResultText(reply: Record<string, unknown>): unknown {
+    const content = (reply['result'] as Record<string, unknown>)['content'] as Array<{text: string}>;
+    return JSON.parse(content[0]!.text);
+  }
+
+  it('serves legacy libraries through read-only MCP tools without migrating or writing (task 3)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-readonly-'));
+    const modelsDir = join(home, 'models');
+    await mkdir(modelsDir, {recursive: true});
+    let mcp: McpTestClient | null = null;
+    try {
+      const seeded = spawnSync(pythonPath, ['-c', seedLegacyLibraryPython, modelsDir], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      if (seeded.status !== 0) {
+        throw new Error(`Legacy library seeding failed: ${sanitizedOutput(seeded.stderr || seeded.stdout || 'unknown error')}`);
+      }
+      const dbPath = join(modelsDir, 'library.db');
+      const shaFile = async (): Promise<string> => createHash('sha256').update(await readFile(dbPath)).digest('hex');
+      const schemaOf = async (): Promise<string> => {
+        const dumped = spawnSync(pythonPath, ['-c',
+          'import sqlite3, sys; print("\\n".join(sorted(r[0] for r in sqlite3.connect(sys.argv[1]).execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"))))',
+          dbPath,
+        ], {cwd: projectRoot, encoding: 'utf8', timeout: 60_000});
+        if (dumped.status !== 0) throw new Error('Schema dump failed.');
+        return String(dumped.stdout);
+      };
+      const bytesBefore = await shaFile();
+      const schemaBefore = await schemaOf();
+      const entriesBefore = (await readdir(modelsDir)).sort();
+
+      mcp = await spawnMcpTestClient(home, modelsDir);
+      const history = mcpResultText(await mcp.send('tools/call', {
+        name: 'revisions_list', arguments: {ticker: 'TST', limit: 10},
+      })) as {total: number; revisions: Array<{id: string; buildEvent: string | null; fact: {accession: string | null}; latest: {accession: string | null}; route: string | null}>};
+      expect(history.total).toBe(2);
+      expect(history.revisions.map((r) => r.id).sort()).toEqual(['rev-legacy-1', 'rev-legacy-2']);
+      // Older-schema rows map every missing metadata column to null.
+      for (const row of history.revisions) {
+        expect(row.buildEvent).toBeNull();
+        expect(row.fact.accession).toBeNull();
+        expect(row.latest.accession).toBeNull();
+        expect(row.route).toBeNull();
+      }
+      const compared = mcpResultText(await mcp.send('tools/call', {
+        name: 'model_compare', arguments: {ticker: 'TST', from: 'rev-legacy-1', to: 'rev-legacy-2', maxChanges: 10},
+      })) as {from: {id: string}; to: {id: string}; freshness: string[]; workbook: {identicalBytes: boolean; totalChanges: number; changes: Array<{sheet: string; cell: string; kind: string}>}};
+      expect(compared.from.id).toBe('rev-legacy-1');
+      expect(compared.to.id).toBe('rev-legacy-2');
+      expect(compared.workbook.identicalBytes).toBe(false);
+      expect(compared.workbook.totalChanges).toBe(1);
+      expect(compared.workbook.changes[0]).toMatchObject({sheet: 'Sheet1', cell: 'A1', kind: 'value'});
+      expect(compared.freshness.join('\n')).toContain('predates filing-context tracking');
+
+      // Both read-only calls left the DB bytes, schema, and directory listing untouched.
+      expect(await shaFile()).toBe(bytesBefore);
+      expect(await schemaOf()).toBe(schemaBefore);
+      expect((await readdir(modelsDir)).sort()).toEqual(entriesBefore);
+      expect(schemaBefore).not.toContain('build_event');
+    } finally {
+      mcp?.close();
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 180_000);
   // Builds two live revisions in an isolated library, compares them through
   // the CLI (text + JSON) and the read-only MCP tools, and proves the old
   // revision archive and the accepted workbook remain intact. The two
@@ -8836,6 +9012,12 @@ print(json.dumps({
       }
 
       // Read-only MCP tools return the same comparison data, bounded/paged.
+      // Fingerprint the DB first: the calls below must leave schema and
+      // content hash unchanged.
+      const liveDbPath = join(modelsDir, 'library.db');
+      const liveDbHash = async (): Promise<string> =>
+        createHash('sha256').update(await readFile(liveDbPath)).digest('hex');
+      const dbHashBeforeMcp = await liveDbHash();
       mcpChild = spawn(process.execPath, [resolve(projectRoot, 'bin/dcf.mjs'), 'mcp'], {
         cwd: projectRoot,
         env: {
@@ -8901,6 +9083,8 @@ print(json.dumps({
       expect(mcpCompared.workbook.totalChanges).toBe(payload.workbook.totalChanges);
       expect(mcpCompared.workbook.changes.length).toBeLessThanOrEqual(10);
       expect(typeof mcpCompared.summary).toBe('string');
+      // MCP list/compare left the DB schema and content hash unchanged.
+      expect(await liveDbHash()).toBe(dbHashBeforeMcp);
     } finally {
       if (mcpChild?.pid) {
         try {
