@@ -5,6 +5,15 @@ in the current code review. “Open” means the behavior still needs a code or
 product change; it is separate from model-coverage limits listed in
 [Model coverage](docs/MODEL_COVERAGE.md).
 
+## GitHub tracker snapshot
+
+Checked on **3 October 2026** with `gh issue list --state all` and
+`gh pr list --state open`: **0 GitHub issues and 0 open pull requests**.
+The confirmed open bugs below are tracked in this file and do not yet have
+GitHub issue numbers. This is a repository bug register, not a claim that the
+GitHub issue tracker contains those entries. [Open the GitHub issue
+tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
+
 ## Fixed in this update
 
 | Issue | Status | Evidence |

@@ -1,6 +1,25 @@
 # DCF Builder CLI + MCP Model Library — Audited Plan
 
-**Status:** Phases 0–6 complete; implementation and live verification are recorded below.
+**Status:** Phases 0–6 complete for the approved CLI + MCP model-library scope. The release is version 2.0.0; remaining code defects and coverage boundaries are tracked separately in `BUGS.md` and `docs/MODEL_COVERAGE.md`.
+
+## Current project status — reviewed 3 October 2026
+
+| Phase | Status | Result |
+| --- | --- | --- |
+| 0 — Audit | Complete | Existing routes, data sources, and engine boundaries were inventoried before implementation. |
+| 1 — Persistent model library | Complete | Configurable local root, SQLite index, manifests, revisions, and manual-edit conflict checks. |
+| 2 — Shared CLI/services | Complete | CLI build, refresh, export, review, filing sync, proposal, and watch commands use shared application services. |
+| 3 — Local MCP and review skill | Complete | Local stdio tools and a focused review skill are available. |
+| 4 — Traceable proposals | Complete | Source-backed cell changes require review and approval; applying one creates a revision. |
+| 5 — Filing watch | Complete | New filings can be queued for review without silently changing workbooks. |
+| 6 — Verification and documentation | Complete | Live-only integration checks, workbook recalculation/inspection, and operating docs are recorded below. |
+
+The full plan is complete; the project is now in post-plan hardening and
+coverage work. The current confirmed code bugs are listed in `BUGS.md` (8
+open entries at this review); unsupported and input-required company routes
+are tracked separately in `docs/MODEL_COVERAGE.md`. GitHub had no issue
+records or open pull requests at this review, so those entries have not been
+assigned GitHub issue numbers.
 
 ## Goal
 
@@ -81,14 +100,15 @@ All planned implementation tasks are complete. The checked items below record de
 
 ## Verification and remaining boundary
 
-Publication review on 2 October 2026 identified a correction to the earlier
-filing-identity claim: an accession prefix identifies the submitting account,
-which may be a filing agent. The current prefix/issuer-CIK rejection rule can
-miss legitimate issuer reports and remains the first follow-up task. The
-endpoint/profile CIK comparison is still appropriate. See the README and the
-SEC EDGAR Filer Manual linked there.
+The filing-agent accession-prefix defect identified in the earlier review is
+fixed in `model/src/watch/source-sync.ts`: sync validates endpoint CIK and
+ticker against the issuer, and does not reject a filing because its accession
+prefix belongs to a filing agent. The live AAPL check described in `BUGS.md`
+covered the formerly rejected accession. The remaining post-plan work is the
+confirmed bug and model-coverage backlog linked above, not an incomplete phase
+of this plan.
 
-- Final live suite: 79/79 passed, exit 0, 888.69 seconds. The changed cases are live-only and assert the correct fail-closed outcome when current provider inputs are stale or a source-backed composite is incomplete.
+- Latest recorded live suite before this documentation update: 82/82 passed, exit 0, 869.14 seconds. The changes include live-only checks for fail-closed outcomes when provider inputs are stale or a source-backed composite is incomplete. The suite was not rerun for this docs-only update.
 - Fresh AAPL workbook: 1,986 native formulas, cached M51 result 136666.178923099 with formula =M32+M48, and zero cached formula errors. A live filings-list check selected Form 10-Q accession 0000320193-26-000020 filed 2026-07-31 while preserving 0000320193-25-000079 Form 10-K as the workbook fact basis.
-- Typecheck and git diff --check passed. Existing working-tree changes were preserved; nothing was staged or committed.
+- Typecheck passed on the implementation commit. `git diff --check` passed on that implementation and on this documentation update; this update records the first tagged 2.0.0 CLI release.
 - The MCP snapshot contains normalized EDGAR/OpenBB facts, source lineage, and latest filing identity, not full SEC narrative text. The review skill directs the assistant to use an available SEC research tool for narrative sections and to state when that text could not be retrieved. Market and valuation-context providers may return cached values; freshness gates remain enforced.

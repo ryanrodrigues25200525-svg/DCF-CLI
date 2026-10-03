@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+No changes recorded yet.
+
+## [2.0.0] — 2026-10-03
+
+> **DCF CLI + MCP Model Library.** Major transition from the desktop app to a local-first command-line model builder with persistent workbooks, reviewable revisions, and a local MCP interface.
+
 ### Added
 
+- Added a configurable local model library with a SQLite index, company manifests, immutable workbook revisions, source snapshots, and checks for manual edits before refreshes.
+- Added CLI workflows to build, update, export, list, inspect, open, review, and validate company workbooks; build and update exports include the UTC date and ticker in the filename.
+- Added filing sync and a local watcher that refreshes source snapshots and queues review without changing accepted workbooks.
+- Added a local stdio MCP server for model discovery, source and filing review, workbook inspection, and structured update proposals. Applying a proposal requires explicit approval and creates a new revision.
+- Added the `dcf-model-review` skill for source-backed review, formula and tie-out checks, missing-input gates, and human approval.
 - Added `input_required` exports for implemented valuation families. Missing inputs appear as blank, unlocked cells with source-reference tracking; dependent valuation formulas remain blank until the workbook is ready.
 - Added incomplete formula workbooks for operating DCF, commercial banks, P&C insurance, equity REITs, agency mortgage REITs, traditional asset managers, telecom, integrated energy, mature pharma, EV/EBITDA, and EV/Revenue comparables.
 - Added an MRNA-only input-required biotech pipeline rNPV workbook with source-mapped SEC assets, explicit paused/early-program inclusion controls, editable commercial and clinical assumptions, a 35-year pipeline formula schedule, and live recalculation/engine-parity checks. Missing forecasts and clinical assumptions remain blank and no valuation is shown until inputs and references pass review.
@@ -17,10 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Replaced the Next.js/Electron UI workflow with a ticker-in, Excel-out CLI.
-- Moved the valuation pipeline to a headless model package and made the CLI start and stop the local backend itself.
+- Replaced the Next.js/Electron UI workflow with a ticker-in, Excel-out CLI and persistent local model-library commands.
+- Kept valuation calculations in the shared TypeScript model engine used by CLI and MCP operations; Python owns SEC retrieval, canonical financials, eligibility, and workbook export.
 - Replaced the undeclared `officecli` export dependency with direct `openpyxl` workbook generation.
 - Added issuer-specific XOM integrated-energy, PFE mature-pharma, MRNA pipeline-biotech, and MET/PRU life-insurance formula-workbook routes with live SEC-source checks. Other energy, pharma/biotech, life-insurance, and utility issuers remain blocked where their source contracts do not pass.
+- Filing identity checks validate the filings-list response CIK and ticker against the issuer profile; accession prefixes are treated as submitting-account identifiers and may belong to filing agents.
+
+### Fixed
+
+- Removed an operating-DCF fallback that could derive a pseudo-valuation from market capitalization without forecast rows; incomplete source data now fails closed.
+- Corrected filing sync so a valid issuer filing is not rejected only because its accession prefix belongs to a filing agent.
+- Hardened workbook refreshes against export-path collisions, missing stored hashes, and accidental overwrite of manually edited library files.
 
 ## [1.3.0] — 2026-08-23
 
@@ -104,8 +122,9 @@ Initial public desktop release. Published as installers on GitHub Releases (row 
 
 ## Links
 
-- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...HEAD
+- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
+- [2.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...v2.0.0
 - [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/1.0.0...v1.3.0
 - [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/releases/tag/1.0.0
 
-[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
