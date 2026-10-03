@@ -8,14 +8,17 @@ product change; it is separate from model-coverage limits listed in
 ## GitHub tracker snapshot
 
 Checked on **3 October 2026** with `gh issue list --state open` and
-`gh pr list --state open`: **16 open GitHub issues and 1 open draft pull
+`gh pr list --state open`: **17 open GitHub issues and 1 open draft pull
 request** ([#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17)).
 Issues #1–#8 are the earlier CLI/platform bugs; #9–#16 are the new
-review findings from the AI-reviewed model-history work. All sixteen fixes are
-committed and pushed on the feature branch `feature/ai-reviewed-model-history`
-at commit `43ab374`; none is merged or closed, no issue has been closed, and the
-draft PR is not merged, so `main` still carries the old behavior until the branch
-lands. Typecheck, the security scan, `git diff --check`, the targeted
+review findings from the AI-reviewed model-history work. Issue #18 tracks the
+macOS LibreOffice headless-startup blocker. Issue #19 was closed as a duplicate
+of #18. Issues #1–#16 have fixes committed and pushed on the feature branch
+`feature/ai-reviewed-model-history` (`43ab374`, with follow-up docs commit
+`61a7d28`); none is merged or closed. Draft PR #17 closes #1–#16 and references
+#18, but does not close the runtime blocker. `main` still carries the old
+behavior until the branch lands.
+Typecheck, the security scan, `git diff --check`, the targeted
 hung-LibreOffice and duplicate-candidate platform regressions, and the live AAPL
 filing-agent accession check pass on the pushed branch. The full live suite is
 still blocked: LibreOffice is installed but its headless startup hangs, and the
@@ -23,6 +26,15 @@ CLI live suite aborts at module import, so its tests did not run. Dated example
 workbooks, the examples whitelist, the complete diff review, and Windows-only
 behavior are still unverified. "Fixed" below means the code change is present on
 the pushed branch, not that it has been fully live-verified, merged, or closed.
+
+## Verification blocker #18
+
+Homebrew LibreOffice 26.8.0 is present at `/Applications/LibreOffice.app`, but
+`soffice --headless --version` does not return. The bounded DCF CLI probe now
+fails fast. Until this runtime is repaired or a supported live-test runner is
+used, the CLI live suite cannot load, the full model suite cannot pass, and the
+dated example workbooks cannot be generated and inspected. Track the resolution
+in [GitHub issue #18](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/18).
 This file remains the local summary; the GitHub tracker holds the work items.
 [Open the issue tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
