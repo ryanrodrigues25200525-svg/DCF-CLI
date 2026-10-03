@@ -64,6 +64,7 @@ dcf_export_test.xlsx
 
 # generated workbooks and local implementation scratch
 *.xlsx
+!examples/*.xlsx
 library.db
 library.db-*
 .superpowers/sdd/
