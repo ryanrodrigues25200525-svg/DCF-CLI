@@ -726,6 +726,49 @@ async function toolCandidateReject(args: Row): Promise<unknown> {
   } finally { closeLib(lib); }
 }
 
+async function toolRevisionCompare(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const from = typeof args['from'] === 'string' && args['from'].trim() ? args['from'].trim() : undefined;
+  const to = typeof args['to'] === 'string' && args['to'].trim() ? args['to'].trim() : undefined;
+  let limit = 200;
+  if (args['limit'] !== undefined) {
+    if (typeof args['limit'] !== 'number' || !Number.isInteger(args['limit']) ||
+        (args['limit'] as number) < 1 || (args['limit'] as number) > 500) {
+      throw err('INVALID_COMPARE', 'limit must be an integer 1..500');
+    }
+    limit = args['limit'] as number;
+  }
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('COMPARE_FAILED', `No model library found under ${modelsDir}`);
+  const { lib, mod: _candMod } = await loadCandidateStack(modelsDir);
+  void _candMod;
+  try {
+    const xlsxMod = (await import('../workbook/xlsx.js')) as Row;
+    const findPython = xlsxMod['findBackendPython'] as (() => string | null) | undefined;
+    const python = typeof findPython === 'function' ? findPython() : null;
+    if (!python) throw err('ENGINE_UNAVAILABLE', 'No Python with openpyxl is available; cannot compare workbooks.');
+    const cmpMod = (await import('../review/revision-compare.js')) as {
+      resolveCompareEndpoint(lib: unknown, root: string, ticker: string, ref: string | undefined, role: 'from' | 'to'): { label: string; path: string } | null;
+      compareWorkbooks(python: string, before: string | null, after: string, opts?: { limit?: number }): Promise<unknown>;
+    };
+    const fromEp = cmpMod.resolveCompareEndpoint(lib, modelsDir, ticker, from, 'from');
+    const toEp = cmpMod.resolveCompareEndpoint(lib, modelsDir, ticker, to, 'to');
+    if (!fromEp) return { ticker, from: null, to: toEp?.label ?? null, message: 'No earlier revision to compare; the accepted model is the initial revision.' };
+    if (!toEp) throw err('COMPARE_FAILED', `Nothing to compare for ${ticker}: no pending candidate and no accepted revision.`);
+    const diff = await cmpMod.compareWorkbooks(python, fromEp.path, toEp.path, { limit });
+    return { ticker, from: fromEp.label, to: toEp.label, diff };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/Revision not found|No accepted revision|No pending build candidate/i.test(msg)) {
+      throw err('REVISION_NOT_FOUND', msg);
+    }
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    if (/does not match|is missing/i.test(msg)) throw err('COMPARE_FAILED', msg);
+    throw err('COMPARE_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
 /* ---------- tool registry (inputSchema key order is part of the contract) ---------- */
 const changeSchema: Row = {
   type: 'object',
@@ -798,6 +841,12 @@ const TOOLS: ToolDef[] = [
     inputSchema: { type: 'object', properties: {
       candidateId: { type: 'string' }, reason: { type: 'string' },
     }, required: ['candidateId'], additionalProperties: false } },
+  { name: 'revision_compare', description: 'Diff two same-ticker revisions (ids, or accepted/candidate aliases; defaults to parent vs newest). Archives are hash-verified; detail capped by limit (1-500).',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      from: { type: 'string' }, to: { type: 'string' },
+      limit: { type: 'integer', description: 'Detail rows to return (1-500, default 200)' },
+    }, required: ['ticker'], additionalProperties: false } },
 ];
 const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
@@ -807,6 +856,7 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   proposal_reject: toolProposalReject,
   candidate_inspect: toolCandidateInspect, candidate_verify: toolCandidateVerify,
   candidate_accept: toolCandidateAccept, candidate_reject: toolCandidateReject,
+  revision_compare: toolRevisionCompare,
 };
 
 /* ---------- stdio JSON-RPC loop ---------- */

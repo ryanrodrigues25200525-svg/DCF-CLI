@@ -66,4 +66,22 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(loud.status, loud.stderr).toBe(0);
     expect(((loud.json as { output: string }).output ?? '').length).toBeLessThanOrEqual(8192);
   }, 180_000);
+
+  it('diffs two workbooks: sheets, formulas, values, identical', async () => {
+    const r = await probe('compare-pair.ts', []);
+    expect(r.status, r.stderr).toBe(0);
+    const { diff, identicalTotal } = r.json as { identicalTotal: number; diff: {
+      addedSheets: string[]; removedSheets: string[];
+      totalChanges: number; truncated: boolean;
+      changes: Array<{ sheet: string; cell: string; kind: string; before: string | null; after: string | null }>;
+    } };
+    expect(diff.addedSheets).toContain('Fresh');
+    expect(diff.removedSheets).toContain('Gone');
+    expect(diff.changes).toContainEqual({ sheet: 'Model', cell: 'A2', kind: 'formula', before: '=A1+1', after: '=A1+2' });
+    expect(diff.changes).toContainEqual({ sheet: 'Model', cell: 'A1', kind: 'value', before: '1', after: '2' });
+    expect(diff.changes).toContainEqual({ sheet: 'Model', cell: 'C1', kind: 'added', before: null, after: 'new' });
+    expect(diff.changes.some((c) => c.sheet === 'Model' && c.cell === 'B1')).toBe(false);
+    expect(diff.truncated).toBe(false);
+    expect(identicalTotal).toBe(0);
+  }, 180_000);
 });

@@ -42,6 +42,7 @@ import type { FilingsListResult } from '@/api/backend-client';
 import { buildSourceSnapshot } from '@/watch/source-snapshot';
 import { formatProposalMarkdown, validateProposalDraft, type ProposalDraft } from '@/review/proposal';
 import { formatReviewReport, runStaticWorkbookChecks } from '@/review/review-checks';
+import { compareWorkbooks, formatCompareMarkdown, resolveCompareEndpoint } from '@/review/revision-compare';
 import { findBackendPython, inspectWorkbook } from '@/workbook/xlsx';
 
 const MIN_NODE_MAJOR = 22;
@@ -98,6 +99,7 @@ function usage(): string {
     'Library commands:  dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf models list [--models-dir <dir>] [--json]',
     '                   dcf model inspect <ticker> [--models-dir <dir>] [--json]',
+    '                   dcf model compare <ticker> [--from <rev|candidate|accepted>] [--to <rev|candidate|accepted>] [--models-dir <dir>]',
     '                   dcf model open <ticker> [--models-dir <dir>]',
     '                   dcf model review <ticker> [--models-dir <dir>]',
     '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
@@ -248,6 +250,8 @@ interface GlobalFlags {
   set?: string;
   reason?: string;
   verification?: string;
+  from?: string;
+  to?: string;
   interval?: number;
   positionals: string[];
 }
@@ -274,6 +278,8 @@ function parseLibraryArgs(argv: string[]): GlobalFlags {
     else if (arg === '--filed') flags.filed = takeValue(arg);
     else if (arg === '--set') flags.set = takeValue(arg);
     else if (arg === '--reason') flags.reason = takeValue(arg);
+    else if (arg === '--from') flags.from = takeValue(arg);
+    else if (arg === '--to') flags.to = takeValue(arg);
     else if (arg === '--verification') flags.verification = takeValue(arg);
     else if (arg === '--interval') {
       const raw = takeValue(arg);
@@ -909,6 +915,28 @@ async function cmdModelReject(proposalIdRaw: string | undefined, flags: GlobalFl
   console.log(`Proposal ${rejected.id} rejected (status=${rejected.status}). The workbook is unchanged.`);
 }
 
+async function cmdModelCompare(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model compare <ticker> [--from <revision|candidate|accepted>] [--to <revision|candidate|accepted>] [--models-dir <dir>]');
+  const ticker = normalizeLibraryTicker(tickerRaw);
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const from = resolveCompareEndpoint(lib, root, ticker, flags.from, 'from');
+    const to = resolveCompareEndpoint(lib, root, ticker, flags.to, 'to');
+    if (!from) {
+      console.log(`No earlier revision to compare for ${ticker}; the accepted model is the initial revision.`);
+      return;
+    }
+    if (!to) throw new Error(`Nothing to compare for ${ticker}: no pending candidate and no accepted revision.`);
+    const python = findBackendPython();
+    if (!python) throw new Error('No Python with openpyxl is available (backend/.venv); cannot compare workbooks.');
+    const diff = await compareWorkbooks(python, from.path, to.path);
+    console.log(formatCompareMarkdown(ticker, from.label, to.label, diff));
+  } finally {
+    lib.close();
+  }
+}
+
 async function cmdModelCandidate(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
   if (!tickerRaw) throw new CliUsageError('Usage: dcf model candidate <ticker> [--models-dir <dir>]');
   const ticker = normalizeLibraryTicker(tickerRaw);
@@ -1100,7 +1128,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
     const usageByCommand: Record<string, string> = {
       build: 'Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
       models: 'Usage: dcf models list [--json]',
-      model: 'Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...',
+      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...',
       filings: 'Usage: dcf filings sync <ticker>',
       watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
       config: 'Usage: dcf config models-dir|review-hook [--set <value>]',
@@ -1120,6 +1148,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       return true;
     case 'model':
       if (sub === 'inspect') await cmdModelInspect(args[0], flags);
+      else if (sub === 'compare') await cmdModelCompare(args[0], flags);
       else if (sub === 'open') await cmdModelOpen(args[0], flags);
       else if (sub === 'review') await cmdModelReview(args[0], flags);
       else if (sub === 'update') await cmdModelUpdate(args[0], flags);
@@ -1131,7 +1160,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'candidate-verify') await cmdCandidateVerify(args[0], flags);
       else if (sub === 'accept') await cmdModelAccept(args[0], flags);
       else if (sub === 'candidate-reject') await cmdCandidateReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');
