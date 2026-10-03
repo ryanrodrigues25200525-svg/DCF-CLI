@@ -429,6 +429,12 @@ function validateChanges(changes: unknown): Row[] {
     const hasFormula = typeof ch['proposedFormula'] === 'string' && (ch['proposedFormula'] as string).startsWith('=');
     if (!hasValue && !hasFormula) missing.push('proposedValue or proposedFormula (formula must start with "=")');
     if (hasValue && hasFormula) throw err('INVALID_PROPOSAL', `change[${i}] sets both proposedValue and proposedFormula; set exactly one`);
+    // Formulas belong only in proposedFormula; an "="-prefixed proposedValue is
+    // ambiguous about the intended cell type and would bypass the formula gate.
+    if (typeof ch['proposedValue'] === 'string' && (ch['proposedValue'] as string).startsWith('=')) {
+      throw err('INVALID_PROPOSAL', `change[${i}] proposedValue starts with "="; use proposedFormula for formula edits`);
+    }
+
     if (missing.length > 0) throw err('INVALID_PROPOSAL', `change[${i}] missing: ${missing.join(', ')}`);
     if (typeof ch['cell'] === 'string' && !/^[A-Z]{1,3}[1-9][0-9]{0,6}$/i.test(ch['cell'].trim())) {
       throw err('INVALID_PROPOSAL', `change[${i}].cell must be a valid Excel address (e.g. C12)`);

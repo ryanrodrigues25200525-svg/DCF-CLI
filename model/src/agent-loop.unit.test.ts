@@ -84,4 +84,21 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(diff.truncated).toBe(false);
     expect(identicalTotal).toBe(0);
   }, 180_000);
+
+  it('rejects =-prefixed proposedValue over MCP and in cell-edit conversion', async () => {
+    const mcp = await probe('mcp-call.ts', ['--tool', 'proposal_create', '--args', JSON.stringify({
+      ticker: 'TST',
+      summary: 'sneaky formula',
+      changes: [{ sheet: 'Model', cell: 'A1', proposedValue: '=SUM(A2:A3)', rationale: 'r', source: 'SEC x', accession: '0000320193-26-000001' }],
+    })]);
+    expect(mcp.status, mcp.stderr).toBe(0);
+    // The probe prints the tool result or the JSON-RPC error body verbatim.
+    const body = mcp.json as { code?: string; message?: string };
+    expect(body.code).toBe('INVALID_PROPOSAL');
+    expect(body.message ?? '').toMatch(/proposedFormula/);
+
+    const conv = await probe('to-cell-edit.ts', []);
+    expect(conv.status, conv.stderr).toBe(0);
+    expect((conv.json as { rejected: boolean }).rejected).toBe(true);
+  }, 180_000);
 });

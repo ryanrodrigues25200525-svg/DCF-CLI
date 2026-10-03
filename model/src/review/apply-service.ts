@@ -44,13 +44,20 @@ function readCurrentBytesHash(root: string, ticker: string): { path: string; has
   return {path, hash: sha256Hex(bytes)};
 }
 
-function toCellEdit(change: ProposedChange): CellEdit {  if (change.proposedFormula !== undefined && change.proposedFormula !== null && change.proposedFormula !== '') {
+/** Convert a validated change to a workbook edit. Exported for tests; callers
+ *  must validate drafts first (validateProposalDraft / MCP validateChanges).
+ *  Rejects "="-prefixed values even here so a formula can never slip through
+ *  the value path and bypass the formula gate. */
+export function toCellEdit(change: ProposedChange): CellEdit {  if (change.proposedFormula !== undefined && change.proposedFormula !== null && change.proposedFormula !== '') {
     return {sheet: change.sheet, cell: change.cell, formula: change.proposedFormula};
   }
   // An explicit null clears the cell to a true blank (the value key must be
   // present so the workbook helper writes None instead of skipping the edit).
   if (change.proposedValue !== undefined) {
     const value = change.proposedValue;
+    if (typeof value === 'string' && value.startsWith('=')) {
+      throw new Error(`Change ${change.sheet}!${change.cell} proposedValue starts with "="; use proposedFormula for formula edits.`);
+    }
     if (value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
       throw new Error(`Change ${change.sheet}!${change.cell} has an unsupported proposed value type.`);
     }
