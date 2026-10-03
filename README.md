@@ -142,12 +142,18 @@ flowchart LR
     E --> F
     F --> G[LibreOffice recalc and validation]
     G --> H[Local library and revision]
-    H --> I[Review and compare with prior revision]
-    I --> J[Optional AI proposal: summary + sourced edits]
+    H --> I[AI freshness, formula, and prior-revision review]
+    I --> J[AI summary + sourced edits or no-change result]
     J --> P[Candidate preview + AI Change Log]
     P --> K{Human approval}
     K --> H
 ```
+
+This is the intended AI-assisted workflow. **Issue #20 is still open:** current
+`dcf build` and `dcf model update` can save a deterministic revision before the
+AI review and human approval gate. Until that gate is implemented, do not treat
+a standalone CLI build as AI-reviewed or final. The AI runs in ChatGPT/Codex;
+the valuation engine remains deterministic.
 
 The pipeline separates jobs that need different standards:
 
@@ -160,10 +166,12 @@ The pipeline separates jobs that need different standards:
    Excel formulas.
 4. **Workbook checks** recalculate with LibreOffice and scan for missing
    required inputs and formula errors before the library accepts a revision.
-5. **The analyst** reviews every assumption, compares revisions, and edits
-   formulas or inputs in a spreadsheet app. AI review is optional: a proposal
-   stays separate, a preview builds a candidate with its own `AI Change Log`,
-   and only explicit approval publishes a revision.
+5. **The AI agent and analyst** review every build/update. The agent checks
+   filing freshness, the period actually mapped, formulas, source lineage, and
+   the prior revision when one exists. It records a concise summary and any
+   source-backed edits in a separate candidate with an `AI Change Log`; the
+   analyst checks that candidate and explicitly approves or rejects it. Issue
+   #20 tracks making this gate mandatory for initial builds and updates.
 
 ## 🧰 Commands you’ll use
 

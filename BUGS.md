@@ -8,15 +8,16 @@ product change; it is separate from model-coverage limits listed in
 ## GitHub tracker snapshot
 
 Checked on **3 October 2026** with `gh issue list --state open` and
-`gh pr list --state open`: **17 open GitHub issues and 1 open draft pull
+`gh pr list --state open`: **18 open GitHub issues and 1 open draft pull
 request** ([#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17)).
 Issues #1–#8 are the earlier CLI/platform bugs; #9–#16 are the new
 review findings from the AI-reviewed model-history work. Issue #18 tracks the
-macOS LibreOffice headless-startup blocker. Issue #19 was closed as a duplicate
-of #18. Issues #1–#16 have fixes committed and pushed on the feature branch
+macOS LibreOffice headless-startup blocker; Issue #20 tracks mandatory
+AI-review/human-approval for initial builds and earnings updates. Issue #19 was
+closed as a duplicate of #18. Issues #1–#16 have fixes committed and pushed on the feature branch
 `feature/ai-reviewed-model-history` (`43ab374`, with follow-up docs commit
 `61a7d28`); none is merged or closed. Draft PR #17 closes #1–#16 and references
-#18, but does not close the runtime blocker. `main` still carries the old
+#18 and #20, but does not close either. `main` still carries the old
 behavior until the branch lands.
 Typecheck, the security scan, `git diff --check`, the targeted
 hung-LibreOffice and duplicate-candidate platform regressions, and the live AAPL
@@ -98,12 +99,20 @@ fully verified before then.
 | P2 | MCP errors | `proposal_apply` should distinguish approval-required, preview-required, stale-base, manual-edit, invalid-source, and engine-unavailable failures instead of collapsing them into `APPLY_FAILED`, with categories consistent between `proposal_preview` and `proposal_apply`. | [#15](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/15) |
 | P3 | Legacy libraries | A legacy library can have a `companies` table but no `revisions` table. Read-only MCP `revisions_list` should return an empty paged history without creating or migrating tables, rather than returning `LIBRARY_UNAVAILABLE`. | [#16](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/16) |
 
-No confirmed code bug is unfixed on the pushed branch. The sixteen GitHub issues
-above remain open until the draft PR (#17) merges and the public tracker is
-updated; neither has happened.
+No confirmed code bug among Issues #1–#16 is unfixed on the pushed branch. Those
+issues remain open until the draft PR (#17) merges. Issues #18 and #20 track the
+separate runtime blocker and required build/update review gate; neither is
+addressed by PR #17.
 
 ## Product and workflow gaps
 
+- **New builds and earnings updates are not yet gated on AI review.** `dcf
+  build` and `dcf model update` can publish a deterministic model revision
+  before ChatGPT/Codex verifies mapped filing periods, source freshness,
+  formulas, and changes against the prior accepted model. Issue [#20](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/20)
+  tracks the pending-candidate, AI-summary, human-approval workflow. PR #17
+  adds reviewed proposal candidates but does not implement this build/update
+  gate.
 - **No managed acceptance path for spreadsheet edits.** Editing
   `companies/<TICKER>/current.xlsx` changes its hash; proposal application
   refuses to proceed until that conflict is resolved. There is no command yet

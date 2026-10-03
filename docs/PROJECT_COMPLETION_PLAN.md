@@ -13,11 +13,12 @@
 ## Current status
 
 - Implementation is committed and pushed on `feature/ai-reviewed-model-history` (`43ab374`, documentation/status follow-up `61a7d28`).
-- Draft PR [#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) links Issues #1–#16. Issue #18 tracks the current macOS LibreOffice headless-startup blocker.
+- Draft PR [#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) closes Issues #1–#16 and references Issues #18 and #20. Issue #18 tracks the macOS LibreOffice headless-startup blocker; Issue #20 tracks the missing mandatory AI review gate for fresh builds/updates. Issue #19 is closed as a duplicate of #18.
 - Current package version remains `2.0.0`. No release tag was created.
 - Typecheck, secret scan, diff check, targeted fail-fast/duplicate-path tests, and the live AAPL filing-agent check passed.
 - `npm run test:model` is blocked: 9 platform tests passed and 1 failed because LibreOffice hangs on `--headless --version`; the CLI live suite aborts at module import. The full live DCF suite did not run.
 - No dated AAPL/JPM/XOM/DUK example workbooks have been generated. The PR is draft and must not be merged as complete.
+- The current candidate workflow applies AI proposals to an accepted model, but initial `dcf build` and earnings `dcf model update` can still publish before AI/human review. Issue #20 is a required product phase, not a completed feature.
 
 ## Project rules
 
@@ -76,11 +77,28 @@
 
 **Exit:** The documented CLI and MCP flow matches the tested behavior and the accepted model changes only after approval.
 
-## Phase 5 — GitHub review, merge, and versioned release
+## Phase 5 — Require AI review and human approval for every build/update
 
-- [ ] Update PR #17 with the final live test counts, example workbook links, and any remaining platform limitations. Keep it draft until Phases 1–4 pass.
+**Issue:** [#20](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/20)
+
+This is the central product workflow. The valuation engine builds the model deterministically; ChatGPT/Codex verifies freshness, sources, formulas, and changes; a human reviews the candidate; only then does the library accept it. The LLM remains outside Python/TypeScript. The new gate must work for initial builds and earnings refreshes, not only proposals against an already accepted workbook.
+
+- [ ] Audit `cmdBuild`, `persistWorkbookRevision`, library manifests/revisions, proposal creation/preview/application, and MCP tools. Document which writes currently replace `current.xlsx` before an AI review.
+- [ ] Add a staged/pending build candidate for initial build and update. For an update, the prior accepted `current.xlsx`, manifest, and revision remain unchanged. For an initial build, do not label the candidate accepted before review. Persist ticker/date, route/readiness, source accessions, mapped period, and base-revision hash when one exists.
+- [ ] Expose the pending candidate through the shared CLI/MCP services so the agent can read cells/formulas, deterministic validation, source snapshot, and prior comparison without promoting it.
+- [ ] Require an AI review result containing: freshness verdict (latest detected filing vs facts actually mapped), source/period/unit checks, formula/tie-out findings, concise summary, prior-model commentary when one exists, and source-backed cell/formula edits or an explicit no-change result.
+- [ ] Reuse the candidate/AI Change Log path for proposed edits. Make human approval the only promotion path. Rejection, stale sources, missing periods, or validation failures must preserve the prior accepted workbook and its revision metadata.
+- [ ] Add a live AAPL initial-build workflow and a second live refresh workflow using an actual later SEC filing when available. Assert the new dated revision records the mapped accession/period and compares against the previous revision; if a route detects a newer filing but does not map it, the AI summary must say the model is not updated with that period.
+- [ ] Add a live missing-input case (DUK) proving the AI review does not invent value, plus formula/value edit, review-only, rejection, stale-candidate, and approved-promotion cases. Keep provider data live; no mock LLM or fixture provider.
+- [ ] Update README, MCP tool descriptions, and the review skill with the exact build → AI review/compare → candidate → human approval workflow. State that standalone CLI build output is not AI-verified unless the agent review ran.
+
+**Exit:** Both first-build and earnings-update workflows produce a pending candidate, AI summary/change log, and prior-revision commentary; no candidate becomes accepted without human approval. The old revision remains queryable and the comparison names what changed and why.
+
+## Phase 6 — GitHub review, merge, and versioned release
+
+- [ ] Update PR #17 with the final live test counts, example workbook links, and any remaining platform limitations. Keep it draft until Phases 1–5 pass.
 - [ ] Have a human review the final diff and PR. Mark it ready only after the release gates pass; merge only after explicit approval.
-- [ ] Confirm Issues #1–#16 close through PR #17 after merge. Keep Issue #18 open until the LibreOffice blocker is resolved and the live suite passes.
+- [ ] Confirm Issues #1–#16 close through PR #17 after merge. Keep Issue #18 open until the LibreOffice blocker is resolved and the live suite passes. Keep Issue #20 open until the mandatory AI review gate in Phase 5 ships and passes its live end-to-end workflow.
 - [ ] After merge, bump the root package, model package, and lockfile versions together. The current additive scope suggests `2.1.0`; use a major bump if the final changes break the documented CLI/MCP contract.
 - [ ] Move `CHANGELOG.md` Unreleased notes to the release entry, create tag `v2.1.0` (or the approved version), and publish the GitHub Release only after the merge and full acceptance checks.
 - [ ] Fast-forward the normal Documents checkout (`/Users/ryanrodrigues/Documents/DCF CLI`) to the merged `main` so the project’s usual local folder has the release state.
@@ -89,4 +107,4 @@
 
 ## Codex handoff prompt
 
-> Continue DCF CLI from draft PR #17 and `docs/PROJECT_COMPLETION_PLAN.md`. Do not redo the implementation already in the branch. First diagnose the installed macOS LibreOffice headless hang or select a supported live-test runner; do not weaken engine validation. Then complete Phases 2–4 using live company data, generate/inspect the dated examples, update PR #17 and Issues #1–#18, and report exact test results. Keep the PR draft until the acceptance gates pass. After human approval to merge, synchronize the Documents checkout and complete the 2.1.0 version/tag/release steps. Do not merge or publish a release without explicit approval.
+> Continue DCF CLI from draft PR #17 and `docs/PROJECT_COMPLETION_PLAN.md`. Do not redo the implementation already in the branch. First diagnose the installed macOS LibreOffice headless hang or select a supported live-test runner; do not weaken engine validation. Then complete Phases 2–5 using live company data, enforce AI review/human approval for initial builds and earnings updates, generate/inspect the dated examples, update PR #17 and Issues #1–#20, and report exact test results. Keep the PR draft until the acceptance gates pass. After human approval to merge, synchronize the Documents checkout and complete the 2.1.0 version/tag/release steps. Do not merge or publish a release without explicit approval.

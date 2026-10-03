@@ -17,6 +17,15 @@ executes. No host-specific binary path is embedded in product code.
 Requires Node.js >= 22.5.0 (`node:sqlite`; declared in `engines` of
 `package.json` and `model/package.json`, enforced at CLI startup).
 
+> **AI-in-the-loop completion gap:** `dcf build` and `dcf model update` still
+> publish a deterministically validated revision before an AI review. The
+> separate proposal-preview flow below is enforced for proposal edits, but the
+> pending-candidate/AI-review/human-approval gate for every initial build and
+> earnings refresh is not implemented yet. Track it in
+> [Issue #20](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/20)
+> and the [project completion plan](PROJECT_COMPLETION_PLAN.md). Treat a
+> standalone CLI build as model-generated, not AI-reviewed.
+
 ## Library root
 
 ```bash

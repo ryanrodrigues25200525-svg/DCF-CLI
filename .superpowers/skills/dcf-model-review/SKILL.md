@@ -8,6 +8,13 @@ autonomous LLM in the Python/TypeScript engine: the ChatGPT/Codex agent invokes
 the tools and reasons over their output. A workbook is "AI-reviewed" only when
 an agent actually ran the review.
 
+This is the required workflow for an AI-assisted build/update, but the CLI does
+not yet enforce it for initial builds or earnings refreshes: `dcf build` and
+`dcf model update` can publish a deterministic revision before the AI/human
+gate. Issue #20 tracks the pending-candidate integration. Until it ships, run
+this review immediately after each build/update and do not treat the revision
+as final until the analyst has reviewed and accepted the candidate.
+
 Start read-only:
 
 ```bash
