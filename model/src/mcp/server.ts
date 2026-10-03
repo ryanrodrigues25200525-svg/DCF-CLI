@@ -622,6 +622,69 @@ async function toolProposalReject(args: Row): Promise<unknown> {
   }
 }
 
+/* ---------- revision history + comparison (read-only; same data as CLI) ---------- */
+
+function libraryDbPath(modelsDir: string): string | null {
+  for (const name of DB_CANDIDATES) {
+    const p = join(modelsDir, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+function pagingInt(value: unknown, name: string, min: number, max: number, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw err('INVALID_PAGING', `${name} must be an integer between ${min} and ${max}`);
+  }
+  return n;
+}
+
+async function toolRevisionsList(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const modelsDir = await resolveModelsDir();
+  // Read-only guard: never create a library database for a lookup.
+  if (!libraryDbPath(modelsDir)) return {ticker, total: 0, offset: 0, limit: 20, revisions: []};
+  const offset = pagingInt(args['offset'], 'offset', 0, 1000000, 0);
+  const limit = pagingInt(args['limit'], 'limit', 1, 100, 20);
+  try {
+    const mod = await import('../review/compare.js') as {
+      listRevisionSummaries(r: string, t: string, o: { offset: number; limit: number }): unknown;
+    };
+    return mod.listRevisionSummaries(modelsDir, ticker, {offset, limit});
+  } catch (e) {
+    if (isErr(e)) throw e;
+    throw err('LIBRARY_UNAVAILABLE', e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function toolModelCompare(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPath(modelsDir)) throw err('MODEL_NOT_FOUND', `No model found for ticker ${ticker}`);
+  const from = typeof args['from'] === 'string' && args['from'].trim() ? args['from'].trim() : undefined;
+  const to = typeof args['to'] === 'string' && args['to'].trim() ? args['to'].trim() : undefined;
+  const offset = pagingInt(args['offset'], 'offset', 0, 1000000, 0);
+  const maxChanges = pagingInt(args['maxChanges'], 'maxChanges', 1, 500, 100);
+  try {
+    const mod = await import('../review/compare.js') as {
+      compareRevisions(r: string, t: string, o: { from?: string; to?: string; offset: number; limit: number }): Promise<unknown>;
+    };
+    return await mod.compareRevisions(modelsDir, ticker, {from, to, offset, limit: maxChanges});
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    if (/No model found|No revisions found/.test(message)) throw err('MODEL_NOT_FOUND', message);
+    if (/matches no revision|matches \d+ revisions|Revision file.*missing/i.test(message)) {
+      throw err('INVALID_REVISION', message);
+    }
+    if (/offset|limit/.test(message)) throw err('INVALID_PAGING', message);
+    if (/openpyxl|Python/.test(message)) throw err('ENGINE_UNAVAILABLE', message);
+    throw err('COMPARE_FAILED', message);
+  }
+}
+
 /* ---------- tool registry (inputSchema key order is part of the contract) ---------- */
 const changeSchema: Row = {
   type: 'object',
@@ -680,6 +743,20 @@ const TOOLS: ToolDef[] = [
     inputSchema: { type: 'object', properties: {
       proposalId: { description: 'Proposal id (text id or integer row id)' }, reason: { type: 'string' },
     }, required: ['proposalId'], additionalProperties: false } },
+  { name: 'revisions_list', description: 'Revision history with filing/event metadata (build event, mapped fact accession/period, latest detected filing, route/readiness). Paged (offset/limit 1-100). Read-only.',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      offset: { type: 'integer', description: 'Start index within the history (newest first)' },
+      limit: { type: 'integer', description: 'Revisions to return (1-100, default 20)' },
+    }, required: ['ticker'], additionalProperties: false } },
+  { name: 'model_compare', description: 'Compare two revisions: formula/value cell changes plus source and model-readiness deltas. Same data as `dcf model compare`. Read-only; cell list is paged (offset/maxChanges 1-500).',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      from: { type: 'string', description: 'From revision id (default: predecessor of to)' },
+      to: { type: 'string', description: 'To revision id (default: accepted revision)' },
+      offset: { type: 'integer', description: 'Start index within the cell changes' },
+      maxChanges: { type: 'integer', description: 'Cell changes to return (1-500, default 100)' },
+    }, required: ['ticker'], additionalProperties: false } },
 ];
 const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
@@ -687,6 +764,7 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   workbook_read_cells: toolWorkbookReadCells, filings_sync: toolFilingsSync,
   proposal_create: toolProposalCreate, proposal_apply: toolProposalApply,
   proposal_reject: toolProposalReject,
+  revisions_list: toolRevisionsList, model_compare: toolModelCompare,
 };
 
 /* ---------- stdio JSON-RPC loop ---------- */

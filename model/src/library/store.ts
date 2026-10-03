@@ -56,6 +56,41 @@ CREATE TABLE IF NOT EXISTS snapshots(ticker TEXT, accession TEXT, filed_date TEX
 CREATE TABLE IF NOT EXISTS watch(ticker TEXT PRIMARY KEY, enabled INTEGER, last_check TEXT, latest_accession TEXT, update_ready INTEGER, last_error TEXT);
 `;
 
+/** Task 3 revision filing/event columns. All nullable so pre-Task-3 rows stay readable. */
+const REVISION_EXTRA_COLUMNS: Array<{ name: string; ddl: string }> = [
+  {name: 'build_event', ddl: 'TEXT'},
+  {name: 'fact_accession', ddl: 'TEXT'},
+  {name: 'fact_filed_date', ddl: 'TEXT'},
+  {name: 'fact_period', ddl: 'TEXT'},
+  {name: 'latest_form', ddl: 'TEXT'},
+  {name: 'latest_accession', ddl: 'TEXT'},
+  {name: 'latest_filed_date', ddl: 'TEXT'},
+  {name: 'latest_report_date', ddl: 'TEXT'},
+  {name: 'route', ddl: 'TEXT'},
+  {name: 'readiness', ddl: 'TEXT'},
+];
+
+/**
+ * Idempotent schema migration for existing SQLite libraries: CREATEs cover
+ * fresh databases, and each missing Task 3 column is added only when absent
+ * (checked via pragma_table_info, not version flags). Never alters data.
+ */
+export function migrateLibrarySchema(db: { exec(sql: string): void; prepare(sql: string): { all(...p: unknown[]): Array<Record<string, unknown>> } }): void {
+  db.exec(SCHEMA);
+  let existing = new Set<string>();
+  try {
+    const rows = db.prepare('SELECT name FROM pragma_table_info(?)').all('revisions');
+    existing = new Set(rows.map((r) => String(r['name'])));
+  } catch {
+    return; // revisions table unusable; leave untouched
+  }
+  for (const col of REVISION_EXTRA_COLUMNS) {
+    if (!existing.has(col.name)) {
+      db.exec(`ALTER TABLE revisions ADD COLUMN ${col.name} ${col.ddl}`);
+    }
+  }
+}
+
 function strOrNull(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   return String(v);
@@ -92,6 +127,16 @@ function mapRevision(row: Record<string, unknown>): RevisionRecord {
     created_at: strOrNull(row.created_at) ?? '',
     path: strOrNull(row.path),
     note: strOrNull(row.note),
+    build_event: strOrNull(row.build_event),
+    fact_accession: strOrNull(row.fact_accession),
+    fact_filed_date: strOrNull(row.fact_filed_date),
+    fact_period: strOrNull(row.fact_period),
+    latest_form: strOrNull(row.latest_form),
+    latest_accession: strOrNull(row.latest_accession),
+    latest_filed_date: strOrNull(row.latest_filed_date),
+    latest_report_date: strOrNull(row.latest_report_date),
+    route: strOrNull(row.route),
+    readiness: strOrNull(row.readiness),
   };
 }
 
@@ -137,7 +182,7 @@ export class ModelLibrary {
     mkdirSync(root, { recursive: true });
     mkdirSync(join(root, 'companies'), { recursive: true });
     this.db = new DatabaseSync(join(root, 'library.db'));
-    this.db.exec(SCHEMA);
+    migrateLibrarySchema(this.db);
   }
 
   static open(explicit?: string): ModelLibrary {
@@ -207,10 +252,20 @@ export class ModelLibrary {
       created_at: utcNow(),
       path: input.path ?? null,
       note: input.note ?? null,
+      build_event: input.build_event ?? null,
+      fact_accession: input.fact_accession ?? null,
+      fact_filed_date: input.fact_filed_date ?? null,
+      fact_period: input.fact_period ?? null,
+      latest_form: input.latest_form ?? null,
+      latest_accession: input.latest_accession ?? null,
+      latest_filed_date: input.latest_filed_date ?? null,
+      latest_report_date: input.latest_report_date ?? null,
+      route: input.route ?? null,
+      readiness: input.readiness ?? null,
     };
     this.db
-      .prepare('INSERT INTO revisions(id, ticker, workbook_hash, parent_hash, created_at, path, note) VALUES(?, ?, ?, ?, ?, ?, ?)')
-      .run(rec.id, rec.ticker, rec.workbook_hash, rec.parent_hash, rec.created_at, rec.path, rec.note);
+      .prepare('INSERT INTO revisions(id, ticker, workbook_hash, parent_hash, created_at, path, note, build_event, fact_accession, fact_filed_date, fact_period, latest_form, latest_accession, latest_filed_date, latest_report_date, route, readiness) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(rec.id, rec.ticker, rec.workbook_hash, rec.parent_hash, rec.created_at, rec.path, rec.note, rec.build_event, rec.fact_accession, rec.fact_filed_date, rec.fact_period, rec.latest_form, rec.latest_accession, rec.latest_filed_date, rec.latest_report_date, rec.route, rec.readiness);
     return rec;
   }
 

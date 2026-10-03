@@ -8726,6 +8726,197 @@ print(json.dumps({
     }
   }, 600_000);
 
+  // --- Task 3 revision filing metadata + comparison ---
+  // Builds two live revisions in an isolated library, compares them through
+  // the CLI (text + JSON) and the read-only MCP tools, and proves the old
+  // revision archive and the accepted workbook remain intact. The two
+  // back-to-back builds may have zero business-cell changes; the assertions
+  // accept either outcome but require correct revision/accession metadata
+  // and a clear no-change result in the zero-change case.
+
+  it('compares two live build revisions with filing metadata and keeps history intact (task 3)', async () => {
+    assertEdgarIdentityConfigured();
+    const home = await mkdtemp(join(tmpdir(), 'dcf-live-compare-'));
+    const modelsDir = join(home, 'models');
+    const runJson = (args: string[]): { status: number | null; output: string; json: Record<string, unknown> } => {
+      const result = runLibraryCli(args, home);
+      if (result.error) throw result.error;
+      const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+      return {status: result.status, output, json: JSON.parse(String(result.stdout)) as Record<string, unknown>};
+    };
+    let mcpChild: ReturnType<typeof spawn> | null = null;
+    try {
+      const build = runLibraryCli(['build', 'AAPL', '--models-dir', modelsDir], home);
+      if (build.error) throw build.error;
+      expect(build.status, sanitizedOutput(`${build.stdout ?? ''}\n${build.stderr ?? ''}`)).toBe(0);
+
+      const update = runLibraryCli(['model', 'update', 'AAPL', '--models-dir', modelsDir], home);
+      if (update.error) throw update.error;
+      const updateOutput = sanitizedOutput(`${update.stdout ?? ''}\n${update.stderr ?? ''}`);
+      expect(update.status, updateOutput).toBe(0);
+      expect(updateOutput).toContain('route=unlevered_dcf');
+
+      const compared = runLibraryCli(['model', 'compare', 'AAPL', '--models-dir', modelsDir], home);
+      if (compared.error) throw compared.error;
+      const compareOutput = sanitizedOutput(`${compared.stdout ?? ''}\n${compared.stderr ?? ''}`);
+      expect(compared.status, compareOutput).toBe(0);
+      expect(compareOutput).toContain('Compare AAPL:');
+      expect(compareOutput).toContain('route=unlevered_dcf');
+      expect(compareOutput).toContain('Source/model context:');
+      expect(compareOutput).toContain('Freshness:');
+
+      const payload = runJson(['model', 'compare', 'AAPL', '--models-dir', modelsDir, '--json']).json as unknown as {
+        ticker: string;
+        from: {id: string; hash: string; buildEvent: string | null; route: string | null; fact: {accession: string | null; filedDate: string | null; period: string | null}};
+        to: {id: string; hash: string; buildEvent: string | null; route: string | null; fact: {accession: string | null; filedDate: string | null; period: string | null}};
+        sameRevision: boolean;
+        summary: string;
+        freshness: string[];
+        workbook: {beforeHash: string; afterHash: string; identicalBytes: boolean; totalChanges: number; changes: Array<{sheet: string; cell: string; kind: string}>};
+      };
+      expect(payload.ticker).toBe('AAPL');
+      expect(payload.sameRevision).toBe(false);
+      expect(payload.from.id).toBeTruthy();
+      expect(payload.to.id).toBeTruthy();
+      expect(payload.from.id).not.toBe(payload.to.id);
+      expect(payload.from.buildEvent).toBe('dcf build');
+      expect(payload.to.buildEvent).toBe('dcf model update');
+      for (const rev of [payload.from, payload.to]) {
+        expect(rev.route).toBe('unlevered_dcf');
+        expect(rev.fact.accession).toMatch(/^\d{10}-\d{2}-\d{6}$/);
+        expect(rev.fact.period).toMatch(/^annual FY/);
+      }
+      expect(payload.workbook.beforeHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(payload.workbook.afterHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(payload.freshness.length).toBeGreaterThan(0);
+      if (payload.workbook.totalChanges === 0) {
+        expect(payload.workbook.identicalBytes).toBe(true);
+        expect(payload.summary).toMatch(/No changes|unchanged/);
+        expect(compareOutput).toContain('no changes (identical bytes)');
+      } else {
+        expect(payload.workbook.identicalBytes).toBe(false);
+        expect(payload.workbook.changes.length).toBeGreaterThan(0);
+        for (const change of payload.workbook.changes) {
+          expect(change.sheet).toBeTruthy();
+          expect(change.cell).toMatch(/^[A-Z]{1,3}[1-9][0-9]{0,6}$/);
+          expect(['formula', 'value', 'added', 'removed']).toContain(change.kind);
+        }
+      }
+
+      // Explicit selectors resolve the same pair; unknown ids fail closed.
+      const explicit = runJson(['model', 'compare', 'AAPL', '--from', payload.from.id, '--to', payload.to.id, '--models-dir', modelsDir, '--json']).json as unknown as {from: {id: string}; to: {id: string}};
+      expect(explicit.from.id).toBe(payload.from.id);
+      expect(explicit.to.id).toBe(payload.to.id);
+      const bogus = runLibraryCli(['model', 'compare', 'AAPL', '--from', 'rev-does-not-exist', '--models-dir', modelsDir], home);
+      if (bogus.error) throw bogus.error;
+      const bogusOutput = sanitizedOutput(`${bogus.stdout ?? ''}\n${bogus.stderr ?? ''}`);
+      expect(bogus.status, bogusOutput).not.toBe(0);
+      expect(bogusOutput).toContain('matches no revision');
+
+      // History intact: both immutable archives exist and the accepted
+      // workbook still matches the manifest.
+      await access(join(modelsDir, 'companies', 'AAPL', 'revisions', `${payload.from.id}.xlsx`));
+      await access(join(modelsDir, 'companies', 'AAPL', 'revisions', `${payload.to.id}.xlsx`));
+      const review = runLibraryCli(['model', 'review', 'AAPL', '--models-dir', modelsDir], home);
+      if (review.error) throw review.error;
+      const reviewOutput = sanitizedOutput(`${review.stdout ?? ''}\n${review.stderr ?? ''}`);
+      expect(review.status, reviewOutput).toBe(0);
+      expect(reviewOutput).toContain('Hash check: on-disk workbook matches the manifest.');
+      const inspected = runJson(['model', 'inspect', 'AAPL', '--models-dir', modelsDir, '--json']).json as unknown as {
+        hashMatchesManifest: boolean;
+        revisions: Array<{id: string; factAccession: string | null; factPeriod: string | null}>;
+      };
+      expect(inspected.hashMatchesManifest).toBe(true);
+      expect(inspected.revisions.length).toBeGreaterThanOrEqual(2);
+      expect(inspected.revisions.map((r) => r.id)).toContain(payload.from.id);
+      expect(inspected.revisions.map((r) => r.id)).toContain(payload.to.id);
+      for (const row of inspected.revisions) {
+        expect(row.factAccession).toMatch(/^\d{10}-\d{2}-\d{6}$/);
+        expect(row.factPeriod).toMatch(/^annual FY/);
+      }
+
+      // Read-only MCP tools return the same comparison data, bounded/paged.
+      mcpChild = spawn(process.execPath, [resolve(projectRoot, 'bin/dcf.mjs'), 'mcp'], {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          HOME: home,
+          DCF_MODELS_DIR: modelsDir,
+          DCF_CACHE_DB_PATH: join(home, 'financial_cache.sqlite'),
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      const server = mcpChild;
+      let nextId = 1;
+      const pending = new Map<number, (message: Record<string, unknown>) => void>();
+      let buffer = '';
+      server.stdout!.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        let index: number;
+        while ((index = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, index).trim();
+          buffer = buffer.slice(index + 1);
+          if (!line) continue;
+          try {
+            const message = JSON.parse(line) as Record<string, unknown>;
+            const resolvePromise = pending.get(message['id'] as number);
+            if (resolvePromise) {
+              pending.delete(message['id'] as number);
+              resolvePromise(message);
+            }
+          } catch {
+            // Ignore non-JSON lines on stdout.
+          }
+        }
+      });
+      const send = (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+        const id = nextId++;
+        return new Promise<Record<string, unknown>>((resolvePromise, rejectPromise) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            rejectPromise(new Error(`Timed out waiting for MCP ${method}`));
+          }, 90_000);
+          pending.set(id, (message) => {
+            clearTimeout(timer);
+            resolvePromise(message);
+          });
+          server.stdin!.write(`${JSON.stringify({jsonrpc: '2.0', id, method, params})}\n`);
+        });
+      };
+      const initialized = await send('initialize', {});
+      expect(((initialized['result'] as Record<string, unknown>)['serverInfo'] as Record<string, unknown>)['name']).toBe('dcf-model-library');
+      const historyReply = await send('tools/call', {name: 'revisions_list', arguments: {ticker: 'AAPL', limit: 10}});
+      const historyText = ((historyReply['result'] as Record<string, unknown>)['content'] as Array<{text: string}>)[0]!.text;
+      const history = JSON.parse(historyText) as {total: number; revisions: Array<{id: string; fact_accession?: string} | {id: string; factAccession?: string}>};
+      expect(history.total).toBeGreaterThanOrEqual(2);
+      expect(history.revisions.map((r) => (r as {id: string}).id)).toContain(payload.from.id);
+      const compareReply = await send('tools/call', {name: 'model_compare', arguments: {ticker: 'AAPL', from: payload.from.id, to: payload.to.id, maxChanges: 10}});
+      const compareText = ((compareReply['result'] as Record<string, unknown>)['content'] as Array<{text: string}>)[0]!.text;
+      const mcpCompared = JSON.parse(compareText) as {from: {id: string}; to: {id: string}; workbook: {beforeHash: string; afterHash: string; totalChanges: number; changes: unknown[]}; summary: string};
+      expect(mcpCompared.from.id).toBe(payload.from.id);
+      expect(mcpCompared.to.id).toBe(payload.to.id);
+      expect(mcpCompared.workbook.beforeHash).toBe(payload.workbook.beforeHash);
+      expect(mcpCompared.workbook.afterHash).toBe(payload.workbook.afterHash);
+      expect(mcpCompared.workbook.totalChanges).toBe(payload.workbook.totalChanges);
+      expect(mcpCompared.workbook.changes.length).toBeLessThanOrEqual(10);
+      expect(typeof mcpCompared.summary).toBe('string');
+    } finally {
+      if (mcpChild?.pid) {
+        try {
+          process.kill(-mcpChild.pid, 'SIGKILL');
+        } catch {
+          try {
+            mcpChild.kill('SIGKILL');
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+      }
+      await rm(home, {recursive: true, force: true});
+    }
+  }, 600_000);
+
   // --- Task 1 CLI regressions (GitHub issues #1, #3, #8) ---
   // These cases spawn the real CLI against hermetic local fixtures (no
   // provider network): a hand-built model library plus the project Python

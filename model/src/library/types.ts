@@ -20,6 +20,20 @@ export interface RevisionRecord {
   created_at: string;
   path: string | null;
   note: string | null;
+  /** Build event that produced this revision (e.g. 'dcf build', 'dcf model update'). */
+  build_event: string | null;
+  /** Filing actually mapped into the workbook facts (never relabeled to a newer filing). */
+  fact_accession: string | null;
+  fact_filed_date: string | null;
+  /** Fiscal period mapped into the workbook (e.g. 'annual FY2021-FY2024'); annual-only routes stay annual. */
+  fact_period: string | null;
+  /** Latest detected SEC filing at build time (may be newer than the mapped facts). */
+  latest_form: string | null;
+  latest_accession: string | null;
+  latest_filed_date: string | null;
+  latest_report_date: string | null;
+  route: string | null;
+  readiness: string | null;
 }
 
 export interface ProposalRecord {
@@ -55,6 +69,16 @@ export interface AddRevisionInput {
   path?: string | null;
   note?: string | null;
   id?: string;
+  build_event?: string | null;
+  fact_accession?: string | null;
+  fact_filed_date?: string | null;
+  fact_period?: string | null;
+  latest_form?: string | null;
+  latest_accession?: string | null;
+  latest_filed_date?: string | null;
+  latest_report_date?: string | null;
+  route?: string | null;
+  readiness?: string | null;
 }
 
 export interface CreateProposalInput {

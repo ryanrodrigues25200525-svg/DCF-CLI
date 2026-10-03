@@ -92,6 +92,7 @@ function usage(): string {
     'Library commands:  dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf models list [--models-dir <dir>] [--json]',
     '                   dcf model inspect <ticker> [--models-dir <dir>] [--json]',
+    '                   dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json] [--models-dir <dir>]',
     '                   dcf model open <ticker> [--models-dir <dir>]',
     '                   dcf model review <ticker> [--models-dir <dir>]',
     '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
@@ -234,6 +235,8 @@ interface GlobalFlags {
   set?: string;
   reason?: string;
   interval?: number;
+  from?: string;
+  to?: string;
   positionals: string[];
 }
 
@@ -259,6 +262,8 @@ function parseLibraryArgs(argv: string[]): GlobalFlags {
     else if (arg === '--filed') flags.filed = takeValue(arg);
     else if (arg === '--set') flags.set = takeValue(arg);
     else if (arg === '--reason') flags.reason = takeValue(arg);
+    else if (arg === '--from') flags.from = takeValue(arg);
+    else if (arg === '--to') flags.to = takeValue(arg);
     else if (arg === '--interval') {
       const raw = takeValue(arg);
       const seconds = Number(raw);
@@ -299,6 +304,7 @@ function manifestMeta(unified: NativeUnifiedPayload): {
   readiness: string;
   accession: string | null;
   filedDate: string | null;
+  factPeriod: string | null;
 } {
   const filing = extractFilingInfo(unified);
   return {
@@ -308,7 +314,37 @@ function manifestMeta(unified: NativeUnifiedPayload): {
     readiness: unified.model_eligibility.status,
     accession: filing?.accession ?? null,
     filedDate: filing?.filedDate ?? null,
+    factPeriod: factPeriodOf(unified),
   };
+}
+
+/**
+ * Fiscal period actually mapped into the workbook facts, derived from the
+ * canonical annual years. Annual-only routes report an 'annual FY…' span so
+ * compare output never describes them as quarter-updated.
+ */
+function factPeriodOf(unified: NativeUnifiedPayload): string | null {
+  const years = Array.isArray(unified.canonical_financials.years)
+    ? unified.canonical_financials.years.filter((y): y is number => typeof y === 'number' && Number.isFinite(y))
+    : [];
+  if (years.length === 0) return null;
+  const min = Math.min(...years);
+  const max = Math.max(...years);
+  return min === max ? `annual FY${min}` : `annual FY${min}-FY${max}`;
+}
+
+/** Latest detected SEC filing at build time (may be newer than the mapped facts). */
+export interface LatestFilingContext {
+  form: string | null;
+  accession: string | null;
+  filedDate: string | null;
+  reportDate: string | null;
+}
+
+/** Filing/event context persisted on every build revision row. */
+export interface RevisionFilingContext {
+  buildEvent: string;
+  latest: LatestFilingContext;
 }
 
 function snapshotJson(ticker: string, meta: ReturnType<typeof manifestMeta>): string {
@@ -333,6 +369,7 @@ async function persistWorkbookRevision(
   meta: ReturnType<typeof manifestMeta>,
   note: string,
   snapshotJsonText?: string,
+  filing?: RevisionFilingContext,
 ): Promise<{ hash: string; revisionId: string; workbookPath: string; recalculatedBytes: Uint8Array }> {
   // Engine recalculation gate: stage the engine bytes in an isolated folder
   // inside the model root, recalculate with LibreOffice, and inspect BEFORE
@@ -381,6 +418,16 @@ async function persistWorkbookRevision(
     parent_hash: previous?.workbook_hash ?? null,
     path: null,
     note,
+    build_event: filing?.buildEvent ?? note,
+    fact_accession: meta.accession,
+    fact_filed_date: meta.filedDate,
+    fact_period: meta.factPeriod,
+    latest_form: filing?.latest.form ?? null,
+    latest_accession: filing?.latest.accession ?? null,
+    latest_filed_date: filing?.latest.filedDate ?? null,
+    latest_report_date: filing?.latest.reportDate ?? null,
+    route: meta.route,
+    readiness: meta.readiness,
   });
   const archivedPath = revisionPath(root, ticker, revision.id);
   await mkdir(dirname(archivedPath), {recursive: true});
@@ -462,7 +509,7 @@ function assertNoManualEdit(lib: ModelLibrary, root: string, ticker: string, bas
   return actual;
 }
 
-async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags, buildEvent = 'dcf build'): Promise<void> {
   if (!tickerRaw) throw new CliUsageError('Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]');
   const ticker = normalizeTicker(tickerRaw);
   const root = libraryRoot(flags.modelsDir);
@@ -487,12 +534,25 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     }
     if (hasDivergedCopy && flags.force) {
       const divergedBytes = await readFile(currentWorkbookPath(root, ticker));
+      // Inherit the prior revision's filing context so the archived diverged
+      // copy keeps its original fact/latest attribution, not the new build's.
+      const priorRevision = existing?.revision_id ? lib.getRevision(existing.revision_id) : null;
       const archived = lib.addRevision({
         ticker,
         workbook_hash: onDiskHash,
         parent_hash: existing?.workbook_hash ?? null,
         path: null,
         note: 'diverged copy archived before --force rebuild',
+        build_event: 'diverged copy archived before --force rebuild',
+        fact_accession: priorRevision?.fact_accession ?? existing?.accession ?? null,
+        fact_filed_date: priorRevision?.fact_filed_date ?? existing?.filed_date ?? null,
+        fact_period: priorRevision?.fact_period ?? null,
+        latest_form: priorRevision?.latest_form ?? null,
+        latest_accession: priorRevision?.latest_accession ?? null,
+        latest_filed_date: priorRevision?.latest_filed_date ?? null,
+        latest_report_date: priorRevision?.latest_report_date ?? null,
+        route: priorRevision?.route ?? existing?.route ?? null,
+        readiness: priorRevision?.readiness ?? existing?.readiness ?? null,
       });
       await copyFileBytes(divergedBytes, revisionPath(root, ticker, archived.id));
       console.log(`Archived diverged copy as revision ${archived.id} before rebuilding.`);
@@ -514,7 +574,30 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     const meta = manifestMeta(unified);
     const built = buildSourceSnapshot(unified);
     const fullSnapshotJson = JSON.stringify({...built.snapshot, _ticker: ticker, _fetchedAt: utcNow()});
-    const saved = await persistWorkbookRevision(lib, root, ticker, result.workbookBytes, meta, 'dcf build', fullSnapshotJson);
+    // Resolve the latest detected filing BEFORE persisting so the revision
+    // row records both the mapped facts and the latest filing (which may be
+    // newer, e.g. a 10-Q against annual-only facts). Identity failures leave
+    // the latest block empty rather than flagging update-ready.
+    const profileCik = typeof unified.profile?.cik === 'string' ? unified.profile.cik : null;
+    let latest: LatestFilingContext = {form: null, accession: null, filedDate: null, reportDate: null};
+    let rejectedRowCount = 0;
+    if (filings) {
+      try {
+        const resolved = resolveMonitorFiling(filings, profileCik, ticker);
+        if (resolved.latest) {
+          latest = {
+            form: resolved.latest.form,
+            accession: resolved.latest.accession,
+            filedDate: resolved.latest.filingDate,
+            reportDate: resolved.latest.reportDate || null,
+          };
+        }
+        rejectedRowCount = resolved.rejectedRowCount;
+      } catch (error) {
+        console.error(`Warning: filing identity check failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const saved = await persistWorkbookRevision(lib, root, ticker, result.workbookBytes, meta, buildEvent, fullSnapshotJson, {buildEvent, latest});
     await writeWorkbook(output, saved.recalculatedBytes, flags.force);
     console.log(formatValuationJobSuccess(result, output));
     console.log(`Accepted library copy: ${saved.workbookPath}`);
@@ -523,21 +606,12 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     // Manifest keeps the fact-source accession represented by the workbook.
     // If the SEC filings list has something newer, queue it on watch only.
     // Identity-validated: cross-CIK rows can never queue update-ready.
-    if (filings) {
-      try {
-        const profileCik = typeof unified.profile?.cik === 'string' ? unified.profile.cik : null;
-        const resolved = resolveMonitorFiling(filings, profileCik, ticker);
-        const latestFiling = resolved.latest;
-        if (latestFiling && meta.accession && latestFiling.accession !== meta.accession) {
-          lib.setWatch(ticker, {last_check: utcNow(), latest_accession: latestFiling.accession, update_ready: true, last_error: null});
-          console.log(`Watch: newer ${latestFiling.form} ${latestFiling.accession} (filed ${latestFiling.filingDate}) queued update-ready; manifest keeps fact source ${meta.accession}.`);
-        }
-        if (resolved.rejectedRowCount > 0) {
-          console.log(`Watch: ${resolved.rejectedRowCount} report-form row(s) with invalid accession/date metadata ignored.`);
-        }
-      } catch (error) {
-        console.error(`Warning: filing identity check failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    if (filings && latest.accession && meta.accession && latest.accession !== meta.accession) {
+      lib.setWatch(ticker, {last_check: utcNow(), latest_accession: latest.accession, update_ready: true, last_error: null});
+      console.log(`Watch: newer ${latest.form} ${latest.accession} (filed ${latest.filedDate}) queued update-ready; manifest keeps fact source ${meta.accession}.`);
+    }
+    if (rejectedRowCount > 0) {
+      console.log(`Watch: ${rejectedRowCount} report-form row(s) with invalid accession/date metadata ignored.`);
     }
     for (const warning of result.warnings) console.error(`Warning: ${warning}`);
   } finally {
@@ -549,7 +623,7 @@ async function cmdModelUpdate(tickerRaw: string | undefined, flags: GlobalFlags)
   if (!tickerRaw) throw new CliUsageError('Usage: dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]');
   const ticker = normalizeLibraryTicker(tickerRaw);
   console.log(`Building or refreshing ${ticker} from the latest data mapped by its model route.`);
-  await cmdBuild(ticker, flags);
+  await cmdBuild(ticker, flags, 'dcf model update');
 }
 
 async function cmdModelExport(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
@@ -624,7 +698,7 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
       manifest,
       workbookExists: actualHash !== null,
       hashMatchesManifest: manifest.workbook_hash !== null && actualHash === manifest.workbook_hash,
-      revisions: revisions.map((r) => ({id: r.id, hash: r.workbook_hash, parent: r.parent_hash, createdAt: r.created_at, note: r.note})),
+      revisions: revisions.map((r) => ({id: r.id, hash: r.workbook_hash, parent: r.parent_hash, createdAt: r.created_at, note: r.note, buildEvent: r.build_event, factAccession: r.fact_accession, factFiledDate: r.fact_filed_date, factPeriod: r.fact_period, latestForm: r.latest_form, latestAccession: r.latest_accession, latestFiledDate: r.latest_filed_date, latestReportDate: r.latest_report_date, route: r.route, readiness: r.readiness})),
       proposals: proposals.map((p) => ({id: p.id, status: p.status, baseRevisionHash: p.base_revision_hash, createdAt: p.created_at})),
       latestSnapshot: snapshot ? {accession: snapshot.accession, filedDate: snapshot.filed_date, fetchedAt: snapshot.fetched_at} : null,
       watch: watch ? {enabled: watch.enabled === 1, updateReady: watch.update_ready === 1, latestAccession: watch.latest_accession, lastCheck: watch.last_check, lastError: watch.last_error} : null,
@@ -653,6 +727,19 @@ async function cmdModelInspect(tickerRaw: string | undefined, flags: GlobalFlags
 
 /** Bound for waiting on the desktop opener: still running at the bound fails closed. */
 const OPEN_EXIT_TIMEOUT_MS = 15_000;
+
+async function cmdModelCompare(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model compare <ticker> [--from <revision>] [--to <revision>] [--json]');
+  const ticker = normalizeLibraryTicker(tickerRaw);
+  const root = libraryRoot(flags.modelsDir);
+  const {compareRevisions, formatCompareMarkdown} = await import('@/review/compare');
+  const compared = await compareRevisions(root, ticker, {from: flags.from, to: flags.to});
+  if (flags.json) {
+    console.log(JSON.stringify(compared, null, 2));
+    return;
+  }
+  console.log(formatCompareMarkdown(compared));
+}
 
 async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
   if (!tickerRaw) throw new CliUsageError('Usage: dcf model open <ticker>');
@@ -1064,6 +1151,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       return true;
     case 'model':
       if (sub === 'inspect') await cmdModelInspect(args[0], flags);
+      else if (sub === 'compare') await cmdModelCompare(args[0], flags);
       else if (sub === 'open') await cmdModelOpen(args[0], flags);
       else if (sub === 'review') await cmdModelReview(args[0], flags);
       else if (sub === 'update') await cmdModelUpdate(args[0], flags);
@@ -1071,7 +1159,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
       else if (sub === 'apply') await cmdModelApply(args[0], flags);
       else if (sub === 'reject') await cmdModelReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');

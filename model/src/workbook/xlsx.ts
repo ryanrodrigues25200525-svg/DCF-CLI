@@ -575,6 +575,216 @@ export function newErrorCells(before: WorkbookInspection, after: WorkbookInspect
   return after.cachedErrorCells.filter((c) => !seen.has(c));
 }
 
+// ------------------------------------------------------- revision diff ----
+
+export type WorkbookCellChangeKind = 'formula' | 'value' | 'added' | 'removed';
+
+export interface WorkbookCellChange {
+  sheet: string;
+  cell: string;
+  kind: WorkbookCellChangeKind;
+  beforeFormula: string | null;
+  afterFormula: string | null;
+  beforeValue: string | number | boolean | null;
+  afterValue: string | number | boolean | null;
+}
+
+export interface WorkbookDiff {
+  beforeSheets: string[];
+  afterSheets: string[];
+  addedSheets: string[];
+  removedSheets: string[];
+  /** Total cell changes across both workbooks (before paging). */
+  totalChanges: number;
+  /** True when the change list was capped during collection. */
+  truncated: boolean;
+  changes: WorkbookCellChange[];
+  offset: number;
+  limit: number;
+}
+
+/** Hard cap on collected cell changes; paging slices below this. */
+export const WORKBOOK_DIFF_HARD_CAP = 20000;
+export const WORKBOOK_DIFF_DEFAULT_LIMIT = 100;
+export const WORKBOOK_DIFF_MAX_LIMIT = 500;
+
+const DIFF_SCRIPT = `
+import datetime
+import json
+import sys
+import openpyxl
+
+HARD_CAP = int(sys.argv[3]) if len(sys.argv) > 3 else 20000
+
+def scalar(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    return str(value)
+
+def tag(value):
+    if isinstance(value, bool):
+        return ('b', value)
+    if isinstance(value, (int, float)):
+        return ('n', float(value))
+    return ('o', scalar(value))
+
+def snapshot(path):
+    wb_formulas = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    wb_cached = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    cells = {}
+    try:
+        for ws in wb_formulas.worksheets:
+            try:
+                cached_ws = wb_cached[ws.title]
+            except KeyError:
+                cached_ws = None
+            for row in ws.iter_rows():
+                for c in row:
+                    raw = c.value
+                    formula = raw if (isinstance(raw, str) and raw.startswith('=')) else None
+                    if formula is not None:
+                        try:
+                            cached = cached_ws[c.coordinate].value if cached_ws is not None else None
+                        except Exception:
+                            cached = None
+                        value = scalar(cached)
+                    else:
+                        value = scalar(raw)
+                    if formula is None and value is None:
+                        continue
+                    cells[(ws.title, c.coordinate)] = (formula, tag(value), value)
+    finally:
+        try:
+            wb_formulas.close()
+        except Exception:
+            pass
+        try:
+            wb_cached.close()
+        except Exception:
+            pass
+    return [ws.title for ws in wb_formulas.worksheets], cells
+
+before_sheets, before_cells = snapshot(sys.argv[1])
+after_sheets, after_cells = snapshot(sys.argv[2])
+added_sheets = sorted(set(after_sheets) - set(before_sheets))
+removed_sheets = sorted(set(before_sheets) - set(after_sheets))
+
+changes = []
+truncated = False
+for key in sorted(set(before_cells) | set(after_cells)):
+    sheet, cell = key
+    if key not in before_cells:
+        formula, _, value = after_cells[key]
+        changes.append({'sheet': sheet, 'cell': cell, 'kind': 'added',
+                        'beforeFormula': None, 'afterFormula': formula,
+                        'beforeValue': None, 'afterValue': value})
+    elif key not in after_cells:
+        formula, _, value = before_cells[key]
+        changes.append({'sheet': sheet, 'cell': cell, 'kind': 'removed',
+                        'beforeFormula': formula, 'afterFormula': None,
+                        'beforeValue': value, 'afterValue': None})
+    else:
+        before_formula, before_tag, before_value = before_cells[key]
+        after_formula, after_tag, after_value = after_cells[key]
+        if before_formula != after_formula:
+            changes.append({'sheet': sheet, 'cell': cell, 'kind': 'formula',
+                            'beforeFormula': before_formula, 'afterFormula': after_formula,
+                            'beforeValue': before_value, 'afterValue': after_value})
+        elif before_tag != after_tag:
+            changes.append({'sheet': sheet, 'cell': cell, 'kind': 'value',
+                            'beforeFormula': before_formula, 'afterFormula': after_formula,
+                            'beforeValue': before_value, 'afterValue': after_value})
+    if len(changes) >= HARD_CAP:
+        truncated = True
+        break
+
+print(json.dumps({
+    'beforeSheets': before_sheets,
+    'afterSheets': after_sheets,
+    'addedSheets': added_sheets,
+    'removedSheets': removed_sheets,
+    'totalChanges': len(changes),
+    'truncated': truncated,
+    'changes': changes,
+}))
+`;
+
+function normalizeDiffScalar(value: unknown): string | number | boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  return String(value);
+}
+
+function isDiffChange(o: unknown): o is WorkbookCellChange {
+  if (typeof o !== 'object' || o === null) return false;
+  const r = o as Record<string, unknown>;
+  return typeof r['sheet'] === 'string' && typeof r['cell'] === 'string'
+    && (r['kind'] === 'formula' || r['kind'] === 'value' || r['kind'] === 'added' || r['kind'] === 'removed');
+}
+
+/**
+ * Deterministic, read-only cell comparison of two workbook files. Compares
+ * live formulas plus cached values (so recalculation-only shifts appear as
+ * value changes); blank cells are skipped. Never modifies either file.
+ * Output is bounded: collection caps at WORKBOOK_DIFF_HARD_CAP and callers
+ * page with offset/limit (clamped to WORKBOOK_DIFF_MAX_LIMIT).
+ */
+export async function diffWorkbookCells(
+  python: string,
+  beforePath: string,
+  afterPath: string,
+  opts?: { offset?: number; limit?: number },
+): Promise<WorkbookDiff> {
+  const offset = opts?.offset === undefined ? 0 : Math.floor(opts.offset);
+  const limit = opts?.limit === undefined ? WORKBOOK_DIFF_DEFAULT_LIMIT : Math.floor(opts.limit);
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('diff offset must be an integer >= 0.');
+  if (!Number.isInteger(limit) || limit < 1 || limit > WORKBOOK_DIFF_MAX_LIMIT) {
+    throw new Error(`diff limit must be an integer between 1 and ${WORKBOOK_DIFF_MAX_LIMIT}.`);
+  }
+  let stdout: string;
+  try {
+    const res = await execFileAsync(
+      python,
+      ['-c', DIFF_SCRIPT, beforePath, afterPath, String(WORKBOOK_DIFF_HARD_CAP)],
+      {timeout: 180_000, maxBuffer: 64 * 1024 * 1024},
+    );
+    stdout = res.stdout;
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(`diffWorkbookCells failed (${beforePath} vs ${afterPath}): ${String(e.stderr ?? e.message ?? err).slice(-2000)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim().split('\n').pop() as string);
+  } catch {
+    throw new Error('diffWorkbookCells: could not parse python output');
+  }
+  const r = parsed as Record<string, unknown>;
+  if (!r || !Array.isArray(r['changes']) || !Array.isArray(r['beforeSheets']) || !Array.isArray(r['afterSheets'])) {
+    throw new Error('diffWorkbookCells: unexpected output shape');
+  }
+  const all = (r['changes'] as unknown[]).filter(isDiffChange).map((c) => ({
+    ...c,
+    beforeFormula: typeof c.beforeFormula === 'string' ? c.beforeFormula : null,
+    afterFormula: typeof c.afterFormula === 'string' ? c.afterFormula : null,
+    beforeValue: normalizeDiffScalar(c.beforeValue),
+    afterValue: normalizeDiffScalar(c.afterValue),
+  }));
+  return {
+    beforeSheets: (r['beforeSheets'] as unknown[]).map(String),
+    afterSheets: (r['afterSheets'] as unknown[]).map(String),
+    addedSheets: Array.isArray(r['addedSheets']) ? (r['addedSheets'] as unknown[]).map(String) : [],
+    removedSheets: Array.isArray(r['removedSheets']) ? (r['removedSheets'] as unknown[]).map(String) : [],
+    totalChanges: typeof r['totalChanges'] === 'number' ? r['totalChanges'] : all.length,
+    truncated: r['truncated'] === true,
+    changes: all.slice(offset, offset + limit),
+    offset,
+    limit,
+  };
+}
+
 export function formatInspectionMarkdown(
   before: WorkbookInspection,
   after: WorkbookInspection,
