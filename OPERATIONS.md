@@ -47,11 +47,22 @@ to replace an existing file unless `--force` is supplied.
   records a source-backed proposal; `dcf model apply <id> --approve` applies it
   as a new revision and `dcf model reject <id>` rejects it without changes.
   Applying requires explicit approval and refuses on a manually diverged copy.
+- `dcf model compare <ticker> [--from <rev|candidate|accepted>] [--to <rev|candidate|accepted>]`
+  diffs two same-company revisions: added/removed sheets plus capped cell
+  changes (added, removed, formula, value). Defaults to parent revision vs the
+  pending candidate (or accepted copy); archives are hash-verified and a
+  diverged accepted copy fails closed instead of comparing.
 - `dcf filings sync AAPL` refreshes filing metadata and queues an update; it
   never edits a workbook.
 - `dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>`
   tracks filing readiness; `run` polls until interrupted.
 - `dcf config models-dir [--set <dir>]` shows or persists the library root.
+- `dcf config review-hook [--set <cmd>]` shows or persists the advisory
+  auto-review hook: after each staged candidate the CLI runs it with
+  `DCF_TICKER`, `DCF_CANDIDATE_ID`, `DCF_WORKBOOK`, and `DCF_MODELS_DIR` set
+  (120s timeout, 8KB output cap). Its exit/output is recorded on the candidate
+  as advisory auto-review and never counts as the required AI verification.
+  `DCF_REVIEW_HOOK` overrides the configured command without touching the file.
 - `dcf mcp` starts the local stdio MCP server (takes no arguments;
   `dcf mcp --help` prints usage). Applying a proposal over MCP still requires
   explicit approval.

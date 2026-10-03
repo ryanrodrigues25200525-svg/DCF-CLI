@@ -61,6 +61,8 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf model candidate-verify <id> --verification <text> --by <name>` | Records the AI review result (freshness, sources, formulas, summary; minimum 40 chars). Does not publish |
 | `dcf model accept <id> --approve [--by name]` | Promotes a verified pending candidate to the accepted revision. Requires recorded verification; stale bases and manual edits fail closed |
 | `dcf model candidate-reject <id> [--reason text]` | Status-only candidate rejection; the accepted library is never touched |
+| `dcf model compare <ticker> [--from <rev\|candidate\|accepted>] [--to <rev\|candidate\|accepted>]` | Diffs two same-company revisions: added/removed sheets plus capped cell changes (added, removed, formula, value). Archives are hash-verified; diverged copies fail closed |
+| `dcf config review-hook [--set <shell-command>]` | Shows or persists the advisory auto-review hook run after each staged candidate (`DCF_REVIEW_HOOK` overrides; output is advisory, never a verification) |
 | `dcf filings sync <ticker>` | Fetches unified model data + the SEC filings list (`GET /api/company/{ticker}/filings`, EdgarTools source); selects the latest identity-validated report filing (endpoint CIK and ticker must match the profile/request; accession prefixes are submitting-account CIKs and may belong to filing agents; Form 3/4/5/144 never model filings); stores snapshot, flags update-ready; never edits workbooks |
 | `dcf watch status` | Read-only table (enabled, update-ready, accession) |
 | `dcf watch check [ticker]` | One-shot refresh of one or all enabled tickers; snapshots only |

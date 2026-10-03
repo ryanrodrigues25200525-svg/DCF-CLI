@@ -18,7 +18,9 @@ Assistant MCP equivalents: `filing_latest` (with `fetchedAt`/`ageHours`/`stale`)
 `source_snapshot` (paged via `offset`/`maxChars`, follow `nextOffset` until
 null to read the whole normalized snapshot), `workbook_read_cells` (live
 cached values + formulas for chosen cells), `filings_sync` (refresh snapshot
-through the shared service; never writes workbooks).
+through the shared service; never writes workbooks), `model_build` (same
+deterministic staging flow as the CLI; long-running, publishes nothing),
+`revision_compare` (hash-verified same-company diffs).
 
 When the user explicitly requests a full model refresh, run `dcf model update
 <ticker>` in the local CLI. It rebuilds and validates the model using the latest

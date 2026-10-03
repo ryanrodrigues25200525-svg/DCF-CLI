@@ -211,24 +211,11 @@ export function resolveCompareEndpoint(
     if (role === 'to') {
       const pending = lib.getPendingCandidate(norm);
       if (pending) {
-        const path = candidateWorkbookPath(root, norm, pending.id);
-        if (!existsSync(path)) throw new Error(`Pending candidate workbook for ${norm} is missing; cannot compare.`);
-        if (shaOf(path) !== pending.workbook_hash) {
-          throw new Error(`Pending candidate workbook for ${norm} no longer matches its staged hash; cannot compare.`);
-        }
-        return { label: `candidate ${pending.id}`, path };
+        return verifiedCandidateEndpoint(root, norm, pending.id, pending.workbook_hash);
       }
       return resolveCompareEndpoint(lib, root, norm, 'accepted', 'to');
     }
-    // Default from: the accepted copy's parent revision, else null (all-added).
-    const manifest = lib.getCompany(norm);
-    if (!manifest?.workbook_hash) return null;
-    const revisions = lib.listRevisions(norm);
-    const parent = revisions.find((r) => r.workbook_hash === manifest.workbook_hash)?.parent_hash ?? null;
-    if (!parent) return null;
-    const parentRev = revisions.find((r) => r.workbook_hash === parent) ?? null;
-    if (!parentRev) return null;
-    return resolveCompareEndpoint(lib, root, norm, parentRev.id, 'from');
+    return defaultFromEndpoint(lib, root, norm);
   }
   const lowered = ref.trim().toLowerCase();
   if (lowered === 'candidate') {
@@ -248,12 +235,61 @@ export function resolveCompareEndpoint(
   }
   const revision = lib.getRevision(ref.trim());
   if (!revision || revision.ticker !== norm) throw new Error(`Revision not found for ${norm}: ${ref.trim()}`);
-  const path = revisionPath(root, norm, revision.id);
-  if (!existsSync(path)) throw new Error(`Revision archive ${revision.id} is missing; cannot compare.`);
-  if (shaOf(path) !== revision.workbook_hash) {
-    throw new Error(`Revision archive ${revision.id} does not match its recorded hash; refusing to compare.`);
+  return verifiedArchiveEndpoint(root, norm, revision.id, revision.workbook_hash);
+}
+
+function verifiedCandidateEndpoint(root: string, ticker: string, candidateId: string, stagedHash: string): CompareEndpoint {
+  const path = candidateWorkbookPath(root, ticker, candidateId);
+  if (!existsSync(path)) throw new Error(`Pending candidate workbook for ${ticker} is missing; cannot compare.`);
+  if (shaOf(path) !== stagedHash) {
+    throw new Error(`Pending candidate workbook for ${ticker} no longer matches its staged hash; cannot compare.`);
   }
-  return { label: `revision ${revision.id}`, path };
+  return { label: `candidate ${candidateId}`, path };
+}
+
+function verifiedArchiveEndpoint(root: string, ticker: string, revisionId: string, recordedHash: string): CompareEndpoint {
+  const path = revisionPath(root, ticker, revisionId);
+  if (!existsSync(path)) throw new Error(`Revision archive ${revisionId} is missing; cannot compare.`);
+  if (shaOf(path) !== recordedHash) {
+    throw new Error(`Revision archive ${revisionId} does not match its recorded hash; refusing to compare.`);
+  }
+  return { label: `revision ${revisionId}`, path };
+}
+
+/** Default `from`: the pending candidate's recorded base revision when one is
+ *  pending (what changed since the base), else the accepted copy's parent
+ *  revision, else null (initial revision: everything reads as added). */
+function defaultFromEndpoint(lib: ModelLibrary, root: string, ticker: string): CompareEndpoint | null {
+  const norm = normalizeTicker(ticker);
+  const pending = lib.getPendingCandidate(norm);
+  if (pending) {
+    let baseHash: string | null = pending.base_revision_hash;
+    try {
+      const parsed = JSON.parse(pending.payload_json) as { baseRevisionHash?: unknown };
+      if (typeof parsed.baseRevisionHash === 'string' && parsed.baseRevisionHash) baseHash = parsed.baseRevisionHash;
+    } catch {
+      // Fall back to the row value.
+    }
+    if (typeof baseHash !== 'string' || !baseHash) return null;
+    const base = lib.listRevisions(norm).find((r) => r.workbook_hash === baseHash) ?? null;
+    if (!base) return null;
+    return verifiedArchiveEndpoint(root, norm, base.id, base.workbook_hash);
+  }
+  return defaultFromAccepted(lib, root, norm);
+}
+
+/** Default `from` with no pending candidate: the accepted copy's parent
+ *  revision, else null (initial revision). */
+function defaultFromAccepted(lib: ModelLibrary, root: string, ticker: string): CompareEndpoint | null {
+  const norm = normalizeTicker(ticker);
+  const manifest = lib.getCompany(norm);
+  if (!manifest?.workbook_hash) return null;
+  const revisions = lib.listRevisions(norm);
+  const parent = revisions.find((r) => r.workbook_hash === manifest.workbook_hash)?.parent_hash ?? null;
+  if (!parent) return null;
+  const parentRev = revisions.find((r) => r.workbook_hash === parent) ?? null;
+  if (!parentRev) return null;
+  return verifiedArchiveEndpoint(root, norm, parentRev.id, parentRev.workbook_hash);
 }
 
 export function formatCompareMarkdown(ticker: string, fromLabel: string, toLabel: string, diff: WorkbookDiff): string {

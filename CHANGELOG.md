@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added a pending build-candidate gate: `dcf build` and `dcf model update` stage a validated candidate (route/readiness, source accession, mapped period, base revision) without publishing. `dcf model candidate`, `candidate-verify`, `accept --approve`, and `candidate-reject` record the AI review and promote only on explicit human approval; stale bases and manual edits fail closed. Mirrored as MCP tools `candidate_inspect/verify/accept/reject` with specific error codes.
+- Added `dcf config review-hook`: an advisory shell command run after each staged candidate (bounded, env-provided) whose output is stored distinctly from the required AI verification.
+- Added `dcf model compare` and MCP `revision_compare`: hash-verified same-company revision diffs (sheets + capped cell changes, accepted/candidate aliases).
+- Added MCP `model_build`: agents can trigger the same deterministic staging flow as the CLI (long-running); approval still promotes.
 - Documented the full CLI surface (`config models-dir`, watch variants, `--json`) in README and OPERATIONS; the model-library guide remains the complete reference.
 
 ### Fixed
