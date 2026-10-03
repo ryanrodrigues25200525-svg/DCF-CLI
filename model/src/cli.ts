@@ -13,7 +13,7 @@ import type { DcfWorkbookPayload } from '@/services/exporters/excel/types';
 import { LocalBackendProcess } from '@/infrastructure/local-backend-process';
 import { assertOutputDoesNotExist, writeWorkbook } from '@/infrastructure/output-writer';
 import { formatValuationJobSuccess, runValuationJob } from '@/application/run-valuation-job';
-import { getConfigPath, getModelsDir, resolveModelsDir, setModelsDir } from '@/library/config';
+import { getConfigPath, getModelsDir, getReviewHook, resolveModelsDir, setModelsDir, setReviewHook } from '@/library/config';
 import {
   ModelLibrary,
   currentWorkbookPath,
@@ -29,8 +29,10 @@ import {
   acceptCandidate,
   formatCandidateMarkdown,
   getPendingCandidateView,
+  recordAutoReview,
   recordCandidateVerification,
   rejectCandidate,
+  runReviewHook,
   stageBuildCandidate,
 } from '@/review/build-candidate';
 import { extractFilingInfo } from '@/watch/filing-source';
@@ -110,6 +112,7 @@ function usage(): string {
     '                   dcf filings sync <ticker> [--models-dir <dir>]',
     '                   dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker> [--models-dir <dir>]',
     '                   dcf config models-dir [--set <dir>]',
+    '                   dcf config review-hook [--set <shell-command>]',
     '                   dcf mcp (start the local stdio MCP server)',
     '       npm run dcf -- <same commands>',
     '',
@@ -438,6 +441,24 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
       lib, root, ticker, engineBytes: result.workbookBytes, meta, snapshotJsonText: fullSnapshotJson, note: 'dcf build',
     });
     saveSourceMetadata(lib, ticker, meta, fullSnapshotJson);
+    const hookCommand = getReviewHook();
+    if (hookCommand) {
+      console.log(`Running review hook for candidate ${staged.candidateId}...`);
+      const hookResult = await runReviewHook(hookCommand, {
+        DCF_TICKER: ticker,
+        DCF_CANDIDATE_ID: staged.candidateId,
+        DCF_WORKBOOK: staged.workbookPath,
+        DCF_MODELS_DIR: root,
+      });
+      recordAutoReview(lib, staged.candidateId, hookResult);
+      console.log(
+        `Review hook finished (exit ${hookResult.exitCode ?? 'unknown'}${hookResult.timedOut ? ', timed out' : ''}); ` +
+        'output recorded on the candidate as advisory auto-review (not a verification).',
+      );
+      if (hookResult.timedOut || (hookResult.exitCode !== 0 && hookResult.exitCode !== null)) {
+        console.error('Warning: the review hook did not succeed; staging is unaffected. Inspect the candidate before verifying.');
+      }
+    }
     await writeWorkbook(output, await readFile(staged.workbookPath), flags.force);
     console.log(formatValuationJobSuccess(result, output));
     console.log(`Staged build candidate ${staged.candidateId} for ${ticker} (route=${meta.route} readiness=${meta.readiness} hash=${staged.hash}).`);
@@ -1035,6 +1056,17 @@ async function cmdWatch(statusArgs: string[], flags: GlobalFlags): Promise<void>
   throw new CliUsageError('Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>');
 }
 
+async function cmdConfigReviewHook(flags: GlobalFlags): Promise<void> {
+  if (flags.set !== undefined) {
+    const saved = setReviewHook(flags.set);
+    console.log(`Review hook: ${saved ?? '(cleared)'} (saved to ${getConfigPath()})`);
+    return;
+  }
+  console.log(`Review hook: ${getReviewHook() ?? '(unset)'}`);
+  console.log(`DCF_REVIEW_HOOK: ${process.env.DCF_REVIEW_HOOK?.trim() || '(unset)'}`);
+  console.log('Set with `dcf config review-hook --set "<shell command>"`; clear by removing "reviewHook" from the config file.');
+}
+
 async function cmdConfigModelsDir(flags: GlobalFlags): Promise<void> {
   if (flags.set !== undefined) {
     const resolved = setModelsDir(flags.set);
@@ -1071,7 +1103,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       model: 'Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...',
       filings: 'Usage: dcf filings sync <ticker>',
       watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
-      config: 'Usage: dcf config models-dir [--set <dir>]',
+      config: 'Usage: dcf config models-dir|review-hook [--set <value>]',
     };
     throw new CliUsageError(usageByCommand[command] ?? `Usage: dcf ${command} ...`);
   }
@@ -1109,9 +1141,15 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       await cmdWatch(sub ? [sub, ...args] : [], flags);
       return true;
     case 'config':
-      if (sub !== 'models-dir') throw new CliUsageError('Usage: dcf config models-dir [--set <dir>]');
-      await cmdConfigModelsDir(flags);
-      return true;
+      if (sub === 'models-dir') {
+        await cmdConfigModelsDir(flags);
+        return true;
+      }
+      if (sub === 'review-hook') {
+        await cmdConfigReviewHook(flags);
+        return true;
+      }
+      throw new CliUsageError('Usage: dcf config models-dir|review-hook [--set <value>]');
     case 'mcp': {
       // Raw-argv gate: the stdio server takes no arguments. Exactly --help/-h
       // prints usage; anything else is rejected before startup so a typo never

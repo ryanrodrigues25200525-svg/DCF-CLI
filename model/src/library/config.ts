@@ -21,13 +21,13 @@ function expandValidated(raw: string): string {
   return normalize(trimmed);
 }
 
-function readConfigModelsDir(): string | null {
+function readConfigValue(key: string): string | null {
   try {
     const p = getConfigPath();
     if (!existsSync(p)) return null;
     const parsed: unknown = JSON.parse(readFileSync(p, 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const v = (parsed as Record<string, unknown>).modelsDir;
+    const v = (parsed as Record<string, unknown>)[key];
     if (typeof v !== 'string' || v.trim().length === 0) return null;
     return v;
   } catch {
@@ -35,28 +35,7 @@ function readConfigModelsDir(): string | null {
   }
 }
 
-export function resolveModelsDir(explicitOverride?: string): string {
-  if (explicitOverride !== undefined && explicitOverride.trim().length > 0) {
-    return expandValidated(explicitOverride);
-  }
-  const env = process.env.DCF_MODELS_DIR;
-  if (env !== undefined && env.trim().length > 0) {
-    return expandValidated(env);
-  }
-  const fromConfig = readConfigModelsDir();
-  if (fromConfig !== null) {
-    return expandValidated(fromConfig);
-  }
-  return join(homedir(), 'DCF-Models');
-}
-
-export function getModelsDir(): string {
-  return resolveModelsDir();
-}
-
-export function setModelsDir(path: string): string {
-  const resolved = expandValidated(path);
-  mkdirSync(resolved, { recursive: true });
+function writeConfigValue(key: string, value: string | null): void {
   const configPath = getConfigPath();
   let existing: Record<string, unknown> = {};
   try {
@@ -70,6 +49,52 @@ export function setModelsDir(path: string): string {
     existing = {};
   }
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, JSON.stringify({ ...existing, modelsDir: resolved }, null, 2) + '\n', 'utf8');
+  const next = { ...existing };
+  if (value === null) delete next[key];
+  else next[key] = value;
+  writeFileSync(configPath, JSON.stringify(next, null, 2) + '\n', 'utf8');
+}
+
+export function resolveModelsDir(explicitOverride?: string): string {
+  if (explicitOverride !== undefined && explicitOverride.trim().length > 0) {
+    return expandValidated(explicitOverride);
+  }
+  const env = process.env.DCF_MODELS_DIR;
+  if (env !== undefined && env.trim().length > 0) {
+    return expandValidated(env);
+  }
+  const fromConfig = readConfigValue('modelsDir');
+  if (fromConfig !== null) {
+    return expandValidated(fromConfig);
+  }
+  return join(homedir(), 'DCF-Models');
+}
+
+export function getModelsDir(): string {
+  return resolveModelsDir();
+}
+
+export function setModelsDir(path: string): string {
+  const resolved = expandValidated(path);
+  mkdirSync(resolved, { recursive: true });
+  writeConfigValue('modelsDir', resolved);
   return resolved;
+}
+
+/** Shell command run after each staged candidate (advisory auto-review).
+ *  Environment override wins for tests; an empty value clears the hook. */
+export function getReviewHook(): string | null {
+  const env = process.env.DCF_REVIEW_HOOK;
+  if (env !== undefined && env.trim().length > 0) return env.trim();
+  return readConfigValue('reviewHook');
+}
+
+export function setReviewHook(command: string): string | null {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    writeConfigValue('reviewHook', null);
+    return null;
+  }
+  writeConfigValue('reviewHook', trimmed);
+  return trimmed;
 }

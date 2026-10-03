@@ -1,5 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -31,6 +32,85 @@ export interface CandidateVerification {
   at: string;
 }
 
+/** Advisory auto-review from the configured shell hook. Stored distinctly
+ *  from the required AI verification: hook output never counts as review. */
+export interface CandidateAutoReview {
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  output: string;
+  at: string;
+}
+
+/** Bound so a hanging hook can never block staging: the hook is advisory. */
+export const REVIEW_HOOK_TIMEOUT_MS = 120_000;
+/** Stored hook output cap; longer output is truncated. */
+export const REVIEW_HOOK_OUTPUT_LIMIT = 8192;
+
+export interface HookResult {
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  output: string;
+}
+
+/** Run the configured review hook with candidate env. Never throws for hook
+ *  behavior (nonzero exit, timeout, spawn failure are all recorded); only
+ *  invalid options throw. */
+export async function runReviewHook(
+  command: string,
+  env: Record<string, string>,
+  options?: { timeoutMs?: number },
+): Promise<HookResult> {
+  const timeoutMs = options?.timeoutMs ?? REVIEW_HOOK_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('runReviewHook: timeoutMs must be a positive number');
+  }
+  return new Promise<HookResult>((resolvePromise) => {
+    let output = '';
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: HookResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolvePromise(result);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('/bin/sh', ['-c', command], { env: { ...process.env, ...env } });
+    } catch (error) {
+      resolvePromise({
+        command,
+        exitCode: null,
+        timedOut: false,
+        output: `hook spawn failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, REVIEW_HOOK_OUTPUT_LIMIT),
+      });
+      return;
+    }
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // Already exited; the exit handler settles below.
+      }
+      finish({ command, exitCode: null, timedOut: true, output });
+    }, timeoutMs);
+    const push = (data: Buffer | string): void => {
+      if (output.length >= REVIEW_HOOK_OUTPUT_LIMIT) return;
+      output += String(data).slice(0, REVIEW_HOOK_OUTPUT_LIMIT - output.length);
+    };
+    child.stdout?.on('data', push);
+    child.stderr?.on('data', push);
+    child.once('error', (error) => {
+      finish({ command, exitCode: null, timedOut: false, output: `${output}\nhook error: ${error.message}`.slice(0, REVIEW_HOOK_OUTPUT_LIMIT) });
+    });
+    child.once('exit', (code) => {
+      finish({ command, exitCode: code, timedOut: false, output });
+    });
+  });
+}
+
 /** Stored candidate context: what was built, from which sources, against which base. */
 export interface CandidatePayload {
   ticker: string;
@@ -46,6 +126,7 @@ export interface CandidatePayload {
   baseRevisionId: string | null;
   note: string;
   verification: CandidateVerification | null;
+  autoReview: CandidateAutoReview | null;
   decidedAt?: string;
   decidedBy?: string;
   decision?: string;
@@ -175,6 +256,7 @@ export async function stageBuildCandidate(args: {
     baseRevisionId: previous?.revision_id ?? null,
     note,
     verification: null,
+    autoReview: null,
   };
   const record = lib.createCandidate({
     ticker,
@@ -296,6 +378,12 @@ export function formatCandidateMarkdown(view: CandidateView): string {
   lines.push(p.verification
     ? `- Verification: recorded by ${p.verification.by} at ${p.verification.at} (${p.verification.text.length} chars)`
     : '- Verification: none recorded — AI/agent review is required before approval');
+  if (p.autoReview) {
+    const hookSummary = p.autoReview.timedOut
+      ? `timed out after the hook budget (exit unknown)`
+      : `exit ${p.autoReview.exitCode ?? 'unknown'}`;
+    lines.push(`- Auto-review hook: \`${p.autoReview.command}\` → ${hookSummary}; output ${p.autoReview.output.length} chars (advisory only, not a verification)`);
+  }
   lines.push('');
   if (view.status !== 'pending') {
     lines.push(`This candidate is ${view.status}; it cannot be verified or accepted.`);
@@ -310,6 +398,17 @@ export function formatCandidateMarkdown(view: CandidateView): string {
     lines.push(`  dcf model accept ${view.id} --approve [--by <name>]`);
   }
   return lines.join('\n');
+}
+
+/** Attach an advisory hook result to a pending candidate. Hook output never
+ *  counts as the required AI verification. */
+export function recordAutoReview(lib: ModelLibrary, candidateId: string, result: HookResult): void {
+  const record = lib.getCandidate(candidateId);
+  if (!record) throw new Error(`Candidate not found: ${candidateId}`);
+  if (record.status !== 'pending') throw new Error(`Candidate ${candidateId} is ${record.status}; auto-review applies to pending candidates only.`);
+  const payload = parsePayload(record);
+  payload.autoReview = { ...result, at: utcNow() };
+  lib.updateCandidatePayload(candidateId, JSON.stringify(payload));
 }
 
 /** Record the AI/agent review result on a pending candidate. */

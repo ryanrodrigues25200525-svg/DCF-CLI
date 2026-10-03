@@ -41,4 +41,29 @@ describe('agent autonomy loop (real services, no network)', () => {
       if (root) await rm(root, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it('runs the review hook bounded with env propagation and output cap', async () => {
+    const ok = await probe('hook-run.ts', ['--cmd', '/usr/bin/true']);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect((ok.json as { exitCode: number }).exitCode).toBe(0);
+    expect((ok.json as { timedOut: boolean }).timedOut).toBe(false);
+
+    const failing = await probe('hook-run.ts', ['--cmd', '/usr/bin/false']);
+    expect(failing.status, failing.stderr).toBe(0);
+    expect((failing.json as { exitCode: number }).exitCode).toBe(1);
+
+    const envProbe = await probe('hook-run.ts', ['--cmd', '/usr/bin/env', '--env', 'DCF_TICKER=ZZZ', '--env', 'DCF_CANDIDATE_ID=c1']);
+    expect(envProbe.status, envProbe.stderr).toBe(0);
+    expect((envProbe.json as { output: string }).output).toContain('DCF_TICKER=ZZZ');
+    expect((envProbe.json as { output: string }).output).toContain('DCF_CANDIDATE_ID=c1');
+
+    const hung = await probe('hook-run.ts', ['--cmd', 'exec /bin/sleep 20', '--timeout', '500']);
+    expect(hung.status, hung.stderr).toBe(0);
+    expect((hung.json as { timedOut: boolean }).timedOut).toBe(true);
+    expect((hung.json as { elapsedMs: number }).elapsedMs).toBeLessThan(10000);
+
+    const loud = await probe('hook-run.ts', ['--cmd', `/usr/bin/python3 -c "print('x' * 100000)"`]);
+    expect(loud.status, loud.stderr).toBe(0);
+    expect(((loud.json as { output: string }).output ?? '').length).toBeLessThanOrEqual(8192);
+  }, 180_000);
 });
