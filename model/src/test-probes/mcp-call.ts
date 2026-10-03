@@ -7,13 +7,18 @@ const modelRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
 let tool = '';
 let argsJson = '{}';
+const extraEnv: Record<string, string> = {};
 for (let i = 0; i < args.length; i += 1) {
   if (args[i] === '--tool') tool = args[++i] as string;
   else if (args[i] === '--args') argsJson = args[++i] as string;
+  else if (args[i] === '--env' && args[i + 1]) {
+    const [k, ...rest] = (args[++i] as string).split('=');
+    if (k) extraEnv[k] = rest.join('=');
+  }
 }
 const child = spawn(join(modelRoot, 'node_modules', '.bin', 'tsx'), ['--tsconfig', 'tsconfig.json', 'src/mcp/server.ts'], {
   cwd: modelRoot,
-  env: { ...process.env },
+  env: { ...process.env, ...extraEnv },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 let buffer = '';

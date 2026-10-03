@@ -85,6 +85,59 @@ describe('agent autonomy loop (real services, no network)', () => {
     expect(identicalTotal).toBe(0);
   }, 180_000);
 
+  it('requires a reviewed preview before proposal promotion', async () => {
+    const r = await probe('proposal-preview-matrix.ts', []);
+    expect(r.status, r.stderr).toBe(0);
+    const m = r.json as Record<string, { ok: boolean; message?: string; hash?: string | null }>;
+    expect(m['applyWithoutPreview']?.ok).toBe(false);
+    expect(m['applyWithoutPreview']?.message ?? '').toMatch(/preview/i);
+    expect(m['preview']?.ok).toBe(true);
+    expect(m['preview']?.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(m['applyAfterPreview']?.ok).toBe(true);
+    expect(m['reapply']?.ok).toBe(false);
+    expect(m['staleApply']?.ok).toBe(false);
+    expect(m['staleApply']?.message ?? '').toMatch(/stale/i);
+    expect(m['manualApply']?.ok).toBe(false);
+    expect(m['manualApply']?.message ?? '').toMatch(/MANUAL_EDIT_DETECTED/);
+  }, 180_000);
+
+  it('reports specific MCP codes for proposal preview and apply failures', async () => {
+    const setup = await probe('proposal-mcp-matrix.ts', []);
+    expect(setup.status, setup.stderr).toBe(0);
+    const ids = setup.json as { root: string; unpreviewed: string; stale: string; manual: string };
+    const env = ['--env', `DCF_MODELS_DIR=${ids.root}`];
+    const call = async (tool: string, argsJson: string): Promise<{ code?: string; message?: string }> => {
+      const r = await probe('mcp-call.ts', ['--tool', tool, '--args', argsJson, ...env]);
+      expect(r.status, r.stderr).toBe(0);
+      const raw = r.json as { content?: Array<{ text?: string }>; code?: string; message?: string };
+      const text = raw?.content?.[0]?.text;
+      if (typeof text === 'string') {
+        try {
+          return JSON.parse(text) as { code?: string; message?: string };
+        } catch {
+          // Fall through to the raw body.
+        }
+      }
+      return raw;
+    };
+    try {
+      const noPreview = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: true }));
+      expect(noPreview.code).toBe('PREVIEW_REQUIRED');
+      const stale = await call('proposal_apply', JSON.stringify({ proposalId: ids.stale, approval: true }));
+      expect(stale.code).toBe('STALE_BASE');
+      const manual = await call('proposal_apply', JSON.stringify({ proposalId: ids.manual, approval: true }));
+      expect(manual.code).toBe('MANUAL_EDIT_DETECTED');
+      const noApproval = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: false }));
+      expect(noApproval.code).toBe('APPROVAL_REQUIRED');
+      const previewed = await call('proposal_preview', JSON.stringify({ proposalId: ids.unpreviewed }));
+      expect((previewed as unknown as { status?: string }).status ?? (previewed as unknown as { finalHash?: string }).finalHash).toBeTruthy();
+      const applied = await call('proposal_apply', JSON.stringify({ proposalId: ids.unpreviewed, approval: true, approvedBy: 'probe' }));
+      expect((applied as unknown as { code?: string }).code ?? (applied as unknown as { status?: string }).status).toBe('applied');
+    } finally {
+      await rm(ids.root, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it('rejects =-prefixed proposedValue over MCP and in cell-edit conversion', async () => {
     const mcp = await probe('mcp-call.ts', ['--tool', 'proposal_create', '--args', JSON.stringify({
       ticker: 'TST',

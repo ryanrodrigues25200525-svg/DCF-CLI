@@ -29,6 +29,176 @@ export interface ApplyResult {
   approvedBy: string;
 }
 
+export interface ProposalPreview {
+  proposalId: string;
+  ticker: string;
+  baseHash: string;
+  changesHash: string;
+  finalHash: string;
+  previewedAt: string;
+  appliedCells: string[];
+  inspectionMarkdown: string;
+}
+
+/** Canonical hash of the proposed edits: what the reviewer saw is what
+ *  gets applied. Sheet/cell are canonicalized; priors are observations. */
+export function proposalPreviewHash(changes: ProposedChange[]): string {
+  const canonical = changes.map((c) => ({
+    sheet: String(c.sheet).toUpperCase(),
+    cell: String(c.cell).toUpperCase(),
+    proposedValue: c.proposedValue === undefined ? null : c.proposedValue,
+    proposedFormula: c.proposedFormula ?? null,
+    rationale: c.rationale,
+    source: c.source,
+    accession: c.accession,
+  }));
+  return sha256Hex(Buffer.from(JSON.stringify(canonical), 'utf8'));
+}
+
+import type { ProposalRecord } from '@/library/types';
+
+interface PreviewBuild {
+  proposal: ProposalRecord;
+  proposalId: string;
+  draft: ProposalDraft;
+  manifest: ModelManifest | null;
+  actualHash: string;
+  baseHash: string;
+  baseline: Awaited<ReturnType<typeof inspectWorkbook>>;
+  after: Awaited<ReturnType<typeof inspectWorkbook>>;
+  applied: AppliedEdit[];
+  finalHash: string;
+  tmpCopy: string;
+  tmpEdited: string;
+}
+
+/** Shared pre-publication pipeline: load, validate, stale/manual-edit gates,
+ *  edit a copy, recalculate, validate. Publishes nothing; caller cleans
+ *  tmpCopy/tmpEdited. Throws with the workbook left unchanged. */
+async function buildPreviewEdits(
+  lib: ModelLibrary,
+  root: string,
+  proposalId: string,
+): Promise<PreviewBuild> {
+  const proposal = lib.getProposal(proposalId);
+  if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
+  if (proposal.status === 'applied') throw new Error(`Proposal ${proposalId} was already applied.`);
+  if (proposal.status === 'rejected') throw new Error(`Proposal ${proposalId} was rejected and cannot be applied.`);
+  if (proposal.status !== 'proposed' && proposal.status !== 'accepted') {
+    throw new Error(`Proposal ${proposalId} has status ${proposal.status} and cannot be applied.`);
+  }
+
+  let draft: ProposalDraft;
+  try {
+    const parsed = JSON.parse(proposal.payload_json) as {
+      summary?: string;
+      changes?: ProposalDraft['changes'];
+      createdAt?: string;
+    };
+    draft = {
+      ticker: proposal.ticker,
+      baseRevisionHash: proposal.base_revision_hash ?? '',
+      summary: parsed.summary ?? '',
+      changes: parsed.changes ?? [],
+      createdAt: parsed.createdAt ?? proposal.created_at,
+    };
+  } catch {
+    throw new Error(`Proposal ${proposalId} has an unreadable payload; refusing to proceed.`);
+  }
+
+  const manifest = await readManifest(root, draft.ticker);
+  const {hash: actualHash} = readCurrentBytesHash(root, draft.ticker);
+  const problems = verifyManifest(manifest, actualHash);
+  if (problems.length > 0) {
+    throw new Error(`MANUAL_EDIT_DETECTED: ${problems.join('; ')}. Review before replacing ${draft.ticker}.`);
+  }
+  const baseHash = proposal.base_revision_hash ?? manifest?.workbookHash ?? '';
+  if (!baseHash) throw new Error(`Proposal ${proposalId} has no base revision and ${draft.ticker} has no accepted hash.`);
+  if (actualHash !== baseHash) {
+    throw new Error(
+      `Proposal is stale: drafted against ${baseHash} but current is ${actualHash}. ` +
+      `Re-run \`dcf model review ${draft.ticker}\` and create a fresh proposal.`,
+    );
+  }
+  draft.baseRevisionHash = baseHash;
+  const validationErrors = validateProposalDraft(draft);
+  if (validationErrors.length > 0) throw new Error(`Proposal invalid:\n- ${validationErrors.join('\n- ')}`);
+
+  const python = findBackendPython();
+  if (!python) throw new Error('No Python with openpyxl is available (backend/.venv); cannot apply cell edits.');
+  const soffice = findSoffice();
+  if (!soffice) throw new Error('LibreOffice (soffice) is not available; cannot recalculate the workbook.');
+
+  const edits = draft.changes.map(toCellEdit);
+  const workDir = join(root, 'companies', '__apply_tmp__');
+  const tmpBase = join(workDir, `${proposalId.replace(/[^A-Za-z0-9._-]/g, '_')}-${process.pid}`);
+  const tmpCopy = `${tmpBase}.work.xlsx`;
+  const tmpEdited = `${tmpBase}.edited.xlsx`;
+  await mkdir(workDir, {recursive: true});
+  await copyFile(currentWorkbookPath(root, draft.ticker), tmpCopy);
+  try {
+    const baseline = await inspectWorkbook(python, tmpCopy);
+    if (baseline.sheets.length === 0) throw new Error('The workbook copy has no sheets; refusing to proceed.');
+    if (baseline.formulaCount === 0) throw new Error('The workbook copy has no formulas; refusing to proceed.');
+    const applied = await applyCellEdits(python, tmpCopy, tmpEdited, edits);
+    await recalculateWorkbook(soffice, tmpEdited);
+    const after = await inspectWorkbook(python, tmpEdited);
+    const added = newErrorCells(baseline, after);
+    if (added.length > 0) {
+      throw new Error(`Recalculation introduced formula errors: ${added.join(', ')}. Workbook left unchanged.`);
+    }
+    if (after.sheets.length !== baseline.sheets.length || after.formulaCount === 0) {
+      throw new Error('Recalculated workbook lost sheets or formulas. Workbook left unchanged.');
+    }
+    const finalHash = sha256Hex(await readFile(tmpEdited));
+    return {proposalId, proposal, draft, manifest, actualHash, baseHash, baseline, after, applied, finalHash, tmpCopy, tmpEdited};
+  } catch (error) {
+    await rm(tmpCopy, {force: true}).catch(() => undefined);
+    await rm(tmpEdited, {force: true}).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Review a proposal without publishing: edits a copy, recalculates,
+ *  validates, and records the preview (changes hash + base) on the proposal.
+ *  The accepted workbook, manifest, and revisions are untouched. */
+export async function previewProposal(root: string, proposalId: string): Promise<ProposalPreview> {
+  const lib = new ModelLibrary(root);
+  try {
+    const built = await buildPreviewEdits(lib, root, proposalId);
+    const changesHash = proposalPreviewHash(built.draft.changes);
+    const previewedAt = utcNow();
+    let audit: Record<string, unknown> = {};
+    try {
+      audit = JSON.parse(lib.getProposal(proposalId)?.payload_json ?? '{}') as Record<string, unknown>;
+    } catch {
+      audit = {};
+    }
+    audit.preview = {
+      changesHash,
+      baseRevisionHash: built.baseHash,
+      finalHash: built.finalHash,
+      previewedAt,
+    };
+    const current = lib.getProposal(proposalId);
+    if (current) lib.updateProposalPayload(proposalId, JSON.stringify(audit));
+    await rm(built.tmpCopy, {force: true}).catch(() => undefined);
+    await rm(built.tmpEdited, {force: true}).catch(() => undefined);
+    return {
+      proposalId,
+      ticker: built.draft.ticker,
+      baseHash: built.baseHash,
+      changesHash,
+      finalHash: built.finalHash,
+      previewedAt,
+      appliedCells: built.applied.map((e) => `${e.sheet}!${e.cell}`),
+      inspectionMarkdown: formatInspectionMarkdown(built.baseline, built.after, built.applied),
+    };
+  } finally {
+    lib.close();
+  }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -124,73 +294,24 @@ export async function applyApprovedProposal(root: string, proposalId: string, ap
   let stagedPath: string | null = null;
   let published = false;
   try {
-    const proposal = lib.getProposal(proposalId);
-    if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
-    if (proposal.status === 'applied') throw new Error(`Proposal ${proposalId} was already applied.`);
-    if (proposal.status === 'rejected') throw new Error(`Proposal ${proposalId} was rejected and cannot be applied.`);
-    if (proposal.status !== 'proposed' && proposal.status !== 'accepted') {
-      throw new Error(`Proposal ${proposalId} has status ${proposal.status} and cannot be applied.`);
-    }
-
-    let draft: ProposalDraft;
+    const built = await buildPreviewEdits(lib, root, proposalId);
+    const {proposal, draft, manifest, actualHash, baseHash, baseline, after, applied, finalHash} = built;
+    // Preview gate: only the exact reviewed edits may be promoted. A proposal
+    // created before previews existed (or edited after previewing) must be
+    // reviewed with `dcf model preview` first.
+    interface StoredPreview { changesHash?: unknown; baseRevisionHash?: unknown }
+    let preview: StoredPreview | null = null;
     try {
-      const parsed = JSON.parse(proposal.payload_json) as {
-        summary?: string;
-        changes?: ProposalDraft['changes'];
-        createdAt?: string;
-      };
-      draft = {
-        ticker: proposal.ticker,
-        baseRevisionHash: proposal.base_revision_hash ?? '',
-        summary: parsed.summary ?? '',
-        changes: parsed.changes ?? [],
-        createdAt: parsed.createdAt ?? proposal.created_at,
-      };
+      preview = (JSON.parse(proposal.payload_json) as { preview?: StoredPreview }).preview ?? null;
     } catch {
-      throw new Error(`Proposal ${proposalId} has an unreadable payload; refusing to apply.`);
+      preview = null;
     }
-
-    const manifest = await readManifest(root, draft.ticker);
-    const {hash: actualHash} = readCurrentBytesHash(root, draft.ticker);
-    const problems = verifyManifest(manifest, actualHash);
-    if (problems.length > 0) {
-      throw new Error(`MANUAL_EDIT_DETECTED: ${problems.join('; ')}. Review before replacing ${draft.ticker}.`);
-    }
-    const baseHash = proposal.base_revision_hash ?? manifest?.workbookHash ?? '';
-    if (!baseHash) throw new Error(`Proposal ${proposalId} has no base revision and ${draft.ticker} has no accepted hash.`);
-    if (actualHash !== baseHash) {
+    if (!preview || preview.changesHash !== proposalPreviewHash(draft.changes) || preview.baseRevisionHash !== baseHash) {
       throw new Error(
-        `Proposal is stale: drafted against ${baseHash} but current is ${actualHash}. ` +
-        `Re-run \`dcf model review ${draft.ticker}\` and create a fresh proposal.`,
+        `Preview required: run \`dcf model preview ${proposalId}\` to review the pending edits, ` +
+        'then re-run apply with --approve to promote exactly what was reviewed.',
       );
     }
-    draft.baseRevisionHash = baseHash;
-    const validationErrors = validateProposalDraft(draft);
-    if (validationErrors.length > 0) throw new Error(`Proposal invalid:\n- ${validationErrors.join('\n- ')}`);
-
-    const python = findBackendPython();
-    if (!python) throw new Error('No Python with openpyxl is available (backend/.venv); cannot apply cell edits.');
-    const soffice = findSoffice();
-    if (!soffice) throw new Error('LibreOffice (soffice) is not available; cannot recalculate the workbook.');
-
-    const edits = draft.changes.map(toCellEdit);
-    await mkdir(workDir, {recursive: true});
-    await copyFile(currentWorkbookPath(root, draft.ticker), tmpCopy);
-    const baseline = await inspectWorkbook(python, tmpCopy);
-    if (baseline.sheets.length === 0) throw new Error('The workbook copy has no sheets; refusing to apply.');
-    if (baseline.formulaCount === 0) throw new Error('The workbook copy has no formulas; refusing to apply.');
-    const applied = await applyCellEdits(python, tmpCopy, tmpEdited, edits);
-    await recalculateWorkbook(soffice, tmpEdited);
-    const after = await inspectWorkbook(python, tmpEdited);
-    const added = newErrorCells(baseline, after);
-    if (added.length > 0) {
-      throw new Error(`Recalculation introduced formula errors: ${added.join(', ')}. Workbook left unchanged.`);
-    }
-    if (after.sheets.length !== baseline.sheets.length || after.formulaCount === 0) {
-      throw new Error('Recalculated workbook lost sheets or formulas. Workbook left unchanged.');
-    }
-
-    const finalHash = sha256Hex(await readFile(tmpEdited));
 
     // --- Staged publication with rollback (finding: no atomic multi-file writes) ---
     const companyWorkbook = currentWorkbookPath(root, draft.ticker);

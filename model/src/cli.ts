@@ -21,7 +21,7 @@ import {
   utcNow,
   verifyManifest,
 } from '@/library/index';
-import { applyApprovedProposal, captureChangePriors, rejectProposal } from '@/review/apply-service';
+import { applyApprovedProposal, captureChangePriors, previewProposal, rejectProposal } from '@/review/apply-service';
 import {
   acceptCandidate,
   formatCandidateMarkdown,
@@ -97,6 +97,7 @@ function usage(): string {
     '                   dcf model update <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model export <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
     '                   dcf model propose-update <ticker> [--summary <text>] [--change <spec>]... [--accession <acc> --filed <date>] [--models-dir <dir>]',
+    '                   dcf model preview <proposal-id> [--models-dir <dir>]',
     '                   dcf model candidate <ticker> [--models-dir <dir>]',
     '                   dcf model candidate-verify <candidate-id> --verification <text> --by <name> [--models-dir <dir>]',
     '                   dcf model accept <candidate-id> --approve [--by <name>] [--models-dir <dir>]',
@@ -752,6 +753,15 @@ async function cmdModelProposeUpdate(tickerRaw: string | undefined, flags: Globa
   }
 }
 
+async function cmdModelPreview(proposalIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!proposalIdRaw) throw new CliUsageError('Usage: dcf model preview <proposal-id> [--models-dir <dir>]');
+  const root = libraryRoot(flags.modelsDir);
+  const previewed = await previewProposal(root, proposalIdRaw);
+  console.log(`Previewed proposal ${previewed.proposalId} for ${previewed.ticker}: ${previewed.appliedCells.length} edit(s), result hash ${previewed.finalHash}.`);
+  console.log(previewed.inspectionMarkdown);
+  console.log(`Promote exactly what was reviewed with: dcf model apply ${previewed.proposalId} --approve [--by <name>]`);
+}
+
 async function cmdModelApply(proposalIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
   if (!proposalIdRaw) throw new CliUsageError('Usage: dcf model apply <proposal-id> --approve [--by <name>]');
   if (!flags.approve) {
@@ -983,7 +993,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
     const usageByCommand: Record<string, string> = {
       build: 'Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
       models: 'Usage: dcf models list [--json]',
-      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...',
+      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|candidate-reject ...',
       filings: 'Usage: dcf filings sync <ticker>',
       watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
       config: 'Usage: dcf config models-dir|review-hook [--set <value>]',
@@ -1009,13 +1019,14 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'update') await cmdModelUpdate(args[0], flags);
       else if (sub === 'export') await cmdModelExport(args[0], flags);
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
+      else if (sub === 'preview') await cmdModelPreview(args[0], flags);
       else if (sub === 'apply') await cmdModelApply(args[0], flags);
       else if (sub === 'reject') await cmdModelReject(args[0], flags);
       else if (sub === 'candidate') await cmdModelCandidate(args[0], flags);
       else if (sub === 'candidate-verify') await cmdCandidateVerify(args[0], flags);
       else if (sub === 'accept') await cmdModelAccept(args[0], flags);
       else if (sub === 'candidate-reject') await cmdCandidateReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');

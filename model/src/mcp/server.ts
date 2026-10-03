@@ -567,6 +567,54 @@ async function toolProposalCreate(args: Row): Promise<unknown> {
   } finally { try { db.close(); } catch { /* ignore */ } }
 }
 
+/** Shared proposal failure taxonomy for preview and apply (#15): both tools
+ *  report the same categories so agents can tell approval, preview,
+ *  staleness, manual edits, sources, and engine failures apart. */
+function mapProposalError(msg: string, fallback: string): McpErr {
+  if (/Preview required/i.test(msg)) return err('PREVIEW_REQUIRED', msg);
+  if (/stale|no base revision/i.test(msg)) return err('STALE_BASE', msg);
+  if (/MANUAL_EDIT_DETECTED/i.test(msg)) return err('MANUAL_EDIT_DETECTED', msg);
+  if (/unknown accession|invalid source|sync .* first/i.test(msg)) return err('INVALID_SOURCE', msg);
+  if (/No Python with openpyxl|LibreOffice .* is not available/i.test(msg)) return err('ENGINE_UNAVAILABLE', msg);
+  if (/unreadable payload|Proposal invalid|needs proposedValue|set exactly one|must start with|unsupported proposed value type|non-finite|starts with "="|not found|cannot be applied|was already applied|was rejected|has status/i.test(msg)) {
+    return err('INVALID_PROPOSAL', msg);
+  }
+  return err(fallback, msg);
+}
+
+async function toolProposalPreview(args: Row): Promise<unknown> {
+  const raw = args['proposalId'];
+  const proposalId: string | number = typeof raw === 'number' && Number.isInteger(raw) ? raw
+    : typeof raw === 'string' && raw.trim().length > 0 ? raw.trim()
+    : Number.NaN;
+  if (typeof proposalId === 'number' && !Number.isFinite(proposalId)) {
+    throw err('INVALID_PROPOSAL', 'proposalId is required');
+  }
+  const modelsDir = await resolveModelsDir();
+  try {
+    const mod = await import('../review/apply-service.js') as {
+      previewProposal(root: string, id: string): Promise<{
+        proposalId: unknown; ticker: string; baseHash: string; changesHash: string;
+        finalHash: string; appliedCells: string[]; inspectionMarkdown: string;
+      }>;
+    };
+    const previewed = await mod.previewProposal(modelsDir, String(proposalId));
+    return {
+      proposalId: previewed.proposalId,
+      status: 'previewed',
+      ticker: previewed.ticker,
+      baseHash: previewed.baseHash,
+      changesHash: previewed.changesHash,
+      finalHash: previewed.finalHash,
+      appliedCells: previewed.appliedCells,
+      inspectionMarkdown: previewed.inspectionMarkdown,
+    };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    throw mapProposalError(e instanceof Error ? e.message : String(e), 'PREVIEW_FAILED');
+  }
+}
+
 async function toolProposalApply(args: Row): Promise<unknown> {
   if (args['approval'] !== true) {
     throw err('APPROVAL_REQUIRED', 'Explicit approval required: call proposal_apply with approval=true');
@@ -602,7 +650,8 @@ async function toolProposalApply(args: Row): Promise<unknown> {
       appliedCells: applied.applied.map((e) => `${e.sheet}!${e.cell}`),
     };
   } catch (e) {
-    throw err('APPLY_FAILED', e instanceof Error ? e.message : String(e));
+    if (isErr(e)) throw e;
+    throw mapProposalError(e instanceof Error ? e.message : String(e), 'APPLY_FAILED');
   }
 }
 
@@ -867,7 +916,11 @@ const TOOLS: ToolDef[] = [
       changes: { type: 'array', items: changeSchema },
       baseRevisionHash: { type: 'string' },
     }, required: ['ticker', 'summary', 'changes'], additionalProperties: false } },
-  { name: 'proposal_apply', description: 'Apply an approved proposal: edits a copy, recalculates, validates, publishes a new revision. Requires approval=true.',
+  { name: 'proposal_preview', description: 'Review a proposal without publishing: edits a copy, recalculates, validates, and records the preview. Must precede proposal_apply for the same edits.',
+    inputSchema: { type: 'object', properties: {
+      proposalId: { description: 'Proposal id (text id or integer row id)' },
+    }, required: ['proposalId'], additionalProperties: false } },
+  { name: 'proposal_apply', description: 'Apply a previewed proposal: promotes exactly the reviewed edits and publishes a new revision. Requires a matching preview plus approval=true.',
     inputSchema: { type: 'object', properties: {
       proposalId: { description: 'Proposal id (text id or integer row id)' }, approval: { type: 'boolean' }, approvedBy: { type: 'string' },
     }, required: ['proposalId', 'approval'], additionalProperties: false } },
@@ -906,7 +959,7 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
   workbook_validate: toolWorkbookValidate, source_snapshot: toolSourceSnapshot,
   workbook_read_cells: toolWorkbookReadCells, filings_sync: toolFilingsSync,
-  proposal_create: toolProposalCreate, proposal_apply: toolProposalApply,
+  proposal_create: toolProposalCreate, proposal_preview: toolProposalPreview, proposal_apply: toolProposalApply,
   proposal_reject: toolProposalReject,
   candidate_inspect: toolCandidateInspect, candidate_verify: toolCandidateVerify,
   candidate_accept: toolCandidateAccept, candidate_reject: toolCandidateReject,
