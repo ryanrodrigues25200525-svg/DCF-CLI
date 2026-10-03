@@ -72,8 +72,7 @@ describe('live host platform integration', () => {
     expect(`${probe.stdout}${probe.stderr}`).toMatch(/LibreOffice/i);
   });
 
-  it('finds soffice on PATH without shelling out to which', async () => {
-    if (windowsOnly) return; // Windows PATH/PATHEXT branch is not executable on this host.
+  it.skipIf(windowsOnly)('finds soffice on PATH without shelling out to which', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dcf-soffice-path-'));
     const originalPath = process.env.PATH;
     const originalSofficePath = process.env.SOFFICE_PATH;
@@ -93,8 +92,7 @@ describe('live host platform integration', () => {
     }
   });
 
-  it('keeps an explicit SOFFICE_PATH ahead of PATH candidates', async () => {
-    if (windowsOnly) return;
+  it.skipIf(windowsOnly)('keeps an explicit SOFFICE_PATH ahead of PATH candidates', async () => {
     const explicitDir = await mkdtemp(join(tmpdir(), 'dcf-soffice-explicit-'));
     const pathDir = await mkdtemp(join(tmpdir(), 'dcf-soffice-onpath-'));
     const originalPath = process.env.PATH;
@@ -116,24 +114,28 @@ describe('live host platform integration', () => {
     }
   });
 
-  it('installs CLI links and shell startup PATH with a temporary HOME, idempotently', async () => {
-    if (windowsOnly) return; // install_cli.sh targets POSIX login shells.
+  it.skipIf(windowsOnly)('installs CLI links and shell startup PATH with a temporary HOME, idempotently', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dcf-install-home-'));
     try {
       const shells = [
-        { shell: '/bin/zsh', startup: ['.zprofile'] },
+        { shell: '/bin/zsh', startup: ['.zprofile', '.zshrc'] },
         { shell: '/bin/bash', startup: ['.bash_profile', '.bashrc'] },
         { shell: '/bin/sh', startup: ['.profile'] },
+        { shell: '', startup: ['.profile'] },
       ];
       for (const { shell, startup } of shells) {
         const env = { ...process.env, HOME: home, SHELL: shell };
         const first = spawnSync('bash', [installScript], { encoding: 'utf8', env });
         expect(first.status, first.stderr).toBe(0);
+        for (const file of startup) {
+          const content = await readFile(join(home, file), 'utf8');
+          expect(content.split('\n').filter((line) => line === pathLine), `${shell} ${file}`).toHaveLength(1);
+        }
         const second = spawnSync('bash', [installScript], { encoding: 'utf8', env });
         expect(second.status, second.stderr).toBe(0);
         for (const file of startup) {
           const content = await readFile(join(home, file), 'utf8');
-          expect(content.split('\n').filter((line) => line === pathLine), `${shell} ${file}`).toHaveLength(1);
+          expect(content.split('\n').filter((line) => line === pathLine), `${shell} ${file} after rerun`).toHaveLength(1);
         }
       }
       const dcfLink = join(home, '.local', 'bin', 'dcf');
@@ -146,8 +148,7 @@ describe('live host platform integration', () => {
     }
   });
 
-  it('refuses to replace an unrelated file in the install directory', async () => {
-    if (windowsOnly) return;
+  it.skipIf(windowsOnly)('refuses to replace an unrelated file in the install directory', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dcf-install-conflict-'));
     try {
       const binDir = join(home, '.local', 'bin');

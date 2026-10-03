@@ -31,9 +31,10 @@ done
 
 # Add ~/.local/bin to the login startup file for the user's shell.
 if [[ ":${PATH:-}:" != *":${BIN_DIR}:"* ]]; then
-  case "$(basename "${SHELL:-}")" in
+  case "$(basename "${SHELL:-/bin/sh}")" in
     zsh)
-      STARTUP_FILES=("${HOME}/.zprofile")
+      # Login shells read ~/.zprofile; interactive non-login terminals read ~/.zshrc.
+      STARTUP_FILES=("${HOME}/.zprofile" "${HOME}/.zshrc")
       ;;
     bash)
       # Login shells read ~/.bash_profile; interactive non-login Linux terminals read ~/.bashrc.

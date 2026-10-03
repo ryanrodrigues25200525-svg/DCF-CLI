@@ -114,8 +114,9 @@ function findRepoVenvPython(): string | null {
 }
 
 /**
- * backend/.venv/bin/python (or Scripts/python.exe on win32),
- * else `python3` on POSIX or `python` on Windows when openpyxl is importable.
+ * backend/.venv/bin/python (or Scripts/python.exe on win32), else the first
+ * openpyxl-capable PATH interpreter in order `python3`, `python` on POSIX and
+ * `python`, `python3`, `py` on Windows.
  */
 export function findBackendPython(): string | null {
   const venv = findRepoVenvPython();
