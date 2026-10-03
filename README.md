@@ -177,7 +177,15 @@ The pipeline separates jobs that need different standards:
 | `dcf model propose-update AAPL` | Save a source-backed proposal using one or more --change entries |
 | `dcf model apply ID --approve` | Apply the reviewed proposal as a new revision |
 | `dcf model reject ID` | Reject a proposal without changing the workbook |
-| `dcf mcp` | Start the local stdio MCP server |
+| `dcf model compare AAPL` | Diff two same-company revisions (prior vs newest by default) to see what changed |
+| `dcf config models-dir [--set <dir>]` | Show or persist the model-library root |
+| `dcf config review-hook [--set <cmd>]` | Advisory auto-review hook run after each staged candidate |
+| `dcf watch status\|check\|run\|pause\|resume` | Filing-watch status, one-shot checks, polling, pause/resume |
+| `dcf mcp` | Start the local stdio MCP server (agents can query, compare, build, verify, and stage; only approval promotes) |
+
+`models list` and `model inspect` also accept `--json` for machine-readable
+output. The full command reference lives in the
+[model-library guide](docs/MODEL_LIBRARY.md).
 
 The model library can be redirected with DCF_MODELS_DIR or --models-dir PATH.
 By default it lives under ~/DCF-Models:
@@ -200,7 +208,9 @@ Use ChatGPT to **review and explain a model that DCF CLI built**, rather than
 asking it to invent a workbook from scratch.
 
 1. Build and validate. Use `dcf build AAPL` for the initial model, or
-   `dcf model update AAPL` after a new filing; then run `dcf model review AAPL`.
+   `dcf model update AAPL` after a new filing; this stages a pending build
+   candidate and writes a dated export without publishing. Then run
+   `dcf model review AAPL`.
 
 2. Attach the dated workbook path printed by the CLI, for example
    `~/Downloads/2026-10-03_AAPL_DCF.xlsx`, to a ChatGPT conversation.
@@ -218,7 +228,11 @@ asking it to invent a workbook from scratch.
 4. Apply analyst judgment in Excel. For a source-backed fact correction, sync
    the filing and record a proposal with `dcf model propose-update`; inspect its
    preview, then apply it only after approval with
-   `dcf model apply <proposal-id> --approve`. Run `dcf model export AAPL`
+   `dcf model apply <proposal-id> --approve`. For a staged build candidate,
+   record the AI review with
+   `dcf model candidate-verify <id> --verification "<freshness, sources, formulas, summary>" --by <name>`
+   and promote it only after approval with `dcf model accept <id> --approve`.
+   Run `dcf model export AAPL`
    afterward to create a dated copy of the newly accepted library revision.
 
 5. Run `dcf model review AAPL` after the change and inspect the revision/hash

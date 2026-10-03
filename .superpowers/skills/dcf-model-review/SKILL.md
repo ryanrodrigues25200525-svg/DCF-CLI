@@ -1,9 +1,10 @@
 # DCF Model Review
 
 Review local DCF workbooks and propose traceable, filed-data-only updates.
-Never silently edit an accepted workbook: drafts are proposals; only
-`dcf model apply <id> --approve` (or MCP `proposal_apply` with
-`approval: true`) writes through the shared apply service.
+Never silently edit an accepted workbook: builds stage pending candidates,
+proposal drafts are proposals; only `dcf model accept <id> --approve`
+(after a recorded AI review) or `dcf model apply <id> --approve`
+(or MCP `proposal_apply` with `approval: true`) writes through the shared services.
 
 Start read-only:
 
@@ -17,13 +18,27 @@ Assistant MCP equivalents: `filing_latest` (with `fetchedAt`/`ageHours`/`stale`)
 `source_snapshot` (paged via `offset`/`maxChars`, follow `nextOffset` until
 null to read the whole normalized snapshot), `workbook_read_cells` (live
 cached values + formulas for chosen cells), `filings_sync` (refresh snapshot
-through the shared service; never writes workbooks).
+through the shared service; never writes workbooks), `model_build` (same
+deterministic staging flow as the CLI; long-running, publishes nothing),
+`revision_compare` (hash-verified same-company diffs).
 
 When the user explicitly requests a full model refresh, run `dcf model update
 <ticker>` in the local CLI. It rebuilds and validates the model using the latest
-data mapped by that route, creates a new accepted library revision, and writes
-a date-and-ticker export. Review that dated workbook afterward; do not imply a
-route incorporated quarterly data unless its source contract supports it.
+data mapped by that route and stages a pending build candidate plus a
+date-and-ticker export — the accepted library copy stays unchanged. Review that
+dated workbook afterward; do not imply a route incorporated quarterly data
+unless its source contract supports it. Promote the candidate only after
+recording the AI review and receiving explicit human approval:
+
+```bash
+dcf model candidate <ticker>        # staged hash, sources, base, verification status
+dcf model candidate-verify <id> --verification "<freshness, sources, formulas, summary>" --by <name>
+dcf model accept <id> --approve [--by <name>]   # publishes the accepted revision
+```
+
+Assistant MCP equivalents: `candidate_inspect`, `candidate_verify`,
+`candidate_accept` (requires `approval: true`), `candidate_reject`.
+Standalone CLI build output is not AI-verified unless this review ran.
 
 ## 1. Source checks
 

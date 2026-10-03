@@ -622,6 +622,195 @@ async function toolProposalReject(args: Row): Promise<unknown> {
   }
 }
 
+/* ---------- build-candidate gate (shares the CLI service; never invents values) ---------- */
+interface CandidateLibT {
+  getPendingCandidate(ticker: string): Row | null;
+  getCandidate(id: string): Row | null;
+  close(): void;
+}
+interface CandidateModT {
+  getPendingCandidateView(lib: unknown, root: string, ticker: string): Promise<unknown>;
+  getCandidateViewById(lib: unknown, root: string, id: string): Promise<unknown>;
+  recordCandidateVerification(lib: unknown, root: string, id: string, text: string, by: string): Promise<unknown>;
+  acceptCandidate(lib: unknown, root: string, id: string, by: string): Promise<Row>;
+  rejectCandidate(lib: unknown, root: string, id: string, reason?: string): unknown;
+}
+async function loadCandidateStack(modelsDir: string): Promise<{ lib: CandidateLibT; mod: CandidateModT }> {
+  const storeMod = (await import('../library/store.js')) as Row;
+  const Ctor = storeMod['ModelLibrary'] as new (root: string) => CandidateLibT;
+  const mod = (await import('../review/build-candidate.js')) as unknown as CandidateModT;
+  return { lib: new Ctor(modelsDir), mod };
+}
+function closeLib(lib: CandidateLibT): void {
+  try { lib.close(); } catch { /* ignore */ }
+}
+function candidateIdArg(args: Row): string {
+  const raw = args['candidateId'];
+  if (typeof raw !== 'string' || !raw.trim()) throw err('INVALID_CANDIDATE', 'candidateId is required');
+  return raw.trim();
+}
+function libraryDbPresent(modelsDir: string): boolean {
+  return DB_CANDIDATES.some((n) => existsSync(join(modelsDir, n)));
+}
+
+async function toolCandidateInspect(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) return { ticker, pendingCandidate: null };
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    return { ticker, pendingCandidate: await mod.getPendingCandidateView(lib, modelsDir, ticker) };
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateVerify(args: Row): Promise<unknown> {
+  const candidateId = candidateIdArg(args);
+  if (typeof args['verification'] !== 'string' || !args['verification'].trim()) {
+    throw err('INVALID_VERIFICATION', 'verification is required: freshness verdict, source/period checks, formula findings, and summary');
+  }
+  if (typeof args['verifiedBy'] !== 'string' || !args['verifiedBy'].trim()) {
+    throw err('INVALID_VERIFICATION', 'verifiedBy is required');
+  }
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    return await mod.recordCandidateVerification(lib, modelsDir, candidateId, args['verification'] as string, args['verifiedBy'] as string);
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/only pending/i.test(msg)) throw err('CANDIDATE_NOT_PENDING', msg);
+    throw err('INVALID_VERIFICATION', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateAccept(args: Row): Promise<unknown> {
+  if (args['approval'] !== true) {
+    throw err('APPROVAL_REQUIRED', 'Explicit approval required: call candidate_accept with approval=true');
+  }
+  const candidateId = candidateIdArg(args);
+  const approvedBy = typeof args['approvedBy'] === 'string' && args['approvedBy'].trim() ? args['approvedBy'].trim() : 'mcp';
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    const accepted = await mod.acceptCandidate(lib, modelsDir, candidateId, approvedBy);
+    return { candidateId, status: 'accepted', ticker: accepted['ticker'], revisionId: accepted['revisionId'], hash: accepted['hash'] };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/no recorded AI verification/i.test(msg)) throw err('VERIFICATION_REQUIRED', msg);
+    if (/stale/i.test(msg)) throw err('STALE_CANDIDATE', msg);
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    throw err('ACCEPT_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolCandidateReject(args: Row): Promise<unknown> {
+  const candidateId = candidateIdArg(args);
+  const reason = typeof args['reason'] === 'string' ? args['reason'] : undefined;
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('CANDIDATE_NOT_FOUND', `Candidate not found: ${candidateId}`);
+  const { lib, mod } = await loadCandidateStack(modelsDir);
+  try {
+    mod.rejectCandidate(lib, modelsDir, candidateId, reason);
+    return { candidateId, status: 'rejected' };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/not found/i.test(msg)) throw err('CANDIDATE_NOT_FOUND', msg);
+    if (/only pending/i.test(msg)) throw err('CANDIDATE_NOT_PENDING', msg);
+    throw err('REJECT_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolRevisionCompare(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const from = typeof args['from'] === 'string' && args['from'].trim() ? args['from'].trim() : undefined;
+  const to = typeof args['to'] === 'string' && args['to'].trim() ? args['to'].trim() : undefined;
+  let limit = 200;
+  if (args['limit'] !== undefined) {
+    if (typeof args['limit'] !== 'number' || !Number.isInteger(args['limit']) ||
+        (args['limit'] as number) < 1 || (args['limit'] as number) > 500) {
+      throw err('INVALID_COMPARE', 'limit must be an integer 1..500');
+    }
+    limit = args['limit'] as number;
+  }
+  const modelsDir = await resolveModelsDir();
+  if (!libraryDbPresent(modelsDir)) throw err('COMPARE_FAILED', `No model library found under ${modelsDir}`);
+  const { lib, mod: _candMod } = await loadCandidateStack(modelsDir);
+  void _candMod;
+  try {
+    const xlsxMod = (await import('../workbook/xlsx.js')) as Row;
+    const findPython = xlsxMod['findBackendPython'] as (() => string | null) | undefined;
+    const python = typeof findPython === 'function' ? findPython() : null;
+    if (!python) throw err('ENGINE_UNAVAILABLE', 'No Python with openpyxl is available; cannot compare workbooks.');
+    const cmpMod = (await import('../review/revision-compare.js')) as {
+      resolveCompareEndpoint(lib: unknown, root: string, ticker: string, ref: string | undefined, role: 'from' | 'to'): { label: string; path: string } | null;
+      compareWorkbooks(python: string, before: string | null, after: string, opts?: { limit?: number }): Promise<unknown>;
+    };
+    const fromEp = cmpMod.resolveCompareEndpoint(lib, modelsDir, ticker, from, 'from');
+    const toEp = cmpMod.resolveCompareEndpoint(lib, modelsDir, ticker, to, 'to');
+    if (!fromEp) return { ticker, from: null, to: toEp?.label ?? null, message: 'No earlier revision to compare; the accepted model is the initial revision.' };
+    if (!toEp) throw err('COMPARE_FAILED', `Nothing to compare for ${ticker}: no pending candidate and no accepted revision.`);
+    const diff = await cmpMod.compareWorkbooks(python, fromEp.path, toEp.path, { limit });
+    return { ticker, from: fromEp.label, to: toEp.label, diff };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/Revision not found|No accepted revision|No pending build candidate/i.test(msg)) {
+      throw err('REVISION_NOT_FOUND', msg);
+    }
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    if (/does not match|is missing/i.test(msg)) throw err('COMPARE_FAILED', msg);
+    throw err('COMPARE_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
+async function toolModelBuild(args: Row): Promise<unknown> {
+  const ticker = normTicker(args['ticker']);
+  const force = args['force'] === true;
+  const output = typeof args['output'] === 'string' && args['output'].trim()
+    ? resolve(args['output'].trim())
+    : join(homedir(), 'Downloads', `${new Date().toISOString().slice(0, 10)}_${ticker}_DCF.xlsx`);
+  const modelsDir = await resolveModelsDir();
+  const { lib } = await loadCandidateStack(modelsDir);
+  try {
+    const stagingMod = (await import('../review/build-staging.js')) as {
+      runBuildStaging(opts: {
+        lib: unknown; root: string; ticker: string; output: string; force: boolean; note?: string;
+      }): Promise<{
+        ticker: string; candidateId: string; hash: string; workbookPath: string; exportPath: string;
+        route: string; readiness: string; accession: string | null; filedDate: string | null;
+        isInitialBuild: boolean; valuationSummary: string; stdout: string[]; stderr: string[];
+      }>;
+    };
+    const staged = await stagingMod.runBuildStaging({ lib, root: modelsDir, ticker, output, force, note: 'mcp model_build' });
+    return {
+      ticker: staged.ticker,
+      candidateId: staged.candidateId,
+      status: 'staged',
+      hash: staged.hash,
+      route: staged.route,
+      readiness: staged.readiness,
+      accession: staged.accession,
+      filedDate: staged.filedDate,
+      exportPath: staged.exportPath,
+      messages: staged.stdout,
+      warnings: staged.stderr,
+    };
+  } catch (e) {
+    if (isErr(e)) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No Python with openpyxl|LibreOffice .* is not available/i.test(msg)) throw err('ENGINE_UNAVAILABLE', msg);
+    if (/MANUAL_EDIT_DETECTED/i.test(msg)) throw err('MANUAL_EDIT_DETECTED', msg);
+    if (/must not overwrite|already exists|requires a /i.test(msg)) throw err('INVALID_BUILD', msg);
+    throw err('BUILD_FAILED', msg);
+  } finally { closeLib(lib); }
+}
+
 /* ---------- tool registry (inputSchema key order is part of the contract) ---------- */
 const changeSchema: Row = {
   type: 'object',
@@ -680,6 +869,32 @@ const TOOLS: ToolDef[] = [
     inputSchema: { type: 'object', properties: {
       proposalId: { description: 'Proposal id (text id or integer row id)' }, reason: { type: 'string' },
     }, required: ['proposalId'], additionalProperties: false } },
+  { name: 'candidate_inspect', description: 'Show the pending build/update candidate for a ticker: staged hash, route/readiness, source accession, mapped period, base revision, and verification status. Read-only.',
+    inputSchema: { type: 'object', properties: { ...tickerProp }, required: ['ticker'], additionalProperties: false } },
+  { name: 'candidate_verify', description: 'Record the AI review result on a pending build candidate (freshness verdict, source/period checks, formula findings, summary). Does not publish.',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, verification: { type: 'string' }, verifiedBy: { type: 'string' },
+    }, required: ['candidateId', 'verification', 'verifiedBy'], additionalProperties: false } },
+  { name: 'candidate_accept', description: 'Promote a verified pending candidate to the accepted revision. Requires recorded verification and approval=true; stale or edited bases fail closed.',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, approval: { type: 'boolean' }, approvedBy: { type: 'string' },
+    }, required: ['candidateId', 'approval'], additionalProperties: false } },
+  { name: 'candidate_reject', description: 'Reject a pending build candidate (status-only; the accepted library is never touched).',
+    inputSchema: { type: 'object', properties: {
+      candidateId: { type: 'string' }, reason: { type: 'string' },
+    }, required: ['candidateId'], additionalProperties: false } },
+  { name: 'revision_compare', description: 'Diff two same-ticker revisions (ids, or accepted/candidate aliases; defaults to parent vs newest). Archives are hash-verified; detail capped by limit (1-500).',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      from: { type: 'string' }, to: { type: 'string' },
+      limit: { type: 'integer', description: 'Detail rows to return (1-500, default 200)' },
+    }, required: ['ticker'], additionalProperties: false } },
+  { name: 'model_build', description: 'Run a full deterministic build for a ticker (live fetch, LibreOffice recalc, candidate staging). LONG-RUNNING: may take minutes; the client must keep the request open. Publishes nothing: returns the staged candidateId for candidate_verify + candidate_accept.',
+    inputSchema: { type: 'object', properties: {
+      ...tickerProp,
+      output: { type: 'string', description: 'Dated export path (default: ~/Downloads/YYYY-MM-DD_TICKER_DCF.xlsx)' },
+      force: { type: 'boolean', description: 'Archive a diverged copy and rebuild anyway' },
+    }, required: ['ticker'], additionalProperties: false } },
 ];
 const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   models_list: toolModelsList, model_inspect: toolModelInspect, filing_latest: toolFilingLatest,
@@ -687,6 +902,9 @@ const HANDLERS: Record<string, (args: Row) => Promise<unknown>> = {
   workbook_read_cells: toolWorkbookReadCells, filings_sync: toolFilingsSync,
   proposal_create: toolProposalCreate, proposal_apply: toolProposalApply,
   proposal_reject: toolProposalReject,
+  candidate_inspect: toolCandidateInspect, candidate_verify: toolCandidateVerify,
+  candidate_accept: toolCandidateAccept, candidate_reject: toolCandidateReject,
+  revision_compare: toolRevisionCompare, model_build: toolModelBuild,
 };
 
 /* ---------- stdio JSON-RPC loop ---------- */

@@ -3,7 +3,9 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+# Runtime-idempotent so login shells that source both .zprofile and .zshrc
+# (zsh) or .bash_profile and .bashrc (bash) never prepend the bin directory twice.
+PATH_LINE='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac'
 
 mkdir -p "$BIN_DIR"
 
@@ -29,15 +31,28 @@ for CLI_NAME in dcf dcfbuild; do
   fi
 done
 
-ZPROFILE="${HOME}/.zprofile"
-case ":${PATH:-}:" in
-  *":${BIN_DIR}:"*) ;;
-  *)
-    if ! { [[ -f "$ZPROFILE" ]] && grep -Fqx "$PATH_LINE" "$ZPROFILE"; }; then
-      printf '\n# DCF CLI\n%s\n' "$PATH_LINE" >> "$ZPROFILE"
+# Add ~/.local/bin to the login startup file for the user's shell.
+if [[ ":${PATH:-}:" != *":${BIN_DIR}:"* ]]; then
+  case "$(basename "${SHELL:-/bin/sh}")" in
+    zsh)
+      # Login shells read ~/.zprofile; interactive non-login terminals read ~/.zshrc.
+      STARTUP_FILES=("${HOME}/.zprofile" "${HOME}/.zshrc")
+      ;;
+    bash)
+      # Login shells read ~/.bash_profile; interactive non-login Linux terminals read ~/.bashrc.
+      STARTUP_FILES=("${HOME}/.bash_profile" "${HOME}/.bashrc")
+      ;;
+    *)
+      STARTUP_FILES=("${HOME}/.profile")
+      ;;
+  esac
+  for STARTUP_FILE in "${STARTUP_FILES[@]}"; do
+    if [[ -f "$STARTUP_FILE" ]] && grep -Fqx "$PATH_LINE" "$STARTUP_FILE"; then
+      continue
     fi
-    ;;
-esac
+    printf '\n# DCF CLI\n%s\n' "$PATH_LINE" >> "$STARTUP_FILE"
+  done
+fi
 
 printf 'Installed dcf and dcfbuild under %s\n' "$BIN_DIR"
 printf 'Open a new terminal window if the command is not on the current PATH.\n'
