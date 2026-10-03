@@ -1049,6 +1049,22 @@ async function cmdConfigModelsDir(flags: GlobalFlags): Promise<void> {
 async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
   const [command, subcommand, ...rest] = argv;
   if (!command || !LIBRARY_COMMANDS.has(command)) return false;
+  // A flag in the subcommand/ticker slot (e.g. `dcf build --models-dir <dir>`)
+  // can never be a valid subcommand or ticker. Reject it with command usage
+  // before it reaches ticker validation, which would report the confusing
+  // `Invalid ticker format: --models-dir`. The mcp command owns its own
+  // raw-argv gate below.
+  if (command !== 'mcp' && subcommand !== undefined && subcommand.startsWith('-')) {
+    const usageByCommand: Record<string, string> = {
+      build: 'Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
+      models: 'Usage: dcf models list [--json]',
+      model: 'Usage: dcf model inspect|open|review|update|export|propose-update|apply|reject ...',
+      filings: 'Usage: dcf filings sync <ticker>',
+      watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
+      config: 'Usage: dcf config models-dir [--set <dir>]',
+    };
+    throw new CliUsageError(usageByCommand[command] ?? `Usage: dcf ${command} ...`);
+  }
   const flags = parseLibraryArgs(command === 'mcp' ? [] : rest);
   const args = flags.positionals;
   const sub = command === 'mcp' ? undefined : subcommand;
