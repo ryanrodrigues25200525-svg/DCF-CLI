@@ -38,6 +38,26 @@ For a separate standalone file, use `dcfbuild AAPL --output <file.xlsx>`.
 Its default filename is date-and-ticker stamped; explicit output paths refuse
 to replace an existing file unless `--force` is supplied.
 
+## Library, proposals, filings, and MCP
+
+- `dcf models list [--json]` finds saved company workbooks.
+- `dcf model inspect AAPL [--json]` checks route, source accession, revision,
+  and workbook hash.
+- `dcf model propose-update AAPL --change 'sheet|cell|proposed|rationale|source[|accession]'`
+  records a source-backed proposal; `dcf model apply <id> --approve` applies it
+  as a new revision and `dcf model reject <id>` rejects it without changes.
+  Applying requires explicit approval and refuses on a manually diverged copy.
+- `dcf filings sync AAPL` refreshes filing metadata and queues an update; it
+  never edits a workbook.
+- `dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>`
+  tracks filing readiness; `run` polls until interrupted.
+- `dcf config models-dir [--set <dir>]` shows or persists the library root.
+- `dcf mcp` starts the local stdio MCP server (takes no arguments;
+  `dcf mcp --help` prints usage). Applying a proposal over MCP still requires
+  explicit approval.
+
+The full command reference is the [model-library guide](docs/MODEL_LIBRARY.md).
+
 The SQLite provider cache in `backend/data/` persists between runs. Live tests
 use temporary caches. The local service inherits `EDGAR_IDENTITY` and the
 optional `DCF_CACHE_DB_PATH` from the caller.

@@ -177,7 +177,13 @@ The pipeline separates jobs that need different standards:
 | `dcf model propose-update AAPL` | Save a source-backed proposal using one or more --change entries |
 | `dcf model apply ID --approve` | Apply the reviewed proposal as a new revision |
 | `dcf model reject ID` | Reject a proposal without changing the workbook |
+| `dcf config models-dir [--set <dir>]` | Show or persist the model-library root |
+| `dcf watch status\|check\|run\|pause\|resume` | Filing-watch status, one-shot checks, polling, pause/resume |
 | `dcf mcp` | Start the local stdio MCP server |
+
+`models list` and `model inspect` also accept `--json` for machine-readable
+output. The full command reference lives in the
+[model-library guide](docs/MODEL_LIBRARY.md).
 
 The model library can be redirected with DCF_MODELS_DIR or --models-dir PATH.
 By default it lives under ~/DCF-Models:
