@@ -716,7 +716,7 @@ async function cmdModelOpen(tickerRaw: string | undefined, flags: GlobalFlags): 
   } catch (error) {
     throw new Error(`Could not open ${workbookPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  console.log(`Opened ${workbookPath} (read-only open; the library copy is unchanged).`);
+  console.log(`Open request sent for ${workbookPath} (the OS accepted the request; a visible spreadsheet window cannot be confirmed. The library copy is unchanged).`);
 }
 
 async function cmdFilingsSync(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {

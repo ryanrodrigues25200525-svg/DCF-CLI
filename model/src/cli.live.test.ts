@@ -8899,7 +8899,8 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       if (slowOk.error) throw slowOk.error;
       const slowOkOutput = sanitizedOutput(`${slowOk.stdout ?? ''}\n${slowOk.stderr ?? ''}`);
       expect(slowOk.status, slowOkOutput).toBe(0);
-      expect(slowOkOutput).toContain(`Opened ${workbookPath}`);
+      expect(slowOkOutput).not.toContain('Opened');
+      expect(slowOkOutput).toContain(`Open request sent for ${workbookPath}`);
 
       // The test opener override is documented in the top-level usage.
       const topHelp = runLibraryCli(['--help'], home);
@@ -8913,7 +8914,8 @@ open(models_dir + '/companies/' + ticker + '/manifest.json', 'w').write(manifest
       if (opened.error) throw opened.error;
       const openedOutput = sanitizedOutput(`${opened.stdout ?? ''}\n${opened.stderr ?? ''}`);
       expect(opened.status, openedOutput).toBe(0);
-      expect(openedOutput).toContain(`Opened ${workbookPath}`);
+      expect(openedOutput).not.toContain('Opened');
+      expect(openedOutput).toContain(`Open request sent for ${workbookPath}`);
     } finally {
       await rm(home, {recursive: true, force: true});
     }
