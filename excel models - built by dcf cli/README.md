@@ -42,4 +42,4 @@ Route limitations observed at build time (not defects):
   This is the intended missing-input gate, not a failure.
 
 No library database, manifest, snapshot, identity string, or user workbook is
-stored here — only the four dated exports above.
+stored here — only the thirteen dated exports above.
