@@ -2839,6 +2839,18 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
             fcff.append(_line(None, source="missing", confidence=0.0, method="missing_fcff_inputs"))
 
     shares = _company_fact_series(native_financials, years, "WeightedAverageNumberOfDilutedSharesOutstanding")
+    # Some filers (e.g. V) do not tag diluted weighted-average shares in their
+    # annual facts; fall back to basic weighted average, then to point-in-time
+    # shares outstanding. The concept stays visible in the source record.
+    for shares_concept in (
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "CommonStockSharesOutstanding",
+        "EntityCommonStockSharesOutstanding",
+    ):
+        shares = _prefer_reported_series(
+            shares,
+            _company_fact_series(native_financials, years, shares_concept),
+        )
 
     bank_income = _pick_series(
         income_rows,
