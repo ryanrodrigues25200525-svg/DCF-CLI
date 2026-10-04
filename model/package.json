@@ -10,8 +10,10 @@
     "dcf": "tsx --tsconfig tsconfig.json src/cli.ts",
     "dcf-mcp": "tsx --tsconfig tsconfig.json src/mcp/server.ts",
     "typecheck": "tsc --noEmit",
-    "test:filing-agent": "tsx --tsconfig tsconfig.json scripts/check_filing_agent_accession.ts",
-    "test": "vitest run src/cli.live.test.ts"
+    "test": "vitest run --config vitest.unit.config.ts",
+    "test:live": "tsx --tsconfig tsconfig.json scripts/require_live_deps.ts && vitest run --config vitest.live.config.ts",
+    "test:all": "vitest run",
+    "test:filing-agent": "tsx --tsconfig tsconfig.json scripts/check_filing_agent_accession.ts"
   },
   "allowScripts": {
     "esbuild": true,
