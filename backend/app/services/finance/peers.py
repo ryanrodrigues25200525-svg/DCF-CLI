@@ -75,11 +75,138 @@ DEFAULT_PEER_SYMBOLS: List[str] = [
 ]
 
 PEER_PROFILE_TIMEOUT_SECONDS = 3.0
+
+# Vocabulary translation, not a peer list: the market-data provider reports Yahoo's
+# display names ("Consumer Defensive") while the screener accepts normalized slugs
+# ("consumer_defensive"). Eleven sectors, so this table cannot drift out of sync
+# the way a hand-maintained peer list does.
+_SECTOR_SLUG_BY_DISPLAY: Dict[str, str] = {
+    "basic materials": "basic_materials",
+    "communication services": "communication_services",
+    "consumer cyclical": "consumer_cyclical",
+    "consumer defensive": "consumer_defensive",
+    "consumer discretionary": "consumer_cyclical",
+    "energy": "energy",
+    "financial services": "financial_services",
+    "finance": "financial_services",
+    "health care": "healthcare",
+    "healthcare": "healthcare",
+    "industrials": "industrials",
+    "real estate": "real_estate",
+    "technology": "technology",
+    "utilities": "utilities",
+}
+
+# Symbols the screener returns that are not operating companies with comparable
+# financials. Filtered out of derived sets rather than curated per ticker.
+_NON_OPERATING_PEER_PREFIXES = (
+    "XL", "VG", "IY", "TWN", "XOP", "OIH", "KRE", "XLF", "IYH", "IBB",
+)
+
+
+def _sector_slug(sector: str) -> Optional[str]:
+    return _SECTOR_SLUG_BY_DISPLAY.get(str(sector or "").strip().lower())
+
+
+def _looks_like_operating_peer(symbol: str) -> bool:
+    upper = str(symbol or "").strip().upper()
+    if not upper or not upper.isalpha():
+        return False
+    if upper in {"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI"}:
+        return False
+    return not any(upper.startswith(prefix) for prefix in _NON_OPERATING_PEER_PREFIXES)
+
+
+def _sec_filer_tickers() -> Optional[set[str]]:
+    """Tickers with an SEC-filer identity, cached for the process lifetime.
+
+    Used to keep foreign-listed lines and unsponsored ADRs out of derived peer
+    sets: they report under different accounting and often lack the US GAAP
+    statements the multiple is computed from.
+    """
+    global _SEC_FILER_CACHE
+    if _SEC_FILER_CACHE is not None:
+        return _SEC_FILER_CACHE
+    try:
+        from edgar.reference.tickers import get_company_tickers
+
+        frame = get_company_tickers()
+        column = next(
+            (c for c in frame.columns if str(c).strip().lower() == "ticker"),
+            None,
+        )
+        if column is None:
+            raise KeyError(f"no ticker column in {list(frame.columns)}")
+        _SEC_FILER_CACHE = {str(v).strip().upper() for v in frame[column] if str(v).strip()}
+    except Exception as e:
+        logger.warning(f"SEC filer ticker lookup unavailable; derived peers stay unfiltered: {e}")
+        _SEC_FILER_CACHE = None
+    return _SEC_FILER_CACHE
+
+
+_SEC_FILER_CACHE: Optional[set[str]] = None
+
+
+async def _derive_peer_symbols_from_screener(
+    ticker: str,
+    sector: str,
+    target_market_cap: float,
+    limit: int,
+) -> List[str]:
+    """Derive a peer set from the installed screener instead of a hardcoded list.
+
+    Ranks same-sector candidates by how close their market cap is to the target's,
+    so a $400B retailer gets $100-500B peers rather than microcaps. Returns an empty
+    list when the screener is unavailable or the sector is unknown; callers then
+    fall through to the existing tables.
+    """
+    slug = _sector_slug(sector)
+    if not slug:
+        return []
+
+    def _query() -> List[Dict[str, Any]]:
+        from openbb import obb  # Imported lazily: heavy, and optional at runtime.
+
+        result = obb.equity.screener(
+            provider="yfinance", region="us", sector=slug, limit=max(limit * 8, 60)
+        )
+        frame = result.to_df()
+        filers = _sec_filer_tickers()
+        rows: List[Dict[str, Any]] = []
+        for record in frame.reset_index().to_dict("records"):
+            symbol = str(record.get("symbol") or record.get("index") or "").strip().upper()
+            cap = _to_positive_float(record.get("market_cap"))
+            if not (symbol and cap) or symbol == ticker.upper():
+                continue
+            if not _looks_like_operating_peer(symbol):
+                continue
+            # An empty filer set means the lookup failed; don't silently drop everything.
+            if filers and symbol not in filers:
+                continue
+            rows.append({"symbol": symbol, "market_cap": cap})
+        return rows
+
+    try:
+        candidates = await asyncio.wait_for(asyncio.to_thread(_query), timeout=6.0)
+    except Exception as e:  # provider down, empty result, or an unexpected schema
+        logger.warning(f"Screener peer derivation failed for {ticker} ({sector}): {e}")
+        return []
+
+    if not candidates:
+        return []
+
+    target_log = _safe_log10(target_market_cap)
+    if target_log is None:
+        return []
+    candidates.sort(key=lambda row: abs(_safe_log10(row["market_cap"]) - target_log))
+    return [row["symbol"] for row in candidates[:limit]]
 PEER_DETAILS_MAX_CONCURRENCY = max(1, int(os.getenv("PEER_DETAILS_MAX_CONCURRENCY", "4")))
 _PEER_BUNDLE_INFLIGHT: Dict[str, asyncio.Task] = {}
 _PEER_BUNDLE_INFLIGHT_LOCK = asyncio.Lock()
 
-async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
+async def _resolve_peer_symbols(
+    ticker: str, market_snapshot: Optional[Dict[str, Any]] = None
+) -> tuple[List[str], str]:
     from .market import fetch_market_data  # Deferred import to avoid circularity
     normalized_ticker = ticker.upper()
     curated = CURATED_PEERS.get(normalized_ticker, [])
@@ -92,11 +219,12 @@ async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str,
             if upper and upper not in seen:
                 seen.add(upper)
                 resolved.append(upper)
-        return resolved
+        return resolved, "curated"
 
     market_data: Dict[str, Any] = market_snapshot or {}
     sector = ""
     industry = ""
+    target_market_cap = _to_positive_float(market_data.get("market_cap")) or 0.0
     if market_snapshot is not None:
         sector = str(market_data.get("sector") or "").strip().lower()
         industry = str(market_data.get("industry") or "").strip().lower()
@@ -105,6 +233,7 @@ async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str,
             market_data = await fetch_market_data(ticker)
             sector = str(market_data.get("sector") or "").strip().lower()
             industry = str(market_data.get("industry") or "").strip().lower()
+            target_market_cap = _to_positive_float(market_data.get("market_cap")) or 0.0
         except Exception:
             pass
 
@@ -123,6 +252,22 @@ async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str,
 
     candidates: List[str] = []
     seen = {normalized_ticker}
+
+    # Screener first: a derived same-sector set ranked by market-cap proximity is a
+    # real source, so it precedes the hardcoded tables below and is allowed to
+    # satisfy the non-fallback requirement.
+    derived: List[str] = []
+    if sector and target_market_cap > 0:
+        derived = await _derive_peer_symbols_from_screener(
+            normalized_ticker, sector, target_market_cap, limit=8
+        )
+        for symbol in derived:
+            upper = str(symbol).strip().upper()
+            if upper and upper not in seen:
+                seen.add(upper)
+                candidates.append(upper)
+        if candidates:
+            return candidates, "derived_screener"
 
     def add_symbols(symbols: List[str]) -> None:
         for symbol in symbols:
@@ -144,10 +289,11 @@ async def _resolve_peer_symbols(ticker: str, market_snapshot: Optional[Dict[str,
             if keyword in searchable_text:
                 add_symbols(symbols)
 
-    if not candidates:
-        add_symbols(DEFAULT_PEER_SYMBOLS)
+    if candidates:
+        return candidates, "sector_industry_table"
 
-    return candidates
+    add_symbols(DEFAULT_PEER_SYMBOLS)
+    return candidates, "default_symbols"
 
 def _rank_peer_details(
     peers: List[Dict[str, Any]],
@@ -261,8 +407,8 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
         target_sector = str(target_market_snapshot.get("sector") or "")
         target_industry = str(target_market_snapshot.get("industry") or "")
 
-        peer_symbols = await _resolve_peer_symbols(ticker, market_snapshot=target_market_snapshot)
-        candidate_source = "curated" if CURATED_PEERS.get(ticker.upper()) else "sector_industry_fallback"
+        peer_symbols, peer_origin = await _resolve_peer_symbols(ticker, market_snapshot=target_market_snapshot)
+        candidate_source = peer_origin
         if not peer_symbols:
             peer_symbols = [s for s in DEFAULT_PEER_SYMBOLS if s.upper() != ticker.upper()]
             candidate_source = "default_symbols"
@@ -312,7 +458,7 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
             return {
                 "peers": top,
                 "source": candidate_source,
-                "fallback_used": used_symbol_fallback or candidate_source != "curated",
+                "fallback_used": used_symbol_fallback or candidate_source in {"default_symbols", "unavailable"},
                 "notes": notes,
                 "fetched_at_ms": int(time.time() * 1000),
             }

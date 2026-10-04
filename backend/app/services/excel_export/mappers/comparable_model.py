@@ -167,6 +167,16 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
     model["A8"] = "Enterprise Value"
     model["B8"] = "=B4*B7"
     model["B8"].number_format = amount_format
+    # Provenance the reviewer can actually see. A curated peer list and a
+    # machine-derived one produce equally confident-looking medians, so the
+    # workbook has to say which it used.
+    model["A9"] = "Peer set source"
+    model["B9"] = peer_source or "unknown"
+    model["B9"].comment = Comment(
+        "How the peer set was chosen: 'curated' is a human-maintained list; "
+        "'derived_screener' means same-sector candidates ranked by market-cap "
+        "proximity, which can include weak comparables. Review the peer rows "
+        "below before relying on B5.", "Codex")
 
     bridge_rows = [
         (10, "Cash and cash equivalents", cash),
