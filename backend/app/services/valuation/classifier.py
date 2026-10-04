@@ -465,7 +465,7 @@ def _blocked_operating_archetype_reason(archetype: OperatingArchetype) -> str:
         "telecommunications": "Telecommunications model is unavailable until subscriber, ARPU, churn, and network-capex drivers are implemented.",
         "mature_pharma": "Pharma model is unavailable until product, patent-expiry, and pipeline schedules are implemented.",
         "biotechnology": "Biotech valuation is unavailable until marketed-product, patent-expiry, and risk-adjusted pipeline cash flows are implemented.",
-        "unclassified_operating": "The company does not map to a supported operating archetype; no generic DCF fallback is available.",
+        "unclassified_operating": "No specialist archetype matched this issuer, so the generic operating DCF is offered as a blank-input workbook for analyst completion. No valuation is shown until its inputs are reviewed.",
         "standard_operating": "",
         "technology_hardware": "",
         "subscription_software": "",
@@ -1417,7 +1417,7 @@ def classify_company(
             reason = "Mixed utility model is blocked until regulated and unregulated earnings, rate base, and capital flows are separated."
         else:
             reason = "Regulated utility valuation needs source-backed jurisdictional rate base, allowed ROE, authorized equity ratio, and approved rate-base additions. Enter the missing regulatory facts and forecast inputs in the utility workbook."
-        utility_route_available = not mixed_utility and "utility_dcf" in PRODUCTION_MODEL_ROUTES
+        utility_route_available = "utility_dcf" in PRODUCTION_MODEL_ROUTES
         return ModelEligibility(
             company_type="utility",
             preferred_model="utility_dcf",
@@ -1951,7 +1951,13 @@ def classify_company(
             company_type="high_growth" if is_unprofitable else "operating",
             preferred_model=preferred_model,
             operating_archetype=archetype,
-            allowed_models=[],
+            # Offer the route whenever it exists. Withholding it produced
+            # status="unsupported" and no workbook at all, which is the one
+            # outcome the product should never give an issuer with filed
+            # financials. The blocking reason stays recorded on the model, so
+            # the workbook still opens with blank analyst inputs rather than a
+            # fabricated number.
+            allowed_models=[preferred_model] if preferred_model in PRODUCTION_MODEL_ROUTES else [],
             blocked_models=[BlockedModel(model=preferred_model, reason=archetype_block_reason)],
             supported_by_current_engine=False,
         )

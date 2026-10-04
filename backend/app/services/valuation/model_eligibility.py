@@ -119,7 +119,68 @@ class ModelEligibility(BaseModel):
             value["model_route_available"] = route_available
 
         status = value.get("status")
-        if status is None:
+
+        # Invariant, enforced centrally so no future branch can reintroduce it:
+        # an issuer that reached this point has filed financials, so it always
+        # leaves with a workbook. "unsupported" meant no artifact at all, which is
+        # the one outcome the product should never produce. Any route that exists
+        # is offered as input_required instead, with its real blocking reason kept
+        # in blocked_models and unknown inputs left blank for an analyst. Nothing
+        # here invents a value; it only stops withholding the deliverable.
+        if status == "unsupported" or status is None:
+            if not supported and not route_available:
+                candidates = [
+                    m for m in ("unlevered_dcf", "revenue_multiple", "ev_ebitda")
+                    if m in PRODUCTION_MODEL_ROUTES
+                ]
+                if candidates:
+                    offered = next(
+                        (m for m in candidates if m == value.get("preferred_model")),
+                        candidates[0],
+                    )
+                    blocked = value.get("blocked_models")
+                    blocked = blocked if isinstance(blocked, list) else []
+                    if not any(
+                        (b.get("model") if isinstance(b, dict) else getattr(b, "model", None)) == offered
+                        and "blank-input workbook" in str(
+                            b.get("reason") if isinstance(b, dict) else getattr(b, "reason", "")
+                        )
+                        for b in blocked
+                    ):
+                        blocked.append(
+                            {
+                                "model": offered,
+                                "reason": (
+                                    "Offered as the universal fallback workbook because no specialist "
+                                    "route was source-ready for this issuer. Analyst inputs are blank "
+                                    "and must be completed before any valuation is relied on."
+                                ),
+                            }
+                        )
+                    value["blocked_models"] = blocked
+                    value["preferred_model"] = offered
+                    value["allowed_models"] = [
+                        *[m for m in allowed_models if m != offered],
+                        offered,
+                    ]
+                    # input_required requires at least one named gap, so name the
+                    # analyst work this fallback implies rather than leaving it blank.
+                    gaps = value.get("missing_input_gaps")
+                    gaps = list(gaps) if isinstance(gaps, list) else []
+                    gaps.append(
+                        {
+                            "key": "universal_fallback_workbook",
+                            "label": "Analyst inputs for the fallback workbook",
+                            "reason": (
+                                "No specialist route was source-ready for this issuer, so the "
+                                f"{offered} workbook is offered with blank analyst inputs. Complete "
+                                "and review them before relying on any valuation."
+                            ),
+                        }
+                    )
+                    value["missing_input_gaps"] = gaps
+                    route_available = True
+                    value["model_route_available"] = True
             status = "ready" if supported else "input_required" if route_available else "unsupported"
             value["status"] = status
 

@@ -97,24 +97,23 @@ _SECTOR_SLUG_BY_DISPLAY: Dict[str, str] = {
     "utilities": "utilities",
 }
 
-# Symbols the screener returns that are not operating companies with comparable
-# financials. Filtered out of derived sets rather than curated per ticker.
-_NON_OPERATING_PEER_PREFIXES = (
-    "XL", "VG", "IY", "TWN", "XOP", "OIH", "KRE", "XLF", "IYH", "IBB",
-)
-
-
 def _sector_slug(sector: str) -> Optional[str]:
     return _SECTOR_SLUG_BY_DISPLAY.get(str(sector or "").strip().lower())
 
 
 def _looks_like_operating_peer(symbol: str) -> bool:
+    """Cheap shape check only.
+
+    Deliberately not a maintained ETF/fund prefix list: the comparable export
+    already drops any candidate without a positive enterprise value and a
+    positive EBITDA/revenue denominator, which is the check that actually
+    matters. Guessing at ticker prefixes on top of that only created a second
+    place to be wrong.
+    """
     upper = str(symbol or "").strip().upper()
-    if not upper or not upper.isalpha():
+    if not upper or not upper.isalpha() or len(upper) > 5:
         return False
-    if upper in {"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI"}:
-        return False
-    return not any(upper.startswith(prefix) for prefix in _NON_OPERATING_PEER_PREFIXES)
+    return upper not in {"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI"}
 
 
 def _sec_filer_tickers() -> Optional[set[str]]:
