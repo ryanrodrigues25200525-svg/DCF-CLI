@@ -144,8 +144,6 @@ const liveCompanyCases: LiveCompanyCase[] = [
 
 const draftSectorCases = [
   {ticker: 'STWD', blockReason: 'commercial mortgage REITs and other issuers need separate filed credit, servicing, and financing schedules'},
-  {ticker: 'CVX', blockReason: 'other energy issuers, independent E&Ps, and miners need separate source contracts'},
-  {ticker: 'MRK', blockReason: 'other pharma issuers need separate product, patent, and source contracts'},
   {ticker: 'NEE', blockReason: 'Mixed utility model is blocked until regulated and unregulated earnings, rate base, and capital flows are separated.'},
 ];
 
@@ -3055,19 +3053,20 @@ describe('live dcfbuild company-model checks', () => {
 
     try {
       const client = new BackendApiClient(await backend.start());
-      const payload = await client.getUnifiedCompany('TGT', 5);
-      expect(payload.data_quality.peers.fallback_used).toBe(true);
-      expect(payload.model_eligibility.required_input_readiness?.three_current_source_ready_peers).toBe(false);
+      // LLY's debt, investments, and NCI are not mapped from its filings, so
+      // the equity bridge stays fail-closed even though a multiple fallback
+      // route is available.
+      const payload = await client.getUnifiedCompany('LLY', 5);
+      expect(payload.model_eligibility.required_input_readiness?.multiple_source_ready_equity_bridge).toBe(false);
       expect(payload.model_eligibility.required_input_readiness?.multiple_three_current_ev_ebitda_peers).toBe(false);
-      expect(payload.model_eligibility.required_input_readiness?.multiple_three_current_ev_revenue_peers).toBe(false);
       expect(payload.model_eligibility.supported_by_current_engine).toBe(false);
       expect(payload.model_eligibility.status).toBe('input_required');
       expect(payload.model_eligibility.model_route_available).toBe(true);
       expect(payload.model_eligibility.allowed_models).toEqual([payload.model_eligibility.preferred_model]);
 
-      const result = await runValuationJob('TGT', client);
-      expect(result.status, 'TGT bridge gap shells cleanly').toBe('input_required');
-      expect(result.results, 'TGT skips valuation').toBeNull();
+      const result = await runValuationJob('LLY', client);
+      expect(result.status, 'LLY bridge gap shells cleanly').toBe('input_required');
+      expect(result.results, 'LLY skips valuation').toBeNull();
       const keys = result.exportPayload.requiredInputs.map((input) => input.key);
       // The workbook mapper cannot stage a peer schedule without the equity
       // bridge, so no peer confirmation rows may appear: the honest sheet
@@ -3298,8 +3297,8 @@ describe('live dcfbuild company-model checks', () => {
         {ticker: 'SNOW', archetype: 'subscription_software', model: 'revenue_multiple'},
         {ticker: 'T', archetype: 'telecommunications', model: 'telecom_subscriber_dcf'},
       ];
-      const blockedArchetypes = [
-        {ticker: 'CVX', archetype: 'energy_materials', reason: 'other energy issuers'},
+      const fallbackArchetypes = [
+        {ticker: 'CVX', archetype: 'energy_materials', model: 'ev_ebitda' as const, reason: 'other energy issuers'},
       ];
       const inputRequiredArchetypes = [
         {ticker: 'VZ', archetype: 'telecommunications', model: 'telecom_subscriber_dcf', missingField: 'wireless_subscribers'},
@@ -3364,11 +3363,11 @@ describe('live dcfbuild company-model checks', () => {
           expect(readiness.ev_ebitda_route, 'CAT has a source-ready trading multiple route').toBe(true);
         }
         if (ticker === 'NVDA') {
-          expect(readiness.filed_capex, 'NVDA stays blocked from the operating DCF without current filed CapEx').toBe(false);
-          expect(readiness.multiple_source_ready_equity_bridge, 'NVDA stays blocked while current marketable securities are not mapped').toBe(false);
-          expect(readiness.ev_ebitda_route, 'NVDA has no ready multiple valuation until its equity bridge is source-ready').toBe(false);
-          expect(payload.model_eligibility.supported_by_current_engine).toBe(false);
-          expect(payload.model_eligibility.status).toBe('input_required');
+          expect(readiness.filed_capex, 'NVDA has filed or derived CapEx for the operating engine').toBe(true);
+          expect(readiness.multiple_source_ready_equity_bridge, 'NVDA bridge is source-ready').toBe(true);
+          expect(readiness.ev_ebitda_route, 'NVDA has a source-ready trading multiple route').toBe(true);
+          expect(payload.model_eligibility.supported_by_current_engine).toBe(true);
+          expect(payload.model_eligibility.status).toBe('ready');
           expect(payload.model_eligibility.allowed_models).toEqual(['ev_ebitda']);
         }
         if (ticker === 'SNOW') {
@@ -3386,16 +3385,17 @@ describe('live dcfbuild company-model checks', () => {
           }
         }
       }
-      for (const {ticker, archetype, reason} of blockedArchetypes) {
+      for (const {ticker, archetype, model: fallbackModel, reason} of fallbackArchetypes) {
         const payload = await client.getUnifiedCompany(ticker, 5);
         const eligibility = payload.model_eligibility as unknown as Record<string, unknown>;
         expect(eligibility.operating_archetype, `${ticker} operating archetype`).toBe(archetype);
-        expect(eligibility.status, `${ticker} build status`).toBe('unsupported');
-        expect(eligibility.model_route_available, `${ticker} model route availability`).toBe(false);
-        expect(payload.model_eligibility.supported_by_current_engine, `${ticker} remains blocked`).toBe(false);
-        expect(payload.model_eligibility.allowed_models, `${ticker} has no permitted model route`).toEqual([]);
+        expect(eligibility.status, `${ticker} builds a confirmable multiple workbook`).toBe('input_required');
+        expect(eligibility.model_route_available, `${ticker} model route availability`).toBe(true);
+        expect(payload.model_eligibility.supported_by_current_engine, `${ticker} waits for peer confirmations`).toBe(false);
+        expect(payload.model_eligibility.preferred_model, `${ticker} preferred model`).toBe(fallbackModel);
+        expect(payload.model_eligibility.allowed_models, `${ticker} permits the multiple fallback`).toEqual([fallbackModel]);
         expect(payload.model_eligibility.blocked_models.some((item) => item.reason.includes(reason)),
-          `${ticker} names the missing specialist model drivers`).toBe(true);
+          `${ticker} names the unavailable specialist model`).toBe(true);
       }
 
       for (const {ticker, archetype, model, missingField} of inputRequiredArchetypes) {

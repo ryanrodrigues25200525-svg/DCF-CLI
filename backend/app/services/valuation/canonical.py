@@ -12,6 +12,10 @@ PREFERRED_EQUITY_CONCEPTS = (
     "PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount",
     "PreferredStockCarryingValue",
 )
+NON_CONTROLLING_INTEREST_CONCEPTS = (
+    "MinorityInterest",
+    "NoncontrollingInterest",
+)
 
 
 def _norm(value: Any) -> str:
@@ -1376,6 +1380,11 @@ def _filed_absence_line(
     )
     if has_fact or has_statement_value:
         return _line(None, source="missing", confidence=0.0, method=f"reported_{field}_value_unusable")
+    # Prior-year facts alone do not prove the concept is reported this year.
+    # If this filing's own presentation still carries a row for the concept,
+    # its absence from the extracted values is a mapping gap (missing). Only
+    # when the filing's presentation has no such row at all does the cited
+    # 10-K below prove genuine absence (not applicable).
     if field.startswith("marketable_securities") and any(
         isinstance(fact, dict)
         and _norm(str(fact.get("concept") or "").split(":")[-1]) in concept_keys
@@ -1384,8 +1393,12 @@ def _filed_absence_line(
         and str(fact.get("fiscal_period") or "").upper() == "FY"
         for fact in source_facts
     ):
-        return _line(None, source="missing", confidence=0.0, method=f"previously_reported_{field}_is_not_currently_mapped")
-
+        presented = any(
+            _norm(str(row.get("concept") or row.get("standard_concept") or "")) in concept_keys
+            for row in rows
+        )
+        if presented:
+            return _line(None, source="missing", confidence=0.0, method=f"previously_reported_{field}_is_not_currently_mapped")
     filings = [
         filing for filing in source_filings
         if isinstance(filing, dict)
@@ -1421,6 +1434,132 @@ def _filed_absence_line(
             "source_fiscal_year": year,
         }],
     )
+
+
+def _latest_ten_k_year(
+    source_filings: List[Any],
+    years: List[int],
+) -> int | None:
+    """Latest year backed by a filed 10-K/10-K/A. Later years fed only by 10-Q
+    stubs lack investment-note detail by construction."""
+    ten_k_years = set()
+    for filing in source_filings:
+        if not isinstance(filing, dict):
+            continue
+        if str(filing.get("form") or "") not in {"10-K", "10-K/A"}:
+            continue
+        report_year = str(filing.get("report_date") or "")[:4]
+        if report_year.isdigit():
+            ten_k_years.add(int(report_year))
+    complete = [year for year in years if year in ten_k_years]
+    return max(complete) if complete else None
+
+
+def _carry_forward_to_stub_year(
+    lines: List[Dict[str, Any]],
+    years: List[int],
+    source_filings: List[Any],
+) -> List[Dict[str, Any]]:
+    """When the latest year has no 10-K, carry the latest 10-K-backed line
+    forward so stub years (10-Q detail) do not erase filed facts. The carried
+    line keeps its original filing references and a marked-down method."""
+    if not years or not lines or len(lines) != len(years):
+        return lines
+    if _latest_ten_k_year(source_filings, years) == years[-1]:
+        return lines
+    if lines[-1].get("source") != "missing":
+        return lines
+    ten_k_year = _latest_ten_k_year(source_filings, years)
+    if ten_k_year is None:
+        return lines
+    try:
+        donor = lines[years.index(ten_k_year)]
+    except ValueError:
+        return lines
+    if donor.get("source") not in {"sec_native", "derived"} or donor.get("value") is None:
+        return lines
+    carried = dict(donor)
+    carried["confidence"] = min(float(donor.get("confidence") or 0.0), 0.7)
+    carried["method"] = f"{donor.get('method') or 'carried_forward'}_carried_forward_to_FY{years[-1]}"
+    return [*lines[:-1], carried]
+
+
+def _combined_liquidity_leg(
+    rows: List[Dict[str, Any]],
+    period_years: List[int],
+    *,
+    known_leg: str,
+) -> List[Dict[str, Any]]:
+    """Derive the missing leg of a combined cash-and-investments line.
+
+    Filers either report standalone cash with a combined "cash and
+    short-term investments" total (derive short-term investments =
+    combined - cash, e.g. MSFT) or standalone short-term investments
+    with the combined total (derive cash = combined - investments,
+    e.g. TGT). Both legs must come from the same filing; unit mismatches
+    and negative remainders fail closed.
+    """
+    if known_leg == "cash":
+        known_concepts = {"cashandcashequivalentsatcarryingvalue", "cashandcashequivalents"}
+        method = "combined_cash_and_short_term_investments_less_cash_carrying_value"
+        concept = "CashCashEquivalentsAndShortTermInvestments-CashAndCashEquivalentsAtCarryingValue"
+    elif known_leg == "short_term_investments":
+        known_concepts = {"shortterminvestments"}
+        method = "combined_cash_and_short_term_investments_less_short_term_investments"
+        concept = "CashCashEquivalentsAndShortTermInvestments-ShortTermInvestments"
+    else:
+        raise ValueError(f"Unsupported combined liquidity leg: {known_leg}")
+    combined_rows = [
+        row for row in rows
+        if _norm(row.get("concept")) == "cashcashequivalentsandshortterminvestments"
+    ]
+    known_rows = [
+        row for row in rows
+        if _norm(row.get("concept")) in known_concepts
+    ]
+    derived: List[Dict[str, Any]] = []
+    for period_year in period_years:
+        combined_value: float | None = None
+        combined_row: Dict[str, Any] | None = None
+        for row in combined_rows:
+            candidate = _value_for_year(row, period_year)
+            if candidate is not None:
+                combined_value, combined_row = candidate, row
+                break
+        known_value: float | None = None
+        known_row: Dict[str, Any] | None = None
+        for row in known_rows:
+            candidate = _value_for_year(row, period_year)
+            if candidate is not None:
+                known_value, known_row = candidate, row
+                break
+        if (
+            combined_row is None or known_row is None
+            or combined_value is None or known_value is None
+        ):
+            derived.append(_line(None, source="missing", confidence=0.0, method="missing"))
+            continue
+        combined_unit = combined_row.get("unit") or combined_row.get("uom")
+        known_unit = known_row.get("unit") or known_row.get("uom")
+        if combined_unit and known_unit and combined_unit != known_unit:
+            derived.append(_line(None, source="missing", confidence=0.0, method="missing"))
+            continue
+        remainder = combined_value - known_value
+        if remainder < 0:
+            derived.append(_line(None, source="missing", confidence=0.0, method="missing"))
+            continue
+        derived.append(_line(
+            remainder,
+            source="derived",
+            confidence=0.8,
+            method=method,
+            concept=concept,
+            sources=[
+                _source_record(combined_row, period_year),
+                _source_record(known_row, period_year),
+            ],
+        ))
+    return derived
 
 
 def build_canonical_financials(native_financials: Dict[str, Any] | None, market: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -1555,6 +1694,15 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         else:
             ebit.append(_line(None, source="missing", confidence=0.0, method="missing_ebit_inputs"))
 
+    cfo = _pick_series(
+        cashflow_rows,
+        years,
+        "netcashfromoperatingactivities",
+        "netcashprovidedbyusedinoperatingactivities",
+        "operatingcashflow",
+        preferred=("netcashprovidedbyusedinoperatingactivities", "netcashfromoperatingactivities"),
+        strict=True,
+    )
     depreciation = _pick_series(
         cashflow_rows,
         years,
@@ -1564,6 +1712,15 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         preferred=("depreciationdepletionandamortization", "depreciationandamortization", "depreciation"),
         strict=True,
     )
+    for depreciation_concept in (
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+        "Depreciation",
+    ):
+        depreciation = _prefer_reported_series(
+            depreciation,
+            _company_fact_series(native_financials, years, depreciation_concept),
+        )
     ebitda = []
     for idx in range(len(years)):
         if ebit[idx]["value"] is not None and depreciation[idx]["value"] is not None:
@@ -1576,15 +1733,7 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
             ))
         else:
             ebitda.append(_line(None, source="missing", confidence=0.0, method="missing_ebit_or_da"))
-    cfo = _pick_series(
-        cashflow_rows,
-        years,
-        "netcashfromoperatingactivities",
-        "netcashprovidedbyusedinoperatingactivities",
-        "operatingcashflow",
-        preferred=("netcashprovidedbyusedinoperatingactivities", "netcashfromoperatingactivities"),
-        strict=True,
-    )
+
     capex = _pick_series(
         cashflow_rows,
         years,
@@ -1599,6 +1748,16 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         ),
         strict=True,
     )
+    for capex_concept in (
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PaymentsForPurchaseOfPropertyPlantAndEquipment",
+        "PaymentsToAcquireProductiveAssets",
+        "PaymentsForPurchaseOfProductiveAssets",
+    ):
+        capex = _prefer_reported_series(
+            capex,
+            _company_fact_series(native_financials, years, capex_concept),
+        )
     capex = [
         _line(
             abs(item["value"]) if item["value"] is not None else None,
@@ -1610,6 +1769,47 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         )
         for item in capex
     ]
+    # Filers that omit the capex face concept (e.g. NVDA reports no separate
+    # purchase line in its extracted cash-flow rows) still expose net PP&E and
+    # D&A, so derive the missing year from the PP&E roll-forward:
+    # capex = ΔPPE + D&A. The derived row names its method and keeps the
+    # PP&E + D&A source records attached, and a year that cannot reconcile
+    # to filed PP&E stays missing (fail closed).
+    ppe_net = _pick_series(
+        balance_rows,
+        years,
+        "propertyplantandequipmentnet",
+        "propertyplantandequipmentnetafteraccumulateddepreciation",
+        preferred=("propertyplantandequipmentnet", "propertyplantandequipmentnetafteraccumulateddepreciation"),
+        strict=True,
+    )
+
+    for idx in range(len(years)):
+        if capex[idx]["value"] is not None or capex[idx]["source"] in {"sec_native", "derived"}:
+            continue
+        if idx == 0:
+            continue
+        prior_ppe = ppe_net[idx - 1]
+        current_ppe = ppe_net[idx]
+        current_depreciation = depreciation[idx]
+        if prior_ppe["value"] is None or current_ppe["value"] is None or current_depreciation["value"] is None:
+            continue
+        derived = float(current_ppe["value"]) - float(prior_ppe["value"]) + float(current_depreciation["value"])
+        if not (derived == derived) or derived < 0:
+            continue
+        capex[idx] = _line(
+            derived,
+            source="derived",
+            confidence=min(
+                float(prior_ppe["confidence"] or 0.0),
+                float(current_ppe["confidence"] or 0.0),
+                float(current_depreciation["confidence"] or 0.0),
+            ),
+            method="property_plant_equipment_rollforward_change_plus_depreciation",
+            concept="capex_derived_from_ppe_rollforward",
+            sources=_source_records(prior_ppe, current_ppe, current_depreciation),
+        )
+
     cash = _pick_series(
         balance_rows,
         years,
@@ -1618,6 +1818,28 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         preferred=("cashandcashequivalentsatcarryingvalue", "cashandcashequivalents"),
         strict=True,
     )
+    # Filers like TGT report only the combined cash-and-investments line plus
+    # standalone short-term investments, so derive cash = combined - investments
+    # from the same filing. Years that do not reconcile stay missing.
+    combined_cash = _combined_liquidity_leg(balance_rows, years, known_leg="short_term_investments")
+    cash = [
+        combined_cash[idx]
+        if line["source"] == "missing" and combined_cash[idx]["value"] is not None
+        else line
+        for idx, line in enumerate(cash)
+    ]
+    # Statement extraction occasionally omits the cash row entirely (e.g. PG);
+    # fall back to the same concept chain in filed companyfacts, with the
+    # combined cash-and-restricted-cash total only as the last resort.
+    for cash_concept in (
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashAndCashEquivalents",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    ):
+        cash = _prefer_reported_series(
+            cash,
+            _company_fact_series(native_financials, years, cash_concept),
+        )
     marketable_current_concepts = (
         "MarketableSecuritiesCurrent",
         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
@@ -1648,11 +1870,22 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
     )
     marketable_current_facts = _company_fact_series(native_financials, years, "MarketableSecuritiesCurrent")
     marketable_noncurrent_facts = _company_fact_series(native_financials, years, "MarketableSecuritiesNoncurrent")
+    # Filers like MSFT report long-term investments under their own concept
+    # with no marketable-securities-noncurrent row. Prefer the exact concept;
+    # fall back to long-term investments per year (concept preserved for audit).
+    marketable_noncurrent_investment_facts = _company_fact_series(native_financials, years, "LongTermInvestments")
+    marketable_noncurrent_facts = [
+        primary if primary["source"] != "missing" else fallback
+        for primary, fallback in zip(marketable_noncurrent_facts, marketable_noncurrent_investment_facts)
+    ]
     marketable_current = _prefer_reported_series(marketable_current_statement, marketable_current_facts)
     marketable_noncurrent = _prefer_reported_series(marketable_noncurrent_statement, marketable_noncurrent_facts)
+    combined_short_term = _combined_liquidity_leg(balance_rows, years, known_leg="cash")
     source_filings = native_financials.get("source_filings")
     source_filings = source_filings if isinstance(source_filings, list) else []
     for idx, year in enumerate(years):
+        if marketable_current[idx]["source"] == "missing" and combined_short_term[idx]["value"] is not None:
+            marketable_current[idx] = combined_short_term[idx]
         if marketable_current[idx]["source"] == "missing":
             marketable_current[idx] = _filed_absence_line(
                 native_financials, years, source_filings, balance_rows, year, marketable_current_concepts,
@@ -1724,6 +1957,9 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
                 method="missing_or_inconsistent_marketable_securities_inputs",
                 sources=_source_records(current, noncurrent),
             ))
+    marketable_securities = _carry_forward_to_stub_year(
+        marketable_securities, years, source_filings,
+    )
     long_term_debt_current = _pick_series(
         balance_rows,
         years,
@@ -1732,9 +1968,35 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         "debtcurrent",
         "longtermdebtcurrent",
         "currentportionoflongtermdebt",
-        preferred=("longtermdebtcurrent", "debtcurrent", "shorttermdebt", "shorttermborrowings"),
+        "longtermdebtandfinanceleaseobligationscurrent",
+        "longtermdebtandcapitalleaseobligationscurrent",
+        preferred=(
+            "longtermdebtcurrent",
+            "debtcurrent",
+            "shorttermdebt",
+            "shorttermborrowings",
+            "longtermdebtandfinanceleaseobligationscurrent",
+            "longtermdebtandcapitalleaseobligationscurrent",
+        ),
         strict=True,
     )
+    # Same concept chain in companyfacts for filings whose statement
+    # extraction omits the current-debt row (never CommercialPaper: that leg
+    # is summed separately below).
+    for current_debt_concept in (
+        "LongTermDebtCurrent",
+        "DebtCurrent",
+        "ShortTermDebt",
+        "ShortTermBorrowings",
+        "CurrentPortionOfLongTermDebt",
+        "LongTermDebtAndFinanceLeaseObligationsCurrent",
+        "LongTermDebtAndCapitalLeaseObligationsCurrent",
+        "OtherShortTermBorrowings",
+    ):
+        long_term_debt_current = _prefer_reported_series(
+            long_term_debt_current,
+            _company_fact_series(native_financials, years, current_debt_concept),
+        )
     commercial_paper = _company_fact_series(native_financials, years, "CommercialPaper")
     commercial_paper_statement = _pick_series(
         balance_rows,
@@ -1746,7 +2008,8 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
     commercial_paper = _prefer_reported_series(commercial_paper_statement, commercial_paper)
     current_debt_concepts = (
         "ShortTermDebt", "DebtCurrent", "LongTermDebtCurrent", "CurrentPortionOfLongTermDebt",
-        "ShortTermBorrowings", "CommercialPaper",
+        "ShortTermBorrowings", "CommercialPaper", "LongTermDebtAndFinanceLeaseObligationsCurrent",
+        "LongTermDebtAndCapitalLeaseObligationsCurrent", "OtherShortTermBorrowings",
     )
     for idx, year in enumerate(years):
         if long_term_debt_current[idx]["source"] == "missing":
@@ -1786,11 +2049,31 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         years,
         "longtermdebt",
         "longtermdebtnoncurrent",
-        exclude=("longtermdebtcurrent", "currentportionoflongtermdebt"),
+        exclude=(
+            "longtermdebtcurrent",
+            "currentportionoflongtermdebt",
+            "longtermdebtandfinanceleaseobligationscurrent",
+            "longtermdebtandcapitalleaseobligationscurrent",
+        ),
         preferred=("longtermdebtnoncurrent", "longtermdebt"),
         strict=True,
     )
-    long_term_debt_concepts = ("LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndFinanceLeaseObligationsNoncurrent")
+    long_term_debt_concepts = (
+        "LongTermDebt",
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+    )
+    for long_term_debt_concept in (
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+        "LongTermDebt",
+    ):
+        debt_long = _prefer_reported_series(
+            debt_long,
+            _company_fact_series(native_financials, years, long_term_debt_concept),
+        )
     for idx, year in enumerate(years):
         if debt_long[idx]["source"] == "missing":
             debt_long[idx] = _filed_absence_line(
@@ -2148,6 +2431,68 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         preferred=("minorityinterest", "noncontrollinginterest"),
         strict=True,
     )
+    # Filers tag NCI in companyfacts even when the extracted face statement
+    # omits the row; prefer a filed fact over a derived residual.
+    for nci_concept in NON_CONTROLLING_INTEREST_CONCEPTS:
+        non_controlling_interest = _prefer_reported_series(
+            non_controlling_interest,
+            _company_fact_series(native_financials, years, nci_concept),
+        )
+    # No NCI row and no NCI fact in a filed 10-K proves absence the same way
+    # preferred-equity absence is proven: the bridge may treat it as zero,
+    # cited to the annual filing. A current-year fact or any presented NCI row
+    # keeps the line missing (fail closed).
+    nci_concept_keys = {_norm(concept) for concept in NON_CONTROLLING_INTEREST_CONCEPTS}
+    nci_facts = native_financials.get("source_facts")
+    nci_facts = nci_facts if isinstance(nci_facts, list) else []
+    nci_filings = native_financials.get("source_filings")
+    nci_filings = nci_filings if isinstance(nci_filings, list) else []
+    for idx, year in enumerate(years):
+        if non_controlling_interest[idx]["source"] != "missing":
+            continue
+        has_filed_nci_fact = any(
+            isinstance(fact, dict)
+            and _norm(str(fact.get("concept") or "").split(":")[-1]) in nci_concept_keys
+            and str(fact.get("period_end") or "").startswith(str(year))
+            for fact in nci_facts
+        )
+        has_nci_row = any(
+            _norm(str(row.get("concept") or row.get("standard_concept") or "")) in nci_concept_keys
+            for row in balance_rows
+        )
+        filing = next((
+            item for item in nci_filings
+            if isinstance(item, dict)
+            and str(item.get("report_date") or "").startswith(str(year))
+            and str(item.get("form") or "") in {"10-K", "10-K/A"}
+            and item.get("accession_number")
+            and item.get("filing_date")
+        ), None)
+        if not has_filed_nci_fact and not has_nci_row and filing is not None:
+            non_controlling_interest[idx] = _line(
+                None,
+                source="not_applicable",
+                confidence=0.9,
+                method="no_noncontrolling_interest_fact_or_row_in_filed_10k",
+                concept="non_controlling_interest",
+                sources=[{
+                    "concept": None,
+                    "label": "Noncontrolling interest not reported in annual XBRL facts or statement rows",
+                    "statement": "CompanyFacts",
+                    "row_id": None,
+                    "fiscal_period": f"FY {year}",
+                    "reported_value": None,
+                    "accession": filing.get("accession_number"),
+                    "filed": filing.get("filing_date"),
+                    "form": filing.get("form"),
+                    "report_date": filing.get("report_date"),
+                    "period_end": filing.get("report_date"),
+                    "currency": market.get("currency"),
+                    "unit": market.get("currency"),
+                    "unit_scale": "actual",
+                    "source_fiscal_year": year,
+                }],
+            )
     balance_sheet_check = []
     for idx, year in enumerate(years):
         components = (total_assets[idx], total_liabilities[idx], book_value[idx])

@@ -7,8 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Broad coverage for filed-company builds: cash / debt / NCI / CapEx / D&A /
+  marketable-securities lines now fall back to filed companyfacts when the
+  statement-row extraction omits them, and derive the missing leg of combined
+  "cash and short-term investments" lines (MSFT/TGT/KO style) and of the PP&E
+  roll-forward (CapEx = ΔPP&E + D&A) with full filing citations.
+- Genuine-absence proofs for marketable securities and noncontrolling interest
+  when the filing's own presentation carries no such row, cited to the 10-K.
+- Trading-multiple fallback for specialized archetypes (integrated energy,
+  mature pharma, unsupported financial subtypes, unclassified issuers) when
+  the specialist model has no source contract for the ticker: the specialist
+  block reason stays recorded, and only the source-disciplined EV/EBITDA or
+  EV/Revenue route is offered. Fallback peers still stage analyst
+  confirmations before entering the median (#32).
+
 ### Fixed
 
+- Comparable-valuation exports ship exactly the peer set that produced the
+  selected median, fixing a median-reconciliation 500 on live builds
+  (NVDA, META).
+- Revenue-multiple routes no longer demand filed EBITDA; incomplete
+  comparable payloads stage peer confirmations instead of failing contract
+  validation (NKE).
+- Semiconductor-equipment issuers (e.g. AMAT) are no longer misrouted to the
+  integrated-energy model by the word "materials" in their industry name.
+- The equity bridge accepts a filed-absence `not_applicable` noncontrolling
+  interest the same way it already accepted preferred equity (AMZN).
 - Workbook presentation: sensitivity grids and distribution stats render as whole
   currency (`#,##0`); WACC Bull/Bear Beta as `0.00` and Costs of Equity as
   percentages; zero premiums read as explicit `0.00%`; cash-flow detail as

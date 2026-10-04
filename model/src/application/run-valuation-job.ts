@@ -491,7 +491,7 @@ function buildComparableValuationInput(
   peers: ComparableCompany[],
   historicals: HistoricalData,
   method: ComparableValuationInput['method'],
-): {input: ComparableValuationInput; sourceNotes: string[]} {
+): {input: ComparableValuationInput; peerTickers: string[]; sourceNotes: string[]} {
   const peerQuality = data.data_quality.peers;
   if (
     !peerQuality
@@ -568,6 +568,11 @@ function buildComparableValuationInput(
       dilutedShares,
       currentPrice,
     },
+    // The exact peer set that produced selectedMultiple. The workbook mapper
+    // recomputes the peer median from the exported comps, so only these peers
+    // may travel in comps; any other peer would change the median and trip
+    // the reconciliation guard.
+    peerTickers: [...uniquePeers.keys()],
     sourceNotes: [
       multipleLabel + ' valuation applies the median of ' + uniquePeers.size + ' current source-ready peer multiples (' + peerList + '); peer set source ' + peerQuality.source + ', fetched ' + new Date(peerQuality.fetched_at_ms!).toISOString() + '.',
       'Target ' + metricField + ' is FY' + historicals.years[last] + ' filed ' + (targetLine.concept ?? metricField) + ' (' + targetLine.sources[0]?.accession + '; filed ' + targetLine.sources[0]?.filed + '); the peer median is an editable formula in the workbook.',
@@ -755,6 +760,10 @@ function buildIncompleteInputRequirements(
     if (['ev_ebitda', 'revenue_multiple'].includes(model)
       && ['three_current_source_ready_peers', 'ev_ebitda_route', 'revenue_multiple_route',
         'multiple_three_current_ev_ebitda_peers', 'multiple_three_current_ev_revenue_peers'].includes(gap.key)) continue;
+    // The opposite route's target-metric gate must not leak into this route:
+    // a revenue-multiple model never needs filed EBITDA (and vice versa).
+    if (model === 'revenue_multiple' && gap.key === 'multiple_positive_filed_ebitda') continue;
+    if (model === 'ev_ebitda' && gap.key === 'multiple_positive_filed_revenue') continue;
     // Multiple math uses peer multiples plus filed bridge facts only: operating
     // model readiness keys (tax rate, working capital lines, driver history,
     // filed operating lines) must never become analyst requirements for a
@@ -1898,6 +1907,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
   let operatingSourceNotes: string[] = [];
   let operatingBetaSource: string | undefined;
   let comparableValuationInput: ComparableValuationInput | undefined;
+  let comparablePeerTickers: string[] | undefined;
   if (eligibility.preferred_model === 'ev_ebitda' || eligibility.preferred_model === 'revenue_multiple') {
     const comparable = buildComparableValuationInput(
       data,
@@ -1907,6 +1917,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
       eligibility.preferred_model,
     );
     comparableValuationInput = comparable.input;
+    comparablePeerTickers = comparable.peerTickers;
     const rf = data.valuation_context.risk_free_rate;
     const mrp = data.valuation_context.equity_risk_premium;
     assumptions = buildBaseAssumptions(
@@ -2165,7 +2176,9 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
       historicals,
       assumptions,
       results,
-      peers,
+      comparablePeerTickers && comparablePeerTickers.length > 0
+        ? peers.filter((peer) => comparablePeerTickers!.includes(peer.ticker))
+        : peers,
       getPrecedentTransactionsBySector(profile.sector || 'Technology'),
     );
     if (comparableValuationInput) {

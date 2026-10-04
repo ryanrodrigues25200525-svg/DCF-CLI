@@ -74,8 +74,6 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
             or ticker in seen
             or enterprise_value is None or enterprise_value <= 0
             or denominator is None or denominator <= 0
-            or (valuation_model == "ev_ebitda" and revenue is not None and revenue <= 0)
-            or (valuation_model == "revenue_multiple" and ebitda is not None and ebitda <= 0)
         ):
             continue
         seen.add(ticker)

@@ -25,7 +25,13 @@ export function buildMarketSnapshot(historicals: HistoricalData, assumptions: As
         ? assumptions.dilutedSharesOutstanding
         : historicals.sharesOutstanding;
     if (sharesDiluted === null || sharesDiluted <= 0) throw new Error('A sourced diluted share count is required for the equity bridge.');
-    const minorityInterest = requireHistoricalValue(historicals.nonControllingInterest, lastIdx, 'noncontrolling interest');
+    const nciLine = historicals.sourceData?.non_controlling_interest?.[lastIdx];
+    const explicitlyNotApplicableNci = nciLine?.source === 'not_applicable'
+        && nciLine.sources.length > 0
+        && nciLine.sources.every((source) => source.accession && source.filed);
+    const minorityInterest = explicitlyNotApplicableNci
+        ? 0
+        : requireHistoricalValue(historicals.nonControllingInterest, lastIdx, 'noncontrolling interest');
 
     return {
         currentPrice: price,

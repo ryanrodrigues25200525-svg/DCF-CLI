@@ -437,10 +437,13 @@ def _operating_archetype(profile: Dict[str, Any]) -> OperatingArchetype:
         return "mature_pharma"
     if any(token in description for token in ("telecom", "wireless carrier", "wireless telecommunication")) or sic_code in {4812, 4813}:
         return "telecommunications"
-    if any(token in description for token in ("energy", "oil & gas", "oil and gas", "petroleum", "mining", "coal", "materials")) or 1000 <= sic_code <= 1499 or 2900 <= sic_code <= 2999:
-        return "energy_materials"
+    # Semiconductor equipment and materials carry the word "materials" in
+    # their industry description; resolve them before the energy/materials
+    # token below so they are not misrouted to the integrated-energy branch.
     if "semiconductor" in description or sic_code == 3674:
         return "semiconductor"
+    if any(token in description for token in ("energy", "oil & gas", "oil and gas", "petroleum", "mining", "coal", "materials")) or 1000 <= sic_code <= 1499 or 2900 <= sic_code <= 2999:
+        return "energy_materials"
     if any(token in description for token in ("software", "saas", "application software", "systems software")) or 7370 <= sic_code <= 7379:
         return "subscription_software"
     if "technology" in sector or any(token in description for token in ("hardware", "computer", "consumer electronics")) or 3570 <= sic_code <= 3579 or sic_code == 3661:
@@ -470,6 +473,144 @@ def _blocked_operating_archetype_reason(archetype: OperatingArchetype) -> str:
         "industrial_manufacturing": "",
         "semiconductor": "",
     }[archetype]
+
+
+def _comparable_fallback(
+    *,
+    ticker: str,
+    archetype: OperatingArchetype | None,
+    company_type: Any,
+    canonical_financials: Dict[str, Any],
+    market: Dict[str, Any],
+    market_status: str | None,
+    peers: list[Any],
+    peer_status: str | None,
+    peer_source: str | None,
+    peer_fallback_used: bool | None,
+    peer_fetched_at_ms: Any,
+    blocked_models: list[Any],
+) -> ModelEligibility | None:
+    """Market-multiple fallback for issuers whose specialized archetype model
+    has no source contract for this ticker.
+
+    Only the trading-multiple route is offered (never a generic DCF for
+    production- or product-dependent archetypes), and it uses the same source
+    discipline as the standard operating branch: positive filed target metric,
+    complete filed equity bridge, live price with filed shares, and a current
+    peer record. Fallback-sourced peers leave the route input_required so every
+    peer is analyst-confirmed before it enters the median. Returns None when
+    even the multiple route cannot be staged, so the caller's original hard
+    block stays in place.
+
+    Keep the readiness keys and thresholds in sync with the standard operating
+    branch below (the source of truth for the multiple routes).
+    """
+    annual = canonical_financials.get("annual") if isinstance(canonical_financials, dict) else None
+    annual = annual if isinstance(annual, list) else []
+    latest_record = annual[-1] if annual and isinstance(annual[-1], dict) else {}
+    if not latest_record:
+        return None
+    shares_ready = bool(
+        _line_ready(latest_record.get("shares"))
+        and _positive_number((latest_record.get("shares") or {}).get("value"))
+    )
+    bridge_fields_ready = bool(
+        all(
+            _line_ready_or_not_applicable(latest_record.get(field))
+            for field in ("cash", "marketable_securities", "preferred_equity", "non_controlling_interest")
+        )
+        and _line_ready(latest_record.get("debt"))
+    )
+    market_current = bool(
+        market_status in {"live", "cached"}
+        and market.get("fallback_used") is not True
+        and _current_source(market.get("source"))
+        and _fresh_timestamp(market.get("fetched_at_ms"))
+    )
+    peer_ev_ebitda_multiple = _current_peer_median(
+        peers,
+        ticker=ticker,
+        market_status=market_status,
+        peer_status=peer_status,
+        peer_source=peer_source,
+        peer_fallback_used=peer_fallback_used,
+        peer_fetched_at_ms=peer_fetched_at_ms,
+        metric="ev_ebitda",
+    )
+    peer_ev_revenue_multiple = _current_peer_median(
+        peers,
+        ticker=ticker,
+        market_status=market_status,
+        peer_status=peer_status,
+        peer_source=peer_source,
+        peer_fallback_used=peer_fallback_used,
+        peer_fetched_at_ms=peer_fetched_at_ms,
+        metric="ev_revenue",
+    )
+    readiness: Dict[str, bool] = {
+        "filed_diluted_share_count": shares_ready,
+        "multiple_positive_filed_ebitda": bool(
+            _line_ready(latest_record.get("ebitda"))
+            and _positive_number((latest_record.get("ebitda") or {}).get("value"))
+        ),
+        "multiple_positive_filed_revenue": bool(
+            _line_ready(latest_record.get("revenue"))
+            and _positive_number((latest_record.get("revenue") or {}).get("value"))
+        ),
+        "multiple_source_ready_equity_bridge": bridge_fields_ready,
+        "multiple_live_price_and_filed_shares": bool(
+            market_current and _positive_number(market.get("current_price")) and shares_ready
+        ),
+        "multiple_three_current_ev_ebitda_peers": bool(
+            peer_ev_ebitda_multiple is not None and peer_ev_ebitda_multiple < 100
+        ),
+        "multiple_three_current_ev_revenue_peers": bool(
+            peer_ev_revenue_multiple is not None and peer_ev_revenue_multiple < 50
+        ),
+    }
+    readiness["ev_ebitda_route"] = all(readiness[key] for key in (
+        "multiple_positive_filed_ebitda",
+        "multiple_source_ready_equity_bridge",
+        "multiple_live_price_and_filed_shares",
+        "multiple_three_current_ev_ebitda_peers",
+    ))
+    readiness["revenue_multiple_route"] = all(readiness[key] for key in (
+        "multiple_positive_filed_revenue",
+        "multiple_source_ready_equity_bridge",
+        "multiple_live_price_and_filed_shares",
+        "multiple_three_current_ev_revenue_peers",
+    ))
+    if readiness["ev_ebitda_route"] or readiness["revenue_multiple_route"]:
+        preferred = "ev_ebitda" if readiness["ev_ebitda_route"] else "revenue_multiple"
+        return ModelEligibility(
+            company_type=company_type,
+            preferred_model=preferred,
+            operating_archetype=archetype,
+            required_input_readiness=readiness,
+            allowed_models=[preferred],
+            blocked_models=blocked_models,
+            supported_by_current_engine=True,
+        )
+    preferred = "ev_ebitda" if readiness["multiple_positive_filed_ebitda"] else "revenue_multiple"
+    target_ready = (
+        readiness["multiple_positive_filed_ebitda"]
+        if preferred == "ev_ebitda"
+        else readiness["multiple_positive_filed_revenue"]
+    )
+    # Mirror the standard operating branch: a positive filed target metric is
+    # enough to surface the route as input_required, so bridge or price gaps
+    # render as named requirements instead of an opaque unsupported block.
+    if target_ready:
+        return ModelEligibility(
+            company_type=company_type,
+            preferred_model=preferred,
+            operating_archetype=archetype,
+            required_input_readiness=readiness,
+            allowed_models=[preferred],
+            blocked_models=blocked_models,
+            supported_by_current_engine=False,
+        )
+    return None
 
 
 def _telecom_history_ready(annual: list[Any], field: str, *, strictly_positive: bool = False) -> bool:
@@ -1017,6 +1158,29 @@ def classify_company(
         else:
             missing_inputs = [name for name, ready in readiness.items() if not ready]
             blocked_reason = "Commercial bank model is blocked because required filed or live inputs are incomplete: " + ", ".join(missing_inputs) + "." if missing_inputs else ""
+        if subtype == "other_financial":
+            # Payment networks and credit-services issuers are operating
+            # companies at their core; when the commercial-bank model's inputs
+            # do not apply, a source-backed trading multiple is still honest.
+            fallback = _comparable_fallback(
+                ticker=ticker,
+                archetype=None,
+                company_type="operating",
+                canonical_financials=canonical_financials,
+                market=market,
+                market_status=market_status,
+                peers=peers,
+                peer_status=peer_status,
+                peer_source=peer_source,
+                peer_fallback_used=peer_fallback_used,
+                peer_fetched_at_ms=peer_fetched_at_ms,
+                blocked_models=[
+                    BlockedModel(model="bank_residual_income", reason=blocked_reason),
+                    BlockedModel(model="unlevered_dcf", reason="Bank debt is operating capital; FCFF enterprise-value DCF is not appropriate."),
+                ],
+            )
+            if fallback is not None:
+                return fallback
         return ModelEligibility(
             company_type="bank",
             preferred_model="bank_residual_income",
@@ -1429,6 +1593,26 @@ def classify_company(
             reason = "Energy and materials model is blocked because production, reserve, commodity-price, and sustaining-capex inputs or production routes are incomplete: " + ", ".join(missing) + "."
         else:
             reason = ""
+        if not eligible:
+            fallback = _comparable_fallback(
+                ticker=ticker,
+                archetype=archetype,
+                company_type="operating" if ebit > 0 else "high_growth",
+                canonical_financials=canonical_financials,
+                market=market,
+                market_status=market_status,
+                peers=peers,
+                peer_status=peer_status,
+                peer_source=peer_source,
+                peer_fallback_used=peer_fallback_used,
+                peer_fetched_at_ms=peer_fetched_at_ms,
+                blocked_models=[
+                    BlockedModel(model="integrated_energy_dcf", reason=reason),
+                    BlockedModel(model="unlevered_dcf", reason="Energy and materials require production, commodity-price, reserve, and segment-reinvestment schedules."),
+                ],
+            )
+            if fallback is not None:
+                return fallback
         return ModelEligibility(
             company_type="operating" if ebit > 0 else "high_growth",
             preferred_model="integrated_energy_dcf",
@@ -1590,6 +1774,26 @@ def classify_company(
             reason = "Mature-pharma product DCF is blocked because filed product, operating, market, or bridge inputs are incomplete: " + ", ".join(missing) + "."
         else:
             reason = ""
+        if not eligible:
+            fallback = _comparable_fallback(
+                ticker=ticker,
+                archetype=archetype,
+                company_type="operating" if ebit > 0 else "high_growth",
+                canonical_financials=canonical_financials,
+                market=market,
+                market_status=market_status,
+                peers=peers,
+                peer_status=peer_status,
+                peer_source=peer_source,
+                peer_fallback_used=peer_fallback_used,
+                peer_fetched_at_ms=peer_fetched_at_ms,
+                blocked_models=[
+                    BlockedModel(model="mature_pharma_product_dcf", reason=reason),
+                    BlockedModel(model="unlevered_dcf", reason="Pharmaceutical value depends on product-specific competition and loss-of-exclusivity schedules."),
+                ],
+            )
+            if fallback is not None:
+                return fallback
         return ModelEligibility(
             company_type="operating" if ebit > 0 else "high_growth",
             preferred_model="mature_pharma_product_dcf",
@@ -1728,6 +1932,22 @@ def classify_company(
     if archetype_block_reason:
         is_unprofitable = revenue > 0 and ebit <= 0
         preferred_model = "revenue_multiple" if archetype == "biotechnology" and is_unprofitable else "unlevered_dcf"
+        fallback = _comparable_fallback(
+            ticker=ticker,
+            archetype=archetype,
+            company_type="high_growth" if is_unprofitable else "operating",
+            canonical_financials=canonical_financials,
+            market=market,
+            market_status=market_status,
+            peers=peers,
+            peer_status=peer_status,
+            peer_source=peer_source,
+            peer_fallback_used=peer_fallback_used,
+            peer_fetched_at_ms=peer_fetched_at_ms,
+            blocked_models=[BlockedModel(model=preferred_model, reason=archetype_block_reason)],
+        )
+        if fallback is not None:
+            return fallback
         return ModelEligibility(
             company_type="high_growth" if is_unprofitable else "operating",
             preferred_model=preferred_model,
