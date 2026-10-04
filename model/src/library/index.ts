@@ -4,7 +4,6 @@ export {
   ModelLibrary,
   companyDir,
   currentWorkbookPath,
-  newId,
   normalizeTicker,
   revisionPath,
   sha256Hex,

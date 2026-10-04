@@ -151,7 +151,6 @@ def _map_model_sheet(workbook: Workbook, payload: dict[str, Any], model: dict[st
     ticker = str(company.get("ticker") or "").upper()
     name = str(company.get("name") or ticker or "Company")
     model = _record(model)
-    history = _record(model.get("history"))
     annual, years = _history(model)
     assumptions = _record(model.get("assumptions"))
     _validate_assumptions(assumptions, years[-1])

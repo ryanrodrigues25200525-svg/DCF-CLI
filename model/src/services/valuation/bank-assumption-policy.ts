@@ -100,7 +100,7 @@ function buildSourcedBankAssumptionValues(
   const provision = requireFiledValue(latest.bank.provision_for_credit_losses, 'provision_for_credit_losses', latest.year);
   const distributions = requireFiledValue(latest.bank.common_equity_distributions, 'common_equity_distributions', latest.year);
   const netIncome = requireFiledValue(latest.netIncome, 'net_income', latest.year);
-  const taxRate = requireFiledValue(latest.taxRate, 'tax_rate', latest.year);
+  requireFiledValue(latest.taxRate, 'tax_rate', latest.year);
   if (netIncome <= 0) throw new Error(`FY${latest.year} net income must be positive to source the bank payout ratio.`);
   if (provision < 0) throw new Error(`FY${latest.year} provision for credit losses is a release; an analyst must set a forecast provision rate.`);
   if (minimumCet1Ratio !== null && (minimumCet1Ratio <= 0 || minimumCet1Ratio >= 1)) {

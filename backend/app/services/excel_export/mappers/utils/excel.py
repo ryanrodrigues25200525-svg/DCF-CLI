@@ -22,7 +22,7 @@ from .constants import (
     SHEET_DCF_BEAR,
     SHEET_DCF_BULL,
 )
-from .core import _first_float, _scale, _to_float
+from .core import _scale, _to_float
 from .financial import (
     _forecast_map,
     _infer_revenue_growth_rate,

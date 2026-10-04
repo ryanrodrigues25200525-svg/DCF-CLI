@@ -109,12 +109,12 @@ function buildInsuranceAssumptions(
   const priorYearReserveDevelopmentRate = developmentLines.reduce((sum, value) => sum + value, 0) / developmentLines.length;
   const lossRatio = filedValue(latest.loss_ratio, 'loss_ratio', latestYear);
   const expenseRatio = filedValue(latest.expense_ratio, 'expense_ratio', latestYear);
-  const latestPriorYearDevelopment = filedValue(latest.prior_year_reserve_development, 'prior_year_reserve_development', latestYear);
+  filedValue(latest.prior_year_reserve_development, 'prior_year_reserve_development', latestYear);
   const latestExpenses = filedValue(latest.underwriting_expenses, 'underwriting_expenses', latestYear);
   const latestUnderwritingIncome = filedValue(latest.underwriting_income, 'underwriting_income', latestYear);
   const latestLosses = filedValue(latest.losses_and_lae, 'losses_and_lae', latestYear);
-  const currentOtherOperations = filedValue(latest.other_operations_pretax_income, 'other_operations_pretax_income', latestYear);
-  const currentOtherAdjustments = filedValue(latest.other_pretax_adjustments, 'other_pretax_adjustments', latestYear);
+  filedValue(latest.other_operations_pretax_income, 'other_operations_pretax_income', latestYear);
+  filedValue(latest.other_pretax_adjustments, 'other_pretax_adjustments', latestYear);
   const currentOtherRevenue = filedValue(latest.net_investment_income, 'net_investment_income', latestYear);
   const currentLossReserves = allowMissingLatestUnpaidLossReserves
     ? null

@@ -148,13 +148,6 @@ function filedValue(line: CanonicalFinancialLine | undefined, name: string, year
   return line.value;
 }
 
-function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`XOM ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
-
 function baseOperatingNetIncome(history: EnergyHistoricalYear): number {
   const energy = history.energy;
   return filedValue(energy.upstream_earnings_gaap, 'Upstream segment earnings', history.year)

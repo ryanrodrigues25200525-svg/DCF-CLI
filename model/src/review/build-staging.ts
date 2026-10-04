@@ -30,7 +30,7 @@ const SERVICE_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SERVICE_DIR, '..', '..', '..');
 const SERVICE_BACKEND_DIR = resolve(REPO_ROOT, 'backend');
 
-export function manifestMeta(unified: NativeUnifiedPayload): {
+function manifestMeta(unified: NativeUnifiedPayload): {
   route: string;
   currency: string | null;
   unitScale: string | null;
@@ -65,7 +65,7 @@ export function snapshotJson(ticker: string, meta: ReturnType<typeof manifestMet
 /** Source metadata for a staged candidate: normalized snapshot + watch only.
  *  The accepted workbook, manifest, companies row, and revision history are
  *  untouched until a human approves the candidate. */
-export function saveSourceMetadata(
+function saveSourceMetadata(
   lib: ModelLibrary,
   ticker: string,
   meta: ReturnType<typeof manifestMeta>,

@@ -168,7 +168,6 @@ def _map_model_sheet(workbook: Workbook, payload: dict[str, Any], model: dict[st
     annual, base_year = _history_rows(model)
     assumptions = _record(model.get("assumptions"))
     _validate_assumptions(assumptions)
-    manager_lines = ("beginning_aum", "net_flows", "realizations", "acquisitions", "market_change", "fx_change", "scope_change")
 
     sheet.merge_cells("A1:M1")
     sheet["A1"] = f"{name} ({ticker}) — AUM and Fee-Driven FCFF Valuation"

@@ -206,7 +206,6 @@ def _map_model_sheet(workbook: Workbook, payload: dict[str, Any], reit_model: di
         cell.fill = _HEADER_FILL
         cell.alignment = Alignment(wrap_text=True, vertical="center")
 
-    field_map = {field: (row, label, number_format) for field, row, label, number_format in _HISTORICAL_LINES}
     for field, row, label, number_format in _HISTORICAL_LINES:
         sheet.cell(row=row, column=1, value=label).font = _BODY_FONT
         for column, item in enumerate(annual, start=2):

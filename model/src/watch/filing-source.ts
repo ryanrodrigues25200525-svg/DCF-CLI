@@ -83,9 +83,3 @@ export function extractFilingInfo(unified: unknown): FilingInfo | null {
   }
   return { accession: latest.accession, filedDate: latest.filedDate };
 }
-
-/** Identity comparison for two filing references (null-safe). */
-export function filingsEqual(a: FilingInfo | null, b: FilingInfo | null): boolean {
-  if (a === null || b === null) return a === b;
-  return a.accession === b.accession && a.filedDate === b.filedDate;
-}

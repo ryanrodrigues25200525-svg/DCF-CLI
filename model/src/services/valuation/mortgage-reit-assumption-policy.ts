@@ -146,7 +146,7 @@ export function buildSourcedMortgageReitModelAssumptions(
   if (costOfEquity < 0.02 || costOfEquity > 0.4 || terminalGrowthRate >= costOfEquity) {
     throw new Error('Mortgage-REIT cost of equity must exceed terminal growth and remain within supported bounds.');
   }
-  const commonDividendsPerShare = filedValue(latestMortgageReit.common_dividends_per_share, 'common dividends per share', latest.year);
+  filedValue(latestMortgageReit.common_dividends_per_share, 'common dividends per share', latest.year);
   const sources: MortgageReitAssumptionSources = {
     assetYield: `FY${latest.year} filed weighted-average investment/TBA asset yield. ${lineSource(latestMortgageReit.average_asset_yield, latest.year)}`,
     assetYieldChange: 'Analyst input: 0.0 percentage-point annual change in asset yield; edit for the forward interest-rate and reinvestment case.',

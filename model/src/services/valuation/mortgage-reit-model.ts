@@ -126,13 +126,6 @@ function filedValue(line: CanonicalFinancialLine | undefined, name: string, year
   return line.value;
 }
 
-function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`Mortgage-REIT ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
-
 function validateHistory(history: MortgageReitHistoricalData): ValidatedHistory {
   if (history.annual.length !== 4 || history.years.length !== 4) {
     throw new Error('Mortgage-REIT model requires an opening book-value observation and three operating years.');

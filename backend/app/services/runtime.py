@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.infrastructure.repository import FinancialRepository, repository
+from app.infrastructure.repository import repository
 from app.services import edgar, finance
 from app.services.excel_export.exporter import export_dcf_excel
 from app.models.schemas import CompanyProfile

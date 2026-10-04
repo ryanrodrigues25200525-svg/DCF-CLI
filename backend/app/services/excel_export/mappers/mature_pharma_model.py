@@ -40,7 +40,7 @@ def _source_line(line: Any, name: str, year: int) -> dict[str, Any]:
     record = _record(line)
     if record.get('source') not in {'sec_native', 'derived'}:
         raise ValueError(f'FY{year} PFE workbook input {name} is missing or ambiguous.')
-    value = _finite(record.get('value'), name)
+    _finite(record.get('value'), name)
     sources = record.get('sources')
     if not isinstance(sources, list) or not sources or any(not _record(source).get('accession') or not _record(source).get('filed') for source in sources):
         raise ValueError(f'FY{year} PFE workbook input {name} has incomplete SEC lineage.')
@@ -485,131 +485,6 @@ def apply_mature_pharma_model(workbook: Workbook, payload: dict[str, Any]) -> No
     sheet.freeze_panes = f'F{header_row+1}'
     sheet.print_area = f'A1:Q{sensitivity_start+6}'
     sheet.print_title_rows = f'1:{header_row}'
-
-
-def apply_incomplete_mature_pharma_model(
-    workbook: Workbook,
-    payload: dict[str, Any],
-    input_cells: dict[str, dict[str, str]],
-) -> None:
-    """Link missing product sales to their dynamic product/year rows and gate valuation outputs."""
-    sheet = workbook['Mature Pharma Model']
-    model = _record(payload.get('maturePharmaModel'))
-    history = _record(model.get('history'))
-    years = history.get('years') if isinstance(history.get('years'), list) else []
-    if len(years) != 3:
-        raise ValueError('Incomplete mature-pharma workbook requires three annual product periods.')
-    requirements = payload.get('requiredInputs')
-    requirements = requirements if isinstance(requirements, list) else []
-    status_ref = "'Input Required'!$B$3"
-    missing_product_rows: list[tuple[str, int]] = []
-    for requirement in requirements:
-        if not isinstance(requirement, dict) or not str(requirement.get('key') or '').startswith('product_revenue:'):
-            continue
-        label = str(requirement.get('label') or '')
-        product_name = label.split(' — ', 1)[-1].strip()
-        fiscal_year = requirement.get('fiscalYear')
-        if not product_name or not isinstance(fiscal_year, int) or fiscal_year not in years:
-            raise ValueError('Product revenue input must identify a product and fiscal year.')
-        input_identity = f"{requirement['key']}:{fiscal_year}"
-        destination = input_cells.get(input_identity)
-        if not destination or destination.get('sheet') != 'Input Required':
-            raise ValueError(f"Mature-pharma workbook has no editable input for {product_name} FY{fiscal_year}.")
-        product_row = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == product_name), None)
-        if product_row is None:
-            raise ValueError(f"Mature-pharma workbook product row is missing for {product_name}.")
-        year_column = get_column_letter(3 + years.index(fiscal_year))
-        value_ref = f"'Input Required'!{destination['cell']}"
-        cell = sheet[f'{year_column}{product_row}']
-        cell.value = f'=IF(AND({status_ref}="READY",ISNUMBER({value_ref}),{value_ref}>=0),{value_ref}/1000000,"")'
-        cell.font = _FORMULA_FONT
-        cell.fill = _FORMULA_FILL
-        cell.number_format = _MONEY_FORMAT
-        missing_product_rows.append((product_name, product_row))
-
-    if not missing_product_rows:
-        raise ValueError('Incomplete mature-pharma workbook requires a product_revenue input.')
-
-    other_row = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Other products / alliance / royalty revenue'), None)
-    total_row = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Total revenue'), None)
-    reconciliation_row = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Product-table revenue reconciliation check'), None)
-    if other_row is None or total_row is None or reconciliation_row is None:
-        raise ValueError('Mature-pharma workbook is missing its product-revenue reconciliation rows.')
-    product_start = 31
-    product_end = total_row - 2
-    for column in 'CDE':
-        sheet[f'{column}{other_row}'] = f'=IF({status_ref}<>"READY","",{column}{other_row+2}-SUM({column}{product_start+1}:{column}{product_end}))'
-        sheet[f'{column}{total_row}'] = f'=IF({status_ref}<>"READY","",SUM({column}{product_start+1}:{column}{product_end})+{column}{other_row})'
-        sheet[f'{column}{reconciliation_row}'] = f'=IF({status_ref}<>"READY","",{column}{total_row}-{column}{other_row+2})'
-
-    product_assumptions = {
-        str(item.get('productName')): _record(item)
-        for item in _record(model.get('assumptions')).get('products', [])
-        if isinstance(item, dict)
-    }
-    for product_name, product_row in missing_product_rows:
-        assumption = product_assumptions.get(product_name, {})
-        if assumption.get('preLoeGrowthRate') is not None:
-            continue
-        c, d, e = (f'{column}{product_row}' for column in 'CDE')
-        cagr = f'IF({c}>0,({e}/{c})^(1/2)-1,0)'
-        latest_growth = f'IF({d}>0,{e}/{d}-1,0)'
-        prior_growth = f'IF({c}>0,{d}/{c}-1,0)'
-        current_growth = f'IF({d}>0,{e}/{d}-1,0)'
-        direction_reversal = f'AND(({prior_growth})*({current_growth})<0,MAX(ABS({prior_growth}),ABS({current_growth}))>25%)'
-        covid_product = 'covid' in f"{product_name} {sheet[f'B{product_row}'].value or ''}".lower()
-        use_latest = f'OR({"TRUE" if covid_product else "FALSE"},{direction_reversal},{cagr}<-75%,{cagr}>150%)'
-        formula = f'=IF({status_ref}<>"READY","",IF({use_latest},IF(AND({latest_growth}>=-75%,{latest_growth}<=150%),{latest_growth},0),{cagr}))'
-        sheet[f'O{product_row}'] = formula
-        sheet[f'O{product_row}'].font = _FORMULA_FONT
-        sheet[f'O{product_row}'].fill = _FORMULA_FILL
-        sheet[f'O{product_row}'].number_format = _PERCENT_FORMAT
-
-    assumptions = _record(model.get('assumptions'))
-    if assumptions.get('otherRevenueGrowth') is None:
-        c, d, e = (f'{column}{other_row}' for column in 'CDE')
-        cagr = f'IF({c}>0,({e}/{c})^(1/2)-1,0)'
-        recent = f'IF({d}>0,{e}/{d}-1,0)'
-        sheet['B22'] = f'=IF({status_ref}<>"READY","",IF(AND({c}>0,ABS({cagr})<=50%),{cagr},IF(AND({d}>0,ABS({recent})<=50%),{recent},0)))'
-        sheet['B22'].font = _FORMULA_FONT
-        sheet['B22'].fill = _FORMULA_FILL
-        sheet['B22'].number_format = _PERCENT_FORMAT
-
-    for product_row in range(product_start + 1, product_end + 1):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{product_row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
-    for row in (other_row, total_row):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
-
-    cashflow_start = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'EBIT = revenue × editable EBIT margin'), None)
-    if cashflow_start is None:
-        raise ValueError('Mature-pharma workbook is missing its FCFF schedule.')
-    for row in range(cashflow_start, cashflow_start + 10):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
-    valuation_header = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Enterprise-to-common-equity valuation'), None)
-    if valuation_header is None:
-        raise ValueError('Mature-pharma workbook is missing its valuation schedule.')
-    for row in range(valuation_header + 1, valuation_header + 9):
-        if row == valuation_header + 6:
-            continue
-        cell = sheet[f'B{row}']
-        if isinstance(cell.value, str) and cell.value.startswith('='):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
-    sensitivity_header = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Implied value per share sensitivity — WACC vs. terminal growth'), None)
-    if sensitivity_header is not None:
-        for row in range(sensitivity_header + 2, sensitivity_header + 7):
-            for column in 'CDEFG':
-                cell = sheet[f'{column}{row}']
-                if isinstance(cell.value, str) and cell.value.startswith('='):
-                    cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
 
 
 def apply_incomplete_mature_pharma_model(

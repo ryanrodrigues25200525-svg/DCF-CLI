@@ -1,6 +1,6 @@
 import type {DCFResults} from '@/core/types';
 
-export const UTILITY_FORECAST_YEARS = 5;
+const UTILITY_FORECAST_YEARS = 5;
 
 export interface UtilityModelAssumptions {
   baseYear: number;

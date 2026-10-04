@@ -8,18 +8,6 @@ interface MarketAssumptionInputs {
     mrp?: number;
 }
 
-const CAPITAL_DRIVER_KEYS: Array<keyof Assumptions> = [
-    'riskFreeRate',
-    'equityRiskPremium',
-    'beta',
-    'costOfDebt',
-    'leverageTarget',
-    'taxRate',
-    'currentDebt',
-    'annualDebtRepayment',
-    'modelType',
-];
-
 function getLastNumber(values: ReadonlyArray<number | null> | undefined, fallback = 0): number {
     if (!Array.isArray(values) || values.length === 0) return fallback;
     const value = values[values.length - 1];
@@ -170,54 +158,4 @@ export function buildBaseAssumptions(
     );
     const templated = options.useIndustryTemplate === false ? initial : applyDetectedTemplate(initial, profile);
     return normalizeAssumptions(templated, historicals.sharesOutstanding || 0, historicals);
-}
-
-export function applyScenarioAssumptions(
-    type: 'base' | 'conservative' | 'aggressive',
-    base: Assumptions,
-    currentModelType: Assumptions['modelType'],
-    currentForecastYears: number,
-    sharesOutstanding: number,
-    historicals?: HistoricalData | null,
-): Assumptions {
-    const scenario = type === 'base'
-        ? base
-        : type === 'conservative'
-            ? {
-                ...base,
-                revenueGrowth: base.revenueGrowth * (base.revenueGrowth > 0.15 ? 0.6 : base.revenueGrowth > 0.05 ? 0.75 : 0.85),
-                revenueGrowthStage1: base.revenueGrowth * (base.revenueGrowth > 0.15 ? 0.6 : base.revenueGrowth > 0.05 ? 0.75 : 0.85),
-                ebitMargin: base.ebitMargin * (base.ebitMargin < 0.10 ? 0.7 : 0.85),
-                wacc: base.wacc + 0.01,
-                beta: (base.beta || 1.2) + 0.1,
-                costOfDebt: (base.costOfDebt || 0.05) + 0.01,
-                dividendGrowthRateStage1: (base.dividendGrowthRateStage1 || 0.05) * 0.7,
-                dividendGrowthRateStage2: (base.dividendGrowthRateStage2 || 0.03) * 0.8,
-            }
-            : {
-                ...base,
-                revenueGrowth: Math.min(base.revenueGrowth * (base.revenueGrowth > 0.15 ? 1.15 : base.revenueGrowth > 0.05 ? 1.25 : 1.4), 0.5),
-                revenueGrowthStage1: Math.min(base.revenueGrowth * (base.revenueGrowth > 0.15 ? 1.15 : base.revenueGrowth > 0.05 ? 1.25 : 1.4), 0.5),
-                ebitMargin: Math.min(base.ebitMargin * (base.ebitMargin > 0.20 ? 1.1 : 1.2), 0.4),
-                wacc: Math.max(0.07, base.wacc - 0.01),
-                beta: Math.max(0.5, (base.beta || 1.2) - 0.1),
-                costOfDebt: Math.max(0.02, (base.costOfDebt || 0.05) - 0.005),
-                dividendGrowthRateStage1: Math.min((base.dividendGrowthRateStage1 || 0.05) * 1.3, 0.2),
-                dividendGrowthRateStage2: Math.min((base.dividendGrowthRateStage2 || 0.03) * 1.2, 0.1),
-            };
-
-    return normalizeAssumptions(
-        {
-            ...scenario,
-            modelType: currentModelType || 'unlevered',
-            forecastYears: currentForecastYears,
-            discountRateMode: 'derived',
-        },
-        sharesOutstanding,
-        historicals,
-    );
-}
-
-export function shouldSwitchToDerivedDiscountRate(key: keyof Assumptions): boolean {
-    return CAPITAL_DRIVER_KEYS.includes(key);
 }

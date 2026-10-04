@@ -1,7 +1,7 @@
 import type {DCFResults} from '@/core/types';
 import type {LifeInsuranceFilingFact} from '@/core/types/native';
 
-export const LIFE_INSURANCE_FORECAST_YEARS = 5;
+const LIFE_INSURANCE_FORECAST_YEARS = 5;
 
 export type LifeInsuranceEarningsBasis =
   | 'after_tax_adjusted_earnings_available_to_common'

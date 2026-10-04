@@ -555,7 +555,6 @@ export function buildExportPayload(
         waccLoopMode?: WaccLoopMode;
         scenarioConfig?: ScenarioConfig;
     };
-    const waccLoopMode = assumptionExtensions.waccLoopMode;
     const scenarioConfig = assumptionExtensions.scenarioConfig;
     const bullScenarioDeltas: ScenarioDeltaConfig = {
         ...DEFAULT_BULL_SCENARIO_DELTAS,

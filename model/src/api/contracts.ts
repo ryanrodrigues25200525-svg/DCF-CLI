@@ -1,6 +1,5 @@
 import type {
   AssetManagerCanonicalFinancials,
-  AssetManagerHistoricalData,
   AssetManagerHistoricalYear,
   BlockedModel,
   BankCanonicalFinancials,
