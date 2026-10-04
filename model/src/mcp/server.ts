@@ -96,6 +96,16 @@ function tableColumns(db: DatabaseLike, table: string): string[] {
   } catch { return []; }
 }
 
+/** True when `table` exists. Asks sqlite_master, not pragma_table_info: the
+ *  pragma returns a table's COLUMN names, so it can never contain the table
+ *  name itself. */
+function tableExists(db: DatabaseLike, table: string): boolean {
+  try {
+    return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+      .all(table).length > 0;
+  } catch { return false; }
+}
+
 /** Case-insensitive lookup so minor schema renames never crash the server. */
 function pick(row: Row, ...keys: string[]): unknown {
   for (const k of keys) if (k in row) return row[k];
@@ -716,7 +726,7 @@ async function toolCandidateInspect(args: Row): Promise<unknown> {
   // existing means a writer already migrated; only then use the full view.
   const ro = openDb(modelsDir, true);
   try {
-    if (ro && !tableColumns(ro, 'candidates').includes('candidates')) {
+    if (ro && !tableExists(ro, 'candidates')) {
       return { ticker, pendingCandidate: null };
     }
   } finally {

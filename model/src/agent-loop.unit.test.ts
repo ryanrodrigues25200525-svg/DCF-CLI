@@ -47,6 +47,62 @@ describe('agent autonomy loop (real services, no network)', () => {
     }
   }, 180_000);
 
+  it('returns a staged candidate from MCP candidate_inspect', async () => {
+    // Regression guard for #37. The legacy-library guard asked
+    // pragma_table_info() whether a table named 'candidates' existed. That
+    // pragma returns a table's COLUMN names, so it never contains the table
+    // name: the condition was always true and candidate_inspect answered
+    // null for every library, current ones included. Nothing caught it because
+    // the library-level probes bypass this guard and no MCP test called the
+    // tool.
+    const staged = await probe('stage-inspect.ts', ['TST']);
+    try {
+      expect(staged.status, staged.stderr).toBe(0);
+      const { root, candidateId } = staged.json as { root: string; candidateId: string };
+      const call = await probe('mcp-call.ts', [
+        '--tool', 'candidate_inspect',
+        '--args', JSON.stringify({ ticker: 'TST' }),
+        '--env', `DCF_MODELS_DIR=${root}`,
+      ]);
+      expect(call.status, call.stderr).toBe(0);
+      const raw = call.json as { content?: Array<{ text?: string }> };
+      const parsed = JSON.parse(raw.content?.[0]?.text ?? '{}') as {
+        ticker: string;
+        pendingCandidate: { id: string; status: string } | null;
+      };
+      expect(parsed.ticker).toBe('TST');
+      expect(parsed.pendingCandidate?.id, 'candidate_inspect must surface the staged candidate').toBe(candidateId);
+      expect(parsed.pendingCandidate?.status).toBe('pending');
+    } finally {
+      const root = (staged.json as { root?: string })?.root;
+      if (root) await rm(root, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('answers null for a legacy library with no candidates table', async () => {
+    // The other half of the #37 guard: a library predating the candidates
+    // table must still answer null rather than construct (and migrate) a store.
+    const legacy = await probe('legacy-library.ts', []);
+    try {
+      expect(legacy.status, legacy.stderr).toBe(0);
+      const { dir } = legacy.json as { dir: string };
+      const call = await probe('mcp-call.ts', [
+        '--tool', 'candidate_inspect',
+        '--args', JSON.stringify({ ticker: 'TST' }),
+        '--env', `DCF_MODELS_DIR=${dir}`,
+      ]);
+      expect(call.status, call.stderr).toBe(0);
+      const raw = call.json as { content?: Array<{ text?: string }> };
+      const parsed = JSON.parse(raw.content?.[0]?.text ?? '{}') as {
+        pendingCandidate: { id: string } | null;
+      };
+      expect(parsed.pendingCandidate, 'legacy library must answer null').toBeNull();
+    } finally {
+      const dir = (legacy.json as { dir?: string })?.dir;
+      if (dir) await rm(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   it('runs the review hook bounded with env propagation and output cap', async () => {
     const ok = await probe('hook-run.ts', ['--cmd', '/usr/bin/true']);
     expect(ok.status, ok.stderr).toBe(0);

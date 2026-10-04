@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP `candidate_inspect` returned `pendingCandidate: null` for every library
+  (#37). The legacy-library guard asked `pragma_table_info()` whether a table
+  named `candidates` existed, but that pragma returns a table's *column* names,
+  which never include the table name — so the condition was always true and the
+  tool always short-circuited to null. It now asks `sqlite_master`. The guard's
+  actual purpose is preserved: a library predating the candidates table still
+  answers null instead of constructing (and migrating) a store.
 - Comparable-valuation exports ship exactly the peer set that produced the
   selected median, fixing a median-reconciliation 500 on live builds
   (NVDA, META).
