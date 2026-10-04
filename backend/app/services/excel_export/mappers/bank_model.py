@@ -7,6 +7,7 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready, require_input_destination
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -443,15 +444,11 @@ def apply_incomplete_bank_model(
 ) -> None:
     """Link the missing CET1 floor to the bank model and withhold dependent outputs."""
     sheet = workbook["Bank Model"]
-    requirements = payload.get("requiredInputs")
-    requirements = requirements if isinstance(requirements, list) else []
-    requirement = next((item for item in requirements if isinstance(item, dict) and item.get("key") == "minimum_cet1_ratio"), None)
-    if requirement is None:
-        raise ValueError("Incomplete bank workbook requires a minimum_cet1_ratio input.")
-    identity = f"minimum_cet1_ratio:{requirement.get('fiscalYear') or requirement.get('asOfDate') or ''}"
-    destination = input_cells.get(identity)
-    if not destination or destination.get("sheet") != "Input Required":
-        raise ValueError("Incomplete bank workbook has no editable minimum CET1 input cell.")
+    requirement, destination = require_input_destination(
+        payload, input_cells, "minimum_cet1_ratio",
+        missing_message="Incomplete bank workbook requires a minimum_cet1_ratio input.",
+        destination_message="Incomplete bank workbook has no editable minimum CET1 input cell.",
+    )
     value_ref = f"'Input Required'!{destination['cell']}"
     status_ref = "'Input Required'!$B$3"
     sheet["B33"] = f'=IF(AND(ISNUMBER({value_ref}),{value_ref}>0,{value_ref}<1),{value_ref},"")'
@@ -470,7 +467,4 @@ def apply_incomplete_bank_model(
     ]
     formula_cells.extend(f"B{row}" for row in (*range(74, 79), 80))
     formula_cells.extend(f"{column}{row}" for row in range(87, 92) for column in "CDEFGHI")
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith("="):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)

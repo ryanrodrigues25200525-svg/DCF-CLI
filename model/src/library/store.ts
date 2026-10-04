@@ -45,7 +45,7 @@ export function utcNow(): string {
   return new Date().toISOString();
 }
 
-export function newId(prefix: string): string {
+function newId(prefix: string): string {
   const clean = prefix.trim().length > 0 ? prefix.trim() : 'id';
   return `${clean}_${Date.now().toString(36)}${randomBytes(4).toString('hex')}`;
 }

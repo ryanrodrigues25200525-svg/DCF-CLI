@@ -9,6 +9,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 
+from app.services.valuation.model_eligibility import COMPARABLE_VALUATION_METHODS
+
 from .review import _map_data_review_sheet
 from .utils import _resolve_amount_scale_divisor, _scale, _to_float
 
@@ -27,7 +29,7 @@ def _latest_metric(income: dict[str, Any], years: list[Any], keys: list[str]) ->
 
 def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
     valuation_model = str(payload.get("valuationModel") or "")
-    if valuation_model not in {"ev_ebitda", "revenue_multiple"}:
+    if valuation_model not in COMPARABLE_VALUATION_METHODS:
         raise ValueError("Comparable valuation workbook requires EV/EBITDA or EV/Revenue.")
     comparable_source = payload.get("comparableModel") if isinstance(payload.get("comparableModel"), dict) else {}
     if comparable_source.get("method") != valuation_model:
@@ -256,7 +258,7 @@ def apply_incomplete_comparable_model(workbook: Workbook, payload: dict[str, Any
     from .incomplete import apply_incomplete_workbook
 
     valuation_model = str(payload.get("valuationModel") or "")
-    if valuation_model not in {"ev_ebitda", "revenue_multiple"}:
+    if valuation_model not in COMPARABLE_VALUATION_METHODS:
         raise ValueError("Incomplete comparable workbook requires EV/EBITDA or EV/Revenue.")
     comparable = payload.get("comparableModel") if isinstance(payload.get("comparableModel"), dict) else {}
     if comparable.get("method") != valuation_model:

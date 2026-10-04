@@ -138,7 +138,7 @@ export function findBackendPython(): string | null {
  * SIGKILL kill signal guarantees the probe returns even when the candidate
  * ignores SIGTERM or leaves a hung child process behind.
  */
-export const SOFFICE_VERSION_PROBE_TIMEOUT_MS = 5_000;
+const SOFFICE_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 function sofficeWorks(candidate: string, timeoutMs: number): boolean {
   try {
@@ -192,10 +192,6 @@ export function findSoffice(options?: { probeTimeoutMs?: number }): string | nul
     if (existsSync(c) && isExecutableFile(c) && sofficeWorks(c, probeTimeoutMs)) return c;
   }
   return null;
-}
-
-export function checkEngines(): { python: string | null; soffice: string | null } {
-  return { python: findBackendPython(), soffice: findSoffice() };
 }
 
 // ---------------------------------------------------------------- python ----

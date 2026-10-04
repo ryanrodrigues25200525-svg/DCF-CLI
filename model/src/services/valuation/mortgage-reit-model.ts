@@ -1,5 +1,6 @@
 import type {DCFResults, MortgageReitHistoricalData, MortgageReitHistoricalYear} from '@/core/types';
 import type {CanonicalFinancialLine, MortgageReitCanonicalFinancials} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface MortgageReitAssumptionSources {
   assetYield: string;
@@ -117,22 +118,8 @@ interface ValidatedHistory {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} mortgage-REIT input ${name} is missing or ambiguous.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} mortgage-REIT input ${name} has incomplete SEC provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'mortgage-REIT');
 }
-
-function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`Mortgage-REIT ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
-
 function validateHistory(history: MortgageReitHistoricalData): ValidatedHistory {
   if (history.annual.length !== 4 || history.years.length !== 4) {
     throw new Error('Mortgage-REIT model requires an opening book-value observation and three operating years.');

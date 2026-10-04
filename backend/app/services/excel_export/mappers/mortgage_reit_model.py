@@ -7,6 +7,7 @@ from typing import Any
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready, require_input_destination
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -484,15 +485,11 @@ def apply_incomplete_mortgage_reit_model(
 ) -> None:
     """Expose the missing filed repo balance and withhold dependent outputs."""
     sheet = workbook['Mortgage REIT Model']
-    requirements = payload.get('requiredInputs')
-    requirements = requirements if isinstance(requirements, list) else []
-    requirement = next((item for item in requirements if isinstance(item, dict) and item.get('key') == 'average_repo_borrowings'), None)
-    if requirement is None:
-        raise ValueError('Incomplete mortgage REIT workbook requires an average_repo_borrowings input.')
-    identity = f"average_repo_borrowings:{requirement.get('fiscalYear') or requirement.get('asOfDate') or ''}"
-    destination = input_cells.get(identity)
-    if not destination or destination.get('sheet') != 'Input Required':
-        raise ValueError('Incomplete mortgage REIT workbook has no editable average repo borrowings input cell.')
+    requirement, destination = require_input_destination(
+        payload, input_cells, 'average_repo_borrowings',
+        missing_message='Incomplete mortgage REIT workbook requires an average_repo_borrowings input.',
+        destination_message='Incomplete mortgage REIT workbook has no editable average repo borrowings input cell.',
+    )
     value_ref = f"'Input Required'!{destination['cell']}"
     status_ref = "'Input Required'!$B$3"
     sheet['M35'] = 'Filed average repo borrowings (USD mm)'
@@ -513,7 +510,4 @@ def apply_incomplete_mortgage_reit_model(
     formula_cells.extend(f'B{row}' for row in (*range(69, 73), 74))
     formula_cells.extend(f'{column}{row}' for row in range(79, 84) for column in 'CDEFG')
     formula_cells.append('E14')
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith('='):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)

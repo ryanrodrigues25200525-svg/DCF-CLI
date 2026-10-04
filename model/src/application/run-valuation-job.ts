@@ -41,6 +41,7 @@ import { formatCliInputRequiredSuccess, formatCliSuccess, getAnnualHistoryDisclo
 import { calculateRoutedValuation } from '@/services/valuation/router';
 import { buildOperatingModelProfile } from '@/services/valuation/operating-model';
 import type { ComparableValuationInput } from '@/services/valuation/multiple-model';
+import { isComparableValuationMethod } from '@/services/valuation/multiple-model';
 import { buildSourcedBankModelAssumptions, buildSourcedIncompleteBankModelAssumptions } from '@/services/valuation/bank-assumption-policy';
 import { buildBankModelExportPayload } from '@/services/exporters/excel/bank-payload';
 import { buildSourcedInsuranceModelAssumptions, buildSourcedIncompleteInsuranceModelAssumptions } from '@/services/valuation/insurance-assumption-policy';
@@ -64,6 +65,7 @@ import type { MaturePharmaModelAssumptions } from '@/services/valuation/mature-p
 import { buildIncompleteMaturePharmaModelExportData, buildMaturePharmaModelExportPayload } from '@/services/exporters/excel/mature-pharma-payload';
 import { selectBiotechAssetsForRnpv, selectOtherBiotechAssetsForRnpv } from '@/services/valuation/biotech-rnpv-model';
 import { buildIncompleteLifeInsuranceModelExportData } from '@/services/exporters/excel/life-insurance-payload';
+import { median } from '@/services/valuation/source-guards';
 
 interface ValuationJobResultBase {
   profile: CompanyProfile;
@@ -140,12 +142,6 @@ function normalizePeers(rawPeers: unknown): ComparableCompany[] {
       isSelected: peer.isSelected === undefined ? true : Boolean(peer.isSelected),
     } satisfies ComparableCompany];
   });
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function currentSource(value: string | null | undefined, name: string): string {
@@ -757,7 +753,7 @@ function buildIncompleteInputRequirements(
       }
       continue;
     }
-    if (['ev_ebitda', 'revenue_multiple'].includes(model)
+    if (isComparableValuationMethod(model)
       && ['three_current_source_ready_peers', 'ev_ebitda_route', 'revenue_multiple_route',
         'multiple_three_current_ev_ebitda_peers', 'multiple_three_current_ev_revenue_peers'].includes(gap.key)) continue;
     // The opposite route's target-metric gate must not leak into this route:
@@ -1600,7 +1596,7 @@ export function buildIncompleteExportPayload(
     && peerFetchedAtMs > 0 && peerFetchedAtMs <= Date.now()
     && Date.now() - peerFetchedAtMs <= 24 * 60 * 60 * 1000,
   );
-  const comparableMethod = model === 'ev_ebitda' || model === 'revenue_multiple' ? model : undefined;
+  const comparableMethod = isComparableValuationMethod(model) ? model : undefined;
   const comparableTarget = comparableMethod === 'ev_ebitda'
     ? historicals.ebitda.at(-1)
     : comparableMethod === 'revenue_multiple' ? historicals.revenue.at(-1) : undefined;
@@ -1907,8 +1903,8 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
   let operatingSourceNotes: string[] = [];
   let operatingBetaSource: string | undefined;
   let comparableValuationInput: ComparableValuationInput | undefined;
-  let comparablePeerTickers: string[] | undefined;
-  if (eligibility.preferred_model === 'ev_ebitda' || eligibility.preferred_model === 'revenue_multiple') {
+let comparablePeerTickers: string[] | undefined;
+  if (isComparableValuationMethod(eligibility.preferred_model)) {
     const comparable = buildComparableValuationInput(
       data,
       ticker,

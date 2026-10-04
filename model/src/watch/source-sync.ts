@@ -59,9 +59,6 @@ export const REPORT_FORMS = new Set([
   'S-1', 'S-1/A', '424B1', '424B2', '424B3', '424B4', '424B5',
 ]);
 
-/** Backwards-compatible alias. */
-export const FINANCIAL_FORMS = REPORT_FORMS;
-
 function normalizeCik(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const digits = value.replace(/\D/g, '');
@@ -124,19 +121,6 @@ export function resolveMonitorFiling(
     return true;
   });
   return {latest: selectLatestFiling(candidates), rejectedRowCount, responseCik};
-}
-
-/**
- * Latest valuation-relevant filing: newest financial-form entry. Falls back to
- * the overall latest (e.g. only Form 4s in range) and then to null (caller
- * falls back to fact inference). Never relabels facts; only selects the
- * monitor identity.
- */
-export function selectLatestFinancialFiling(filings: CompanyFiling[]): { filing: CompanyFiling; financial: boolean } | null {
-  const financial = selectLatestFiling(filings.filter((filing) => FINANCIAL_FORMS.has(filing.form.toUpperCase())));
-  if (financial) return {filing: financial, financial: true};
-  const overall = selectLatestFiling(filings);
-  return overall ? {filing: overall, financial: false} : null;
 }
 
 /**
@@ -246,17 +230,4 @@ export async function syncFilingSnapshot(
   } finally {
     lib.close();
   }
-}
-
-/** Snapshot age/staleness for filing_latest. Threshold is informational, not a gate. */
-export function snapshotStaleness(fetchedAt: string | null, nowMs = Date.now(), staleAfterHours = 24): {
-  fetchedAt: string | null;
-  ageHours: number | null;
-  stale: boolean;
-} {
-  if (!fetchedAt) return {fetchedAt, ageHours: null, stale: true};
-  const parsed = Date.parse(fetchedAt);
-  if (Number.isNaN(parsed)) return {fetchedAt, ageHours: null, stale: true};
-  const ageHours = Math.max(0, (nowMs - parsed) / 3_600_000);
-  return {fetchedAt, ageHours, stale: ageHours > staleAfterHours};
 }

@@ -1,8 +1,8 @@
 import type {DCFResults} from '@/core/types';
 import type {PipelineAssetNativeFact} from '@/core/types/native';
 
-export const BIOTECH_FORECAST_YEARS = 10;
-export const BIOTECH_PIPELINE_FORECAST_YEARS = 35;
+const BIOTECH_FORECAST_YEARS = 10;
+const BIOTECH_PIPELINE_FORECAST_YEARS = 35;
 
 export interface BiotechAssetRnpvInput {
   assetId: string;

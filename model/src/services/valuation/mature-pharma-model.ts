@@ -1,5 +1,5 @@
 import type {DCFResults, PharmaHistoricalData, PharmaHistoricalYear} from '@/core/types';
-import type {CanonicalFinancialLine, PharmaPatentDisclosure} from '@/core/types/native';
+import type {CanonicalFinancialLine} from '@/core/types/native';
 
 export interface MaturePharmaProductAssumption {
   productName: string;

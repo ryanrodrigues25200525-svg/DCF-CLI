@@ -1,17 +1,11 @@
 import type {CanonicalFinancialLine, NativeUnifiedPayload} from '@/core/types/native';
 import type {EnergyHistoricalData, EnergyHistoricalYear} from '@/core/types';
 import type {IncompleteIntegratedEnergyAssumptions, IntegratedEnergyAssumptions, IntegratedEnergyAssumptionSources} from './integrated-energy-model';
+import { median as medianOf, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} XOM energy input ${name} is missing or ambiguous.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} XOM energy input ${name} lacks SEC filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'XOM energy');
 }
-
 function filedOrZero(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
   if (line?.source === 'not_applicable' && line.sources.length > 0
     && line.sources.every((source) => source.accession && source.filed)) return 0;
@@ -26,12 +20,8 @@ function lineSource(line: CanonicalFinancialLine | undefined, name: string, year
 }
 
 function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`XOM ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  return medianOf(values, {label: 'XOM', name});
 }
-
 function freshTimestamp(value: number | null | undefined, name: string): void {
   const now = Date.now();
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > now || now - value > 24 * 60 * 60 * 1000) {

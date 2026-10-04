@@ -7,20 +7,22 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { ModelLibrary, companyDir, currentWorkbookPath } from '@/library/store';
+import { findBackendPython } from '@/workbook/xlsx';
 
 const root = await mkdtemp(join(tmpdir(), 'dcf-mcpmx-'));
 const lib = new ModelLibrary(root);
 const out: Record<string, string> = {};
 try {
-  const python = '/Users/ryanrodrigues/Documents/DCF CLI/backend/.venv/bin/python';
+  const python = findBackendPython();
+  if (!python) throw new Error('no python with openpyxl');
   async function workbook(ticker: string, corrupt: boolean): Promise<string> {
     const wbPath = join(root, `${ticker}.xlsx`);
-    const mk = spawnSync(python, ['-c',
+    const mk = spawnSync(python as string, ['-c',
       `import openpyxl, sys
 wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Model"
 ws["A1"] = 1; ws["A2"] = "=A1+1"
 wb.save(sys.argv[1])`, wbPath], { encoding: 'utf8' });
-    if (mk.status !== 0) throw new Error('mk failed');
+    if (mk.status !== 0) throw new Error('mk failed: ' + (mk.stderr || mk.stdout || `python=${python}`));
     const bytes = await readFile(wbPath);
     const hash = createHash('sha256').update(bytes).digest('hex');
     const dir = companyDir(root, ticker);

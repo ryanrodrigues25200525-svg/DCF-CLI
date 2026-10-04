@@ -42,7 +42,7 @@ export interface ProposalPreview {
 
 /** Canonical hash of the proposed edits: what the reviewer saw is what
  *  gets applied. Sheet/cell are canonicalized; priors are observations. */
-export function proposalPreviewHash(changes: ProposedChange[]): string {
+function proposalPreviewHash(changes: ProposedChange[]): string {
   const canonical = changes.map((c) => ({
     sheet: String(c.sheet).toUpperCase(),
     cell: String(c.cell).toUpperCase(),

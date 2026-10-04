@@ -563,32 +563,3 @@ export function getPrecedentTransactionsBySector(sector: string): PrecedentTrans
     return (PRECEDENT_TRANSACTIONS_DATABASE[mappedSector] || PRECEDENT_TRANSACTIONS_DATABASE['SOFTWARE'])
         .map(t => ({ ...t, isSelected: true }));
 }
-
-// Calculate transaction statistics
-export function calculateTransactionStats(transactions: PrecedentTransaction[]) {
-    const selected = transactions.filter(t => t.isSelected);
-
-    const evRevenueValues = selected.map(t => t.evRevenue).filter(v => v > 0);
-    const evEbitdaValues = selected.map(t => t.evEbitda).filter(v => v > 0 && v < 200); // Filter outliers
-    const premiumValues = selected.map(t => t.premiumPaid).filter(v => v > 0);
-
-    const median = (arr: number[]) => {
-        if (arr.length === 0) return 0;
-        const sorted = [...arr].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    };
-
-    const mean = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-
-    return {
-        meanEvRevenue: mean(evRevenueValues),
-        medianEvRevenue: median(evRevenueValues),
-        meanEvEbitda: mean(evEbitdaValues),
-        medianEvEbitda: median(evEbitdaValues),
-        meanPremium: mean(premiumValues),
-        medianPremium: median(premiumValues),
-        count: selected.length,
-        totalValue: selected.reduce((sum, t) => sum + t.transactionValue, 0),
-    };
-}

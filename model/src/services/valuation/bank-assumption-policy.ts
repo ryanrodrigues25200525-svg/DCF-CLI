@@ -1,20 +1,11 @@
 import type { BankHistoricalData, NativeUnifiedPayload } from '@/core/types';
 import type { CanonicalFinancialLine } from '@/core/types/native';
 import type { BankModelAssumptions } from './bank-model';
+import { requireFiledValue as requireFiledValueCore } from '@/services/valuation/source-guards';
 
 function requireFiledValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || (line.source !== 'sec_native' && line.source !== 'derived')) {
-    throw new Error(`FY${year} bank assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} bank assumption input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} bank assumption input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValueCore(line, name, year, 'bank assumption');
 }
-
 function filedLineSource(line: CanonicalFinancialLine, year: number): string {
   const sources = line.sources.map((source) =>
     `${source.concept || line.concept || 'derived'} accession ${source.accession} filed ${source.filed}`,
@@ -100,7 +91,7 @@ function buildSourcedBankAssumptionValues(
   const provision = requireFiledValue(latest.bank.provision_for_credit_losses, 'provision_for_credit_losses', latest.year);
   const distributions = requireFiledValue(latest.bank.common_equity_distributions, 'common_equity_distributions', latest.year);
   const netIncome = requireFiledValue(latest.netIncome, 'net_income', latest.year);
-  const taxRate = requireFiledValue(latest.taxRate, 'tax_rate', latest.year);
+  requireFiledValue(latest.taxRate, 'tax_rate', latest.year);
   if (netIncome <= 0) throw new Error(`FY${latest.year} net income must be positive to source the bank payout ratio.`);
   if (provision < 0) throw new Error(`FY${latest.year} provision for credit losses is a release; an analyst must set a forecast provision rate.`);
   if (minimumCet1Ratio !== null && (minimumCet1Ratio <= 0 || minimumCet1Ratio >= 1)) {

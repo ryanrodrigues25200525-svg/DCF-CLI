@@ -1,5 +1,6 @@
 import type {DCFResults, TelecomHistoricalData, TelecomHistoricalYear} from '@/core/types';
 import type {CanonicalFinancialLine, TelecomCanonicalFinancials} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface TelecomModelAssumptionSources {
   postpaidGrossAddRate: string;
@@ -155,28 +156,8 @@ function finite(value: number, name: string): number {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} telecom input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} telecom input ${name} has no finite filed or derived value.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} telecom input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'telecom');
 }
-
-function optionalBridgeValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (line?.source === 'not_applicable') {
-    if (!line.method.trim() || !line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-      throw new Error(`FY${year} telecom ${name} has an unproven not-applicable state.`);
-    }
-    return 0;
-  }
-  return filedValue(line, name, year);
-}
-
 function requiredTelecomLine(
   telecom: TelecomCanonicalFinancials | null,
   field: keyof TelecomCanonicalFinancials,
@@ -384,13 +365,6 @@ function validateAssumptions(assumptions: TelecomModelAssumptions): void {
   }
 }
 
-function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`Telecom ${name} requires finite source history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
-}
-
 function nonnegative(value: number, name: string): number {
   if (!Number.isFinite(value) || value < 0) throw new Error(`Telecom ${name} forecast cannot be negative or non-finite.`);
   return value;
@@ -402,7 +376,6 @@ export function calculateTelecomValuation(
 ): TelecomModelResult {
   const validated = validateHistory(history);
   validateAssumptions(assumptions);
-  const actuals = validated.recent.slice(-3);
   const latest = validated.latest;
   const latestTelecom = latest.telecom;
   if (!latestTelecom) throw new Error('Latest telecom source table is unavailable.');

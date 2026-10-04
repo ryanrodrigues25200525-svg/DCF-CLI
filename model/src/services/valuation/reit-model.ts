@@ -1,5 +1,6 @@
 import type { DCFResults, ReitHistoricalData } from '@/core/types';
 import type { CanonicalFinancialLine } from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface ReitAssumptionSources {
   sameStoreNoiGrowth: string;
@@ -71,18 +72,8 @@ function requireFinite(value: number, name: string): number {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} REIT input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} REIT input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} REIT input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'REIT');
 }
-
 function validateHistory(history: ReitHistoricalData): {
   year: number;
   coreFfo: number;

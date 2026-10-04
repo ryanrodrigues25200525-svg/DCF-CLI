@@ -1,6 +1,5 @@
 import type {
   AssetManagerCanonicalFinancials,
-  AssetManagerHistoricalData,
   AssetManagerHistoricalYear,
   BlockedModel,
   BankCanonicalFinancials,
@@ -47,6 +46,7 @@ import type { AssetManagerModelAssumptions } from '@/services/valuation/asset-ma
 import type { TelecomModelAssumptions } from '@/services/valuation/telecom-model';
 import type { MortgageReitModelAssumptions } from '@/services/valuation/mortgage-reit-model';
 import type { IntegratedEnergyAssumptions } from '@/services/valuation/integrated-energy-model';
+import { COMPARABLE_VALUATION_METHODS, isComparableValuationMethod } from '@/services/valuation/multiple-model';
 
 const COMPANY_TYPES: readonly CompanyType[] = [
   'operating', 'bank', 'insurance', 'reit', 'utility', 'asset_manager', 'high_growth', 'distressed',
@@ -2242,13 +2242,13 @@ function parseIncompleteDcfExportPayload(payload: Record<string, unknown>): Inco
     throw new TypeError('input-required life-insurance exports need source-backed segment earnings and capital disclosures');
   }
 
-  const isComparableRoute = valuationModel === 'ev_ebitda' || valuationModel === 'revenue_multiple';
+  const isComparableRoute = isComparableValuationMethod(valuationModel);
   const comparableInputRequirements = requiredInputs.filter((input) => input.key.startsWith('peer_'));
   let comparableModel: IncompleteComparableModelExportData | undefined;
   if (payload.comparableModel !== undefined && payload.comparableModel !== null) {
     if (!isComparableRoute) throw new TypeError('export.comparableModel is only valid for multiple valuation routes');
     const model = requireRecord(payload.comparableModel, 'export.comparableModel');
-    const method = parseEnum(model.method, ['ev_ebitda', 'revenue_multiple'] as const, 'export.comparableModel.method');
+    const method = parseEnum(model.method, COMPARABLE_VALUATION_METHODS, 'export.comparableModel.method');
     if (method !== valuationModel) throw new TypeError('export.comparableModel.method must match export.valuationModel');
     const targetMetric = requireFiniteNumber(model.targetMetric, 'export.comparableModel.targetMetric');
     if (targetMetric <= 0) throw new TypeError('export.comparableModel.targetMetric must be positive');
@@ -2357,8 +2357,7 @@ export function parseDcfExportPayload(value: unknown): DcfWorkbookPayload {
   if (!['units', 'thousands', 'millions', 'billions'].includes(String(company.unitsScale))) {
     throw new TypeError('export.company.unitsScale is not a supported scale');
   }
-  const comparableRoutes = ['ev_ebitda', 'revenue_multiple'] as const;
-  if (comparableRoutes.includes(valuationModel as typeof comparableRoutes[number])) {
+  if (isComparableValuationMethod(valuationModel)) {
     const multiple = requireRecord(payload.comparableModel, 'export.comparableModel');
     if (multiple.method !== valuationModel) {
       throw new TypeError('export.comparableModel.method must match export.valuationModel');
