@@ -44,6 +44,14 @@ jobs:
           backend/.venv/bin/python -m pip install --upgrade pip
           backend/.venv/bin/python -m pip install "openpyxl==3.1.5"
 
+      # Despite the *.unit.test.ts name, this suite exercises real services:
+      # proposal preview/apply recalculates the workbook, and apply-service
+      # fails closed without soffice. It still needs no network and no secrets.
+      - name: Install LibreOffice Calc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -280,9 +280,10 @@ npm run typecheck
 npm run test:model
 ```
 
-`test:model` is the hermetic suite. It needs no network, secrets, or LibreOffice.
-Its workbook probes do need a Python interpreter with `openpyxl`
-(`npm run install:all` provides it). This is what CI runs on every pull request.
+`test:model` is the offline suite. It needs no network and no `EDGAR_IDENTITY`,
+and it is what CI runs on every pull request. Despite the `*.unit.test.ts`
+name it drives real services, so it does need a Python interpreter with
+`openpyxl` and LibreOffice (`npm run install:all` provides the Python side).
 
 The live suite is separate because it needs network access, `EDGAR_IDENTITY`,
 Python dependencies, and LibreOffice:

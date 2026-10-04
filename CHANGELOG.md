@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Hermetic test suite and GitHub Actions CI. `npm test` now runs only the
-  `*.unit.test.ts` suites, which need no network, secrets, or LibreOffice. It
-  does need a Python interpreter with `openpyxl`, which its workbook probes use
-  to build synthetic `.xlsx` files. A new `ci.yml` gates every push and pull
-  request on typecheck, that suite, and the secret scan.
+- Offline test suite and GitHub Actions CI. `npm test` now runs only the
+  `*.unit.test.ts` suites, which need no network and no `EDGAR_IDENTITY`. They
+  still drive real services, so they need a Python interpreter with `openpyxl`
+  and LibreOffice; CI installs exactly those. A new `ci.yml` gates every push
+  and pull request on typecheck, that suite, and the secret scan.
 - Fixed two workbook probes that hardcoded an absolute developer-specific
   Python path (`model/src/test-probes/proposal-mcp-matrix.ts`,
   `proposal-preview-matrix.ts`), so they failed on any machine but the

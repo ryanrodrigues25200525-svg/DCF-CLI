@@ -85,12 +85,12 @@ optional `DCF_CACHE_DB_PATH` from the caller.
 
 ## Data privacy
 
-The suites are split. `npm run test:model` is hermetic: no network, no
-`EDGAR_IDENTITY`, no LibreOffice. It still needs a Python interpreter with
-`openpyxl`, which its workbook probes use to build synthetic workbooks; install
-it with `npm run install:all`. The live suites need network access,
-`EDGAR_IDENTITY`, and LibreOffice; run them with `npm run test:live`, which
-preflights those dependencies and fails with a named reason if one is missing.
+The suites are split. `npm run test:model` is offline: no network, no
+`EDGAR_IDENTITY`. It still drives real services, so it needs a Python
+interpreter with `openpyxl` and LibreOffice; install the Python side with
+`npm run install:all`. The live suites additionally need network access and
+`EDGAR_IDENTITY`; run them with `npm run test:live`, which preflights those
+dependencies and fails with a named reason if one is missing.
 The live suite
 covers named complete and input-required routes; it does not claim universal
 sector coverage. It uses temporary test caches and does not write or print the
