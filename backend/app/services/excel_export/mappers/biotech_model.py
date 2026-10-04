@@ -78,7 +78,6 @@ def _build_biotech_model(
         risk_free = biotech.get("riskFreeRate")
         erp = biotech.get("equityRiskPremium")
         beta = biotech.get("beta")
-        as_of_date = biotech.get("asOfDate")
         assumption_sources = _record(biotech.get("assumptionSources"))
         assumptions = {}
     else:
@@ -90,7 +89,6 @@ def _build_biotech_model(
         risk_free = assumptions.get("riskFreeRate")
         erp = assumptions.get("equityRiskPremium")
         beta = assumptions.get("beta")
-        as_of_date = assumptions.get("asOfDate")
         assumption_sources = _record(assumptions.get("assumptionSources"))
     if not isinstance(base_year, int) or forecast_years != 10:
         raise ValueError("Biotech workbook requires a filed fiscal base year and ten forecast years.")

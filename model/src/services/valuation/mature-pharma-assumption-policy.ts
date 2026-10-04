@@ -1,22 +1,14 @@
 import type {CanonicalFinancialLine, NativeUnifiedPayload, PharmaPatentDisclosure} from '@/core/types/native';
 import type {PharmaHistoricalData} from '@/core/types';
 import type {IncompleteMaturePharmaModelAssumptions, IncompleteMaturePharmaProductAssumption, MaturePharmaModelAssumptions, MaturePharmaProductAssumption} from './mature-pharma-model';
+import { median as medianOf, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)
-    || !line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} PFE ${name} is missing or lacks SEC filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'PFE');
 }
-
 function median(values: number[], name: string): number {
-  if (values.length === 0 || values.some((value) => !Number.isFinite(value))) throw new Error(`PFE ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const midpoint = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[midpoint]! : (sorted[midpoint - 1]! + sorted[midpoint]!) / 2;
+  return medianOf(values, {label: 'PFE', name});
 }
-
 function requiredPositive(value: number | null | undefined, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`PFE mature-pharma DCF requires positive ${name}.`);
   return value;

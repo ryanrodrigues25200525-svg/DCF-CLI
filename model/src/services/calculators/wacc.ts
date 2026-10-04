@@ -30,7 +30,7 @@ export interface WaccResult {
  * Damodaran-style mapping for Large Cap (> $5B) spreads
  * Updated January 2025: Credit spreads tightened from 2022-2023 highs
  */
-export const CREDIT_SPREADS = [
+const CREDIT_SPREADS = [
     { threshold: 8.5, spread: 0.0050, rating: 'AAA' },
     { threshold: 6.5, spread: 0.0060, rating: 'AA' },
     { threshold: 5.5, spread: 0.0070, rating: 'A+' },
@@ -48,7 +48,7 @@ export const CREDIT_SPREADS = [
 /**
  * Calculate cost of debt based on synthetic credit rating
  */
-export function calculateSyntheticSpread(icr: number): { spread: number; rating: string } {
+function calculateSyntheticSpread(icr: number): { spread: number; rating: string } {
     const match = CREDIT_SPREADS.find(s => icr > s.threshold) || CREDIT_SPREADS[CREDIT_SPREADS.length - 1];
     return { spread: match.spread, rating: match.rating };
 }
@@ -56,7 +56,7 @@ export function calculateSyntheticSpread(icr: number): { spread: number; rating:
 /**
  * Unlever Beta: βu = βl / (1 + (1 - t) * (D/E))
  */
-export function unleverBeta(leveredBeta: number, debt: number, equity: number, taxRate: number): number {
+function unleverBeta(leveredBeta: number, debt: number, equity: number, taxRate: number): number {
     if (equity <= 0) return leveredBeta;
     return leveredBeta / (1 + (1 - taxRate) * (debt / equity));
 }
@@ -64,7 +64,7 @@ export function unleverBeta(leveredBeta: number, debt: number, equity: number, t
 /**
  * Lever Beta: βl = βu * (1 + (1 - t) * (D/E))
  */
-export function leverBeta(unleveredBeta: number, debt: number, equity: number, taxRate: number): number {
+function leverBeta(unleveredBeta: number, debt: number, equity: number, taxRate: number): number {
     if (equity <= 0) return unleveredBeta;
     return unleveredBeta * (1 + (1 - taxRate) * (debt / equity));
 }

@@ -39,7 +39,6 @@ interface ToolDef { name: string; description: string; inputSchema: Row }
 type McpErr = { code: string; message: string };
 
 const SERVER_VERSION = '2.1.0';
-const PREVIEW_LIMIT = 4000;
 const DB_CANDIDATES = ['library.db', 'models.db', 'dcf-library.db', 'dcf.db', 'index.db'];
 const PROPOSALS_DDL = `CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT,
 ticker TEXT NOT NULL, summary TEXT NOT NULL, changes_json TEXT NOT NULL, base_revision_hash TEXT,

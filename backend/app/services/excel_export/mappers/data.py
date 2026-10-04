@@ -269,7 +269,6 @@ def _map_cashflow_working_capital_schedule(
             continue
         dcf_column = DCF_TIMELINE_COLUMNS[idx]
         prior_recalc = RECALC_COLUMNS[idx - 1]
-        prior_dcf = DCF_TIMELINE_COLUMNS[idx - 1]
         dcf_ref = f"'{SHEET_DCF_BASE}'!"
         # Project the displayed base-case schedule from editable assumptions and prior-period ratios.
         _force_set(data_recalc, f"{column}12", f"={prior_recalc}12*(1+{dcf_ref}$F$14)")

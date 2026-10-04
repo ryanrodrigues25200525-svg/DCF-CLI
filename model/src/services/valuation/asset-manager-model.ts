@@ -1,5 +1,6 @@
 import type {AssetManagerHistoricalData, AssetManagerHistoricalYear, DCFResults} from '@/core/types';
 import type {AssetManagerCanonicalFinancials, CanonicalFinancialLine} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface AssetManagerModelAssumptionSources {
   marketReturnRate: string;
@@ -142,18 +143,8 @@ function finite(value: number, name: string): number {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} asset-manager input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} asset-manager input ${name} has no finite reported or derived value.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} asset-manager input ${name} has incomplete SEC provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'asset-manager');
 }
-
 function optionalFiledValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
   if (!line) throw new Error(`FY${year} asset-manager input ${name} is unavailable.`);
   if (line.source === 'missing') return 0;

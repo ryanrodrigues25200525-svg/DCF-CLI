@@ -6,6 +6,7 @@ from typing import Any
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -168,7 +169,6 @@ def _map_model_sheet(workbook: Workbook, payload: dict[str, Any], model: dict[st
     annual, base_year = _history_rows(model)
     assumptions = _record(model.get("assumptions"))
     _validate_assumptions(assumptions)
-    manager_lines = ("beginning_aum", "net_flows", "realizations", "acquisitions", "market_change", "fx_change", "scope_change")
 
     sheet.merge_cells("A1:M1")
     sheet["A1"] = f"{name} ({ticker}) — AUM and Fee-Driven FCFF Valuation"
@@ -742,7 +742,4 @@ def apply_incomplete_asset_manager_model(
         formula_cells.extend(f"{column}{row}" for row in (*range(5, 15), *range(17, 31), *range(33, 48)))
     formula_cells.extend(f"B{row}" for row in (51, *range(53, 64), 65))
     formula_cells.extend(f"{column}{row}" for row in range(71, 76) for column in "CDEFG")
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith("="):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)

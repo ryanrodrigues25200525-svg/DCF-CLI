@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -64,6 +64,37 @@ def _validation_for(cell: str, requirement: dict[str, Any]) -> DataValidation:
     validation.error = "Enter a numeric value within the stated model bounds."
     validation.add(cell)
     return validation
+
+
+def require_input_destination(
+    payload: dict[str, Any],
+    input_cells: dict[str, dict[str, str]],
+    key: str,
+    *,
+    missing_message: str,
+    destination_message: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Find the staged Input Required destination for a required input key."""
+    requirements = payload.get("requiredInputs")
+    requirements = requirements if isinstance(requirements, list) else []
+    requirement = next(
+        (item for item in requirements if isinstance(item, dict) and item.get("key") == key),
+        None,
+    )
+    if requirement is None:
+        raise ValueError(missing_message)
+    destination = input_cells.get(_identity(requirement))
+    if not destination or destination.get("sheet") != "Input Required":
+        raise ValueError(destination_message)
+    return requirement, destination
+
+
+def gate_formulas_on_ready(sheet: Any, status_ref: str, cell_refs: Iterable[str]) -> None:
+    """Withhold formula outputs until the Input Required status reads READY."""
+    for cell_ref in cell_refs:
+        cell = sheet[cell_ref]
+        if isinstance(cell.value, str) and cell.value.startswith("="):
+            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
 
 
 def apply_incomplete_input_register(

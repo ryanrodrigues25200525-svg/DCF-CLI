@@ -339,8 +339,3 @@ export interface DCFResults {
     modelWarning?: string;
     valuationBasis?: 'enterprise' | 'equity';
 }
-
-export interface ModelDiagnostic {
-    status: 'pass' | 'warning' | 'fail';
-    msg: string;
-}

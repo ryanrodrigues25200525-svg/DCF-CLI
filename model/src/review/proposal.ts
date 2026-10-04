@@ -1,5 +1,3 @@
-import type { FilingInfo } from '../watch/watch-service';
-
 /** One proposed workbook edit, fully sourced to a filed SEC fact. */
 export interface ProposedChange {
   sheet: string;
@@ -22,19 +20,6 @@ export interface ProposalDraft {
   summary: string;
   changes: ProposedChange[];
   createdAt: string;
-}
-
-export interface FilingRef {
-  accession: string;
-  filedDate: string;
-}
-
-export interface ProposalFact {
-  sheet: string;
-  cell: string;
-  priorValue?: number | string | boolean | null;
-  proposedValue?: number | string | boolean | null;
-  concept: string;
 }
 
 const TICKER_PATTERN = /^[A-Z0-9.-]{1,10}$/;
@@ -110,37 +95,6 @@ export function validateProposalDraft(draft: ProposalDraft): string[] {
     if (contentError) errors.push(`${label} ${contentError}.`);
   });
   return errors;
-}
-
-/**
- * Map normalized SEC facts onto proposal changes. Every change carries
- * `source` + `accession` so invented valuation numbers cannot pass validation.
- */
-export function buildProposalFromFiling(
-  ticker: string,
-  baseHash: string,
-  filing: FilingRef | FilingInfo,
-  facts: ProposalFact[],
-  rationalePrefix: string,
-): ProposalDraft {
-  const normalized = ticker.trim().toUpperCase();
-  const prefix = rationalePrefix.trim() === '' ? 'Filed fact update' : rationalePrefix.trim();
-  const changes: ProposedChange[] = facts.map((fact) => ({
-    sheet: fact.sheet,
-    cell: fact.cell,
-    priorValue: fact.priorValue ?? null,
-    proposedValue: fact.proposedValue ?? null,
-    rationale: `${prefix}: ${fact.concept} (filed ${filing.filedDate}).`,
-    source: `SEC accession ${filing.accession}`,
-    accession: filing.accession,
-  }));
-  return {
-    ticker: normalized,
-    baseRevisionHash: baseHash,
-    summary: `Update ${normalized} from SEC filing ${filing.accession} (${facts.length} input${facts.length === 1 ? '' : 's'}).`,
-    changes,
-    createdAt: new Date().toISOString(),
-  };
 }
 
 function formatCellValue(value: number | string | boolean | null | undefined): string {

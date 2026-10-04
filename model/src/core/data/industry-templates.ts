@@ -26,7 +26,7 @@ interface IndustryPresetValues {
   terminalExitMultiple: number;
 }
 
-export const INDUSTRY_PRESETS: Record<IndustryPresetKey, { name: string; assumptions: IndustryPresetValues }> = {
+const INDUSTRY_PRESETS: Record<IndustryPresetKey, { name: string; assumptions: IndustryPresetValues }> = {
   "tech-hardware": {
     name: "Technology - Hardware",
     assumptions: {

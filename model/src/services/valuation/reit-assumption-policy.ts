@@ -1,19 +1,10 @@
 import type { CanonicalFinancialLine, NativeUnifiedPayload, ReitHistoricalData } from '@/core/types';
 import type { IncompleteReitModelAssumptions, ReitModelAssumptions } from './reit-model';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} REIT assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} REIT assumption input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} REIT assumption input ${name} has incomplete SEC provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'REIT assumption');
 }
-
 function lineSource(line: CanonicalFinancialLine, year: number): string {
   return `FY${year} ${line.method}: ${line.sources.map((source) =>
     `${source.concept || line.concept || 'derived input'} accession ${source.accession} filed ${source.filed} ${source.fiscal_period || ''}`.trim(),

@@ -2,18 +2,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { BackendApiClient, type BackendPort, type FilingsListResult } from '@/api/backend-client';
-import type { NativeUnifiedPayload } from '@/core/types';
-import type { DcfWorkbookPayload } from '@/services/exporters/excel/types';
-import { LocalBackendProcess } from '@/infrastructure/local-backend-process';
-import { assertOutputDoesNotExist, writeWorkbook } from '@/infrastructure/output-writer';
-import { formatValuationJobSuccess, runValuationJob } from '@/application/run-valuation-job';
-import { getReviewHook } from '@/library/config';
-import { buildSourceSnapshot } from '@/watch/source-snapshot';
-import { extractFilingInfo } from '@/watch/filing-source';
-import { resolveMonitorFiling } from '@/watch/source-sync';
+import { dirname, join } from 'node:path';
 import {
   ModelLibrary,
   companyDir,
@@ -54,9 +43,9 @@ export interface CandidateAutoReview {
 }
 
 /** Bound so a hanging hook can never block staging: the hook is advisory. */
-export const REVIEW_HOOK_TIMEOUT_MS = 120_000;
+const REVIEW_HOOK_TIMEOUT_MS = 120_000;
 /** Stored hook output cap; longer output is truncated. */
-export const REVIEW_HOOK_OUTPUT_LIMIT = 8192;
+const REVIEW_HOOK_OUTPUT_LIMIT = 8192;
 
 export interface HookResult {
   command: string;
@@ -147,10 +136,10 @@ export interface CandidatePayload {
 /** Minimum substantive review text: a real verification result per the
  *  build-gate spec is a paragraph (freshness, sources, formulas, summary),
  *  so a few-word rubber stamp is rejected with a clear error. */
-export const MIN_VERIFICATION_CHARS = 40;
+const MIN_VERIFICATION_CHARS = 40;
 const MAX_VERIFICATION_CHARS = 20000;
 
-export function candidateDir(root: string, ticker: string, candidateId: string): string {
+function candidateDir(root: string, ticker: string, candidateId: string): string {
   return join(root, 'companies', normalizeTicker(ticker), 'candidates', candidateId);
 }
 
@@ -161,7 +150,7 @@ export function candidateWorkbookPath(root: string, ticker: string, candidateId:
 /** Best-effort mapped-period label from a normalized source snapshot.
  *  Returns null when no fiscal period key is present (caller reports it
  *  as unconfirmed rather than inventing one). */
-export function describeMappedPeriod(snapshotJson: string | null | undefined): string | null {
+function describeMappedPeriod(snapshotJson: string | null | undefined): string | null {
   if (!snapshotJson) return null;
   let parsed: unknown;
   try {
@@ -205,7 +194,7 @@ export async function writeBytesToPath(bytes: Uint8Array, path: string): Promise
 /** Engine recalculation gate shared by staging: LibreOffice recalculates a
  *  staged copy and inspection must show sheets, formulas, and zero cached
  *  errors before anything is stored. Throws otherwise. */
-export async function recalculateAndValidate(root: string, engineBytes: Uint8Array): Promise<Uint8Array> {
+async function recalculateAndValidate(_root: string, engineBytes: Uint8Array): Promise<Uint8Array> {
   const python = findBackendPython();
   if (!python) {
     throw new Error('No Python with openpyxl is available (backend/.venv); cannot validate the workbook before staging.');

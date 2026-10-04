@@ -1456,7 +1456,6 @@ def classify_company(
                 return False
             product_names: set[str] | None = None
             for row in recent:
-                pharma = row.get("pharma") if isinstance(row, dict) else None
                 products = pharma_products_for_year(row)
                 if not products:
                     return False

@@ -1,20 +1,11 @@
 import type { InsuranceHistoricalData, NativeUnifiedPayload } from '@/core/types';
 import type { CanonicalFinancialLine } from '@/core/types/native';
 import type { InsuranceModelAssumptions } from './insurance-model';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || (line.source !== 'sec_native' && line.source !== 'derived')) {
-    throw new Error(`FY${year} P&C assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} P&C assumption input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} P&C assumption input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'P&C assumption');
 }
-
 function lineSource(line: CanonicalFinancialLine, year: number): string {
   return `FY${year} ${line.method}: ${line.sources.map((source) =>
     `${source.concept || line.concept || 'derived'} accession ${source.accession} filed ${source.filed}`,
@@ -109,12 +100,12 @@ function buildInsuranceAssumptions(
   const priorYearReserveDevelopmentRate = developmentLines.reduce((sum, value) => sum + value, 0) / developmentLines.length;
   const lossRatio = filedValue(latest.loss_ratio, 'loss_ratio', latestYear);
   const expenseRatio = filedValue(latest.expense_ratio, 'expense_ratio', latestYear);
-  const latestPriorYearDevelopment = filedValue(latest.prior_year_reserve_development, 'prior_year_reserve_development', latestYear);
+  filedValue(latest.prior_year_reserve_development, 'prior_year_reserve_development', latestYear);
   const latestExpenses = filedValue(latest.underwriting_expenses, 'underwriting_expenses', latestYear);
   const latestUnderwritingIncome = filedValue(latest.underwriting_income, 'underwriting_income', latestYear);
   const latestLosses = filedValue(latest.losses_and_lae, 'losses_and_lae', latestYear);
-  const currentOtherOperations = filedValue(latest.other_operations_pretax_income, 'other_operations_pretax_income', latestYear);
-  const currentOtherAdjustments = filedValue(latest.other_pretax_adjustments, 'other_pretax_adjustments', latestYear);
+  filedValue(latest.other_operations_pretax_income, 'other_operations_pretax_income', latestYear);
+  filedValue(latest.other_pretax_adjustments, 'other_pretax_adjustments', latestYear);
   const currentOtherRevenue = filedValue(latest.net_investment_income, 'net_investment_income', latestYear);
   const currentLossReserves = allowMissingLatestUnpaidLossReserves
     ? null

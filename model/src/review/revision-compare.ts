@@ -34,8 +34,8 @@ export interface WorkbookDiff {
 }
 
 /** Default detail cap; MCP may request 1..COMPARE_MAX_LIMIT. */
-export const REVISION_DIFF_DEFAULT_LIMIT = 200;
-export const REVISION_DIFF_MAX_LIMIT = 500;
+const REVISION_DIFF_DEFAULT_LIMIT = 200;
+const REVISION_DIFF_MAX_LIMIT = 500;
 
 const DIFF_SCRIPT = `
 import json, sys

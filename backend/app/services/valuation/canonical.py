@@ -1441,7 +1441,6 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         rows.extend(statement_rows[key])
 
     years = _years(rows)
-    key_metrics = native_financials.get("key_metrics") or {}
 
     revenue = _pick_series(
         income_rows,

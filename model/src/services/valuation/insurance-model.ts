@@ -221,7 +221,6 @@ export function calculateInsuranceValuation(
   const costOfEquity = validateAssumptions(assumptions);
   const {year: lastActualYear, values, sourceConfidence} = latestInsuranceInputs(historical);
   const openingStatutoryCapital = values.statutory_capital_surplus;
-  const requiredCapital = values.minimum_statutory_capital;
   const minimumCapitalToPremiumRatio = assumptions.minimumStatutoryCapitalToPremiumRatio;
   const latestPremiums = values.net_premiums_written;
   const latestEarnedPremiums = values.net_premiums_earned;

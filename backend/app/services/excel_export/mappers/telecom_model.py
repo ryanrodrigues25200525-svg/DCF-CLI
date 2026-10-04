@@ -6,6 +6,7 @@ from typing import Any
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -151,7 +152,6 @@ def _map_model_sheet(workbook: Workbook, payload: dict[str, Any], model: dict[st
     ticker = str(company.get("ticker") or "").upper()
     name = str(company.get("name") or ticker or "Company")
     model = _record(model)
-    history = _record(model.get("history"))
     annual, years = _history(model)
     assumptions = _record(model.get("assumptions"))
     _validate_assumptions(assumptions, years[-1])
@@ -756,7 +756,4 @@ def apply_incomplete_telecom_model(
     ]
     formula_cells.extend(f"B{row}" for row in (*range(72, 86), 87))
     formula_cells.extend(f"{column}{row}" for row in range(91, 96) for column in "CDEFG")
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith("="):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)
