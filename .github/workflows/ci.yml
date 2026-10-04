@@ -1,0 +1,39 @@
+name: CI
+
+# Hermetic gate for every push and pull request. Runs only what needs no network,
+# no secrets, and no external binaries, so it stays fast and deterministic.
+# The live suite lives in live.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermetic:
+    name: Typecheck, unit suite, secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: model/package-lock.json
+
+      - name: Install model dependencies
+        run: npm --prefix model ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit suite
+        run: npm --prefix model run test
+
+      - name: Secret scan
+        run: npm run security:scan

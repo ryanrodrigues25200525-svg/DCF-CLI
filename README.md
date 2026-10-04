@@ -280,11 +280,21 @@ npm run typecheck
 npm run test:model
 ```
 
-`test:model` uses live SEC/provider data and real workbook exports. It requires
-network access, EDGAR_IDENTITY, Python dependencies, and LibreOffice. It
-includes the main live model suite plus a live AAPL check for issuer filings
-submitted through a filing agent when the current SEC response contains a
-usable mixed filing sample; otherwise the check logs a clear skip. Live
+`test:model` is the hermetic suite. It needs no network, secrets, or LibreOffice,
+and is what CI runs on every pull request.
+
+The live suite is separate because it needs network access, `EDGAR_IDENTITY`,
+Python dependencies, and LibreOffice:
+
+```bash
+npm run test:live
+```
+
+`test:live` runs the same live SEC/provider data and real workbook exports as
+before. It includes the main live model suite plus a live AAPL check for issuer
+filings submitted through a filing agent when the current SEC response
+contains a usable mixed filing sample; otherwise the check logs a clear skip.
+Live
 providers can rate-limit or return stale data; model routes fail closed when
 required context is missing.
 The latest full run on 3 October 2026 passed **82/82 live model tests** in

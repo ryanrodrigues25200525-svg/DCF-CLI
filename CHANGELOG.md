@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Hermetic test suite and GitHub Actions CI. `npm test` now runs only the
+  `*.unit.test.ts` suites, which need no network, secrets, LibreOffice, or Python
+  venv. A new `ci.yml` gates every push and pull request on typecheck, that
+  suite, and the secret scan.
+- Added `live.yml`: the live suite runs on `workflow_dispatch` and nightly with
+  LibreOffice Calc, the backend venv, and `EDGAR_IDENTITY` from repository
+  secrets. Excluded from the pull-request gate because it needs SEC network
+  access and external binaries.
+- Added `npm run test:live` for the `*.live.test.ts` suites, behind a dependency
+  preflight that fails loudly when LibreOffice or `EDGAR_IDENTITY` is missing,
+  and `npm run test:all` to run every suite.
+
 ### Fixed
 
+- Live suites no longer throw at module load when a dependency is absent; they
+  skip with a named reason instead. A bare `vitest run` previously crashed
+  during collection, which is why `cli.live.test.ts` had to be hardcoded as the
+  only `npm test` target and `build-candidate.live.test.ts` was never executed.
 - Workbook presentation: sensitivity grids and distribution stats render as whole
   currency (`#,##0`); WACC Bull/Bear Beta as `0.00` and Costs of Equity as
   percentages; zero premiums read as explicit `0.00%`; cash-flow detail as

@@ -41,10 +41,21 @@ const launcherPath = resolve(projectRoot, 'bin/dcfbuild.mjs');
 const pythonPath = process.platform === 'win32'
   ? resolve(projectRoot, 'backend/.venv/Scripts/python.exe')
   : resolve(projectRoot, 'backend/.venv/bin/python');
-const sofficePath = findSoffice();
-if (!sofficePath) {
-  throw new Error('Live model tests require LibreOffice. Install it or set SOFFICE_PATH to the soffice executable.');
+const detectedSoffice = findSoffice();
+const liveUnavailableReason = !detectedSoffice
+  ? 'Live model tests require LibreOffice. Install it or set SOFFICE_PATH to the soffice executable.'
+  : !process.env.EDGAR_IDENTITY?.trim()
+    ? 'Set EDGAR_IDENTITY before running the live DCF checks. Its value is never logged.'
+    : null;
+
+if (liveUnavailableReason) {
+  console.warn(`Skipping live model tests: ${liveUnavailableReason}`);
 }
+
+// Read only by the gated suite below, which never executes when a dependency is
+// missing. `test:live` preflights these separately so an intended live run still
+// fails loudly instead of silently skipping.
+const sofficePath = detectedSoffice!;
 
 interface LiveCompanyCase {
   ticker: string;
@@ -2559,7 +2570,7 @@ print(json.dumps({
   return JSON.parse(result.stdout) as Awaited<ReturnType<typeof inspectIncompleteLifeInsuranceWorkbook>>;
 }
 
-describe('live dcfbuild company-model checks', () => {
+describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model checks', () => {
   for (const testCase of liveCompanyCases) {
     it(`${testCase.ticker} fetches current data and exports its routed formula model`, async () => {
       assertEdgarIdentityConfigured();
