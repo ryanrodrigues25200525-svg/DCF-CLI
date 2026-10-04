@@ -1,20 +1,11 @@
 import type {AssetManagerHistoricalData} from '@/core/types';
 import type {CanonicalFinancialLine, NativeUnifiedPayload} from '@/core/types/native';
 import type {AssetManagerModelAssumptionSources, AssetManagerModelAssumptions, IncompleteAssetManagerModelAssumptions} from './asset-manager-model';
+import { median, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} asset-manager assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} asset-manager assumption input ${name} has no finite filed value.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} asset-manager assumption input ${name} has incomplete SEC provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'asset-manager assumption');
 }
-
 function filedOrNotApplicableValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
   if (line?.source === 'not_applicable') {
     if (!line.method.trim() || !line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
@@ -49,13 +40,6 @@ function positive(value: number | null | undefined, name: string): number {
     throw new Error(`Asset-manager DCF requires a positive ${name}.`);
   }
   return value;
-}
-
-function median(values: number[]): number {
-  if (values.length === 0) throw new Error('Asset-manager assumptions require at least one source-backed historical observation.');
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
 function average(values: number[]): number {

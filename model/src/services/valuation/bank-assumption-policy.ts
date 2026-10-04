@@ -1,20 +1,11 @@
 import type { BankHistoricalData, NativeUnifiedPayload } from '@/core/types';
 import type { CanonicalFinancialLine } from '@/core/types/native';
 import type { BankModelAssumptions } from './bank-model';
+import { requireFiledValue as requireFiledValueCore } from '@/services/valuation/source-guards';
 
 function requireFiledValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || (line.source !== 'sec_native' && line.source !== 'derived')) {
-    throw new Error(`FY${year} bank assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} bank assumption input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} bank assumption input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValueCore(line, name, year, 'bank assumption');
 }
-
 function filedLineSource(line: CanonicalFinancialLine, year: number): string {
   const sources = line.sources.map((source) =>
     `${source.concept || line.concept || 'derived'} accession ${source.accession} filed ${source.filed}`,

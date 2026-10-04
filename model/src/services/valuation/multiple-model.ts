@@ -2,6 +2,13 @@ import type { DCFResults, PreferredValuationModel } from '@/core/types';
 
 export type ComparableValuationMethod = Extract<PreferredValuationModel, 'ev_ebitda' | 'revenue_multiple'>;
 
+/** The trading-multiple routes, in one place: classification, contracts, and mappers all consume this. */
+export const COMPARABLE_VALUATION_METHODS = ['ev_ebitda', 'revenue_multiple'] as const;
+
+export function isComparableValuationMethod(value: unknown): value is ComparableValuationMethod {
+  return typeof value === 'string' && (COMPARABLE_VALUATION_METHODS as readonly string[]).includes(value);
+}
+
 export interface ComparableValuationInput {
   method: ComparableValuationMethod;
   targetMetric: number;

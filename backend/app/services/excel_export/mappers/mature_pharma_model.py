@@ -9,6 +9,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .incomplete import gate_formulas_on_ready
+
 _INPUT_FONT = Font(name='Arial', size=10, color='0000FF')
 _FORMULA_FONT = Font(name='Arial', size=10, color='000000')
 _BODY_FONT = Font(name='Arial', size=10, color='000000')
@@ -567,38 +569,20 @@ def apply_incomplete_mature_pharma_model(
         sheet['B22'].number_format = _PERCENT_FORMAT
 
     # Product revenue feeds current-year product cash flows, the residual revenue build, and FCFF.
-    for product_row in range(32, total_row):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{product_row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
-    for row in range(other_row, total_row + 1):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, (f'{column}{row}' for row in range(32, total_row) for column in 'FGHIJ'))
+    gate_formulas_on_ready(sheet, status_ref, (f'{column}{row}' for row in range(other_row, total_row + 1) for column in 'FGHIJ'))
 
     cashflow_start = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'EBIT = revenue × editable EBIT margin'), None)
     if cashflow_start is None:
         raise ValueError('Mature-pharma workbook is missing its FCFF schedule.')
-    for row in range(cashflow_start, cashflow_start + 10):
-        for column in 'FGHIJ':
-            cell = sheet[f'{column}{row}']
-            if isinstance(cell.value, str) and cell.value.startswith('='):
-                cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, (f'{column}{row}' for row in range(cashflow_start, cashflow_start + 10) for column in 'FGHIJ'))
     valuation_header = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Enterprise-to-common-equity valuation'), None)
     if valuation_header is None:
         raise ValueError('Mature-pharma workbook is missing its valuation schedule.')
-    for row in range(valuation_header + 1, valuation_header + 9):
-        if row == valuation_header + 6:  # Current share price remains visible.
-            continue
-        cell = sheet[f'B{row}']
-        if isinstance(cell.value, str) and cell.value.startswith('='):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, (
+        f'B{row}' for row in range(valuation_header + 1, valuation_header + 9)
+        if row != valuation_header + 6  # Current share price remains visible.
+    ))
     sensitivity_header = next((row for row in range(1, sheet.max_row + 1) if sheet.cell(row, 1).value == 'Implied value per share sensitivity — WACC vs. terminal growth'), None)
     if sensitivity_header is not None:
-        for row in range(sensitivity_header + 2, sensitivity_header + 7):
-            for column in 'CDEFG':
-                cell = sheet[f'{column}{row}']
-                if isinstance(cell.value, str) and cell.value.startswith('='):
-                    cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+        gate_formulas_on_ready(sheet, status_ref, (f'{column}{row}' for row in range(sensitivity_header + 2, sensitivity_header + 7) for column in 'CDEFG'))

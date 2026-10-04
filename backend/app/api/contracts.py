@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, model_validator
 
 from app.models.schemas import CompanyProfile
-from app.services.valuation.model_eligibility import ModelEligibility, OperatingArchetype, PreferredModel, PRODUCTION_MODEL_ROUTES
+from app.services.valuation.model_eligibility import COMPARABLE_VALUATION_METHODS, ModelEligibility, OperatingArchetype, PreferredModel, PRODUCTION_MODEL_ROUTES
 
 
 def _camel_case(name: str) -> str:
@@ -2156,7 +2156,7 @@ class DcfExportRequest(ExportWireModel):
                     raise ValueError("incomplete life-insurance exports need the full earnings, capital, parent, market, and DCF input manifest")
             elif self.life_insurance_model is not None:
                 raise ValueError("life_insurance_model is only valid for the input-required life-insurance route")
-            comparable_routes = {"ev_ebitda", "revenue_multiple"}
+            comparable_routes = COMPARABLE_VALUATION_METHODS
             peer_denominator_inputs = [
                 item for item in self.required_inputs
                 if item.key.startswith("peer_ebitda:") or item.key.startswith("peer_revenue:")
@@ -2214,7 +2214,7 @@ class DcfExportRequest(ExportWireModel):
             raise ValueError(f"The {self.valuation_model} workbook is not implemented.")
         if self.valuation_model == "life_insurer_distributable_earnings_dcf" or self.life_insurance_model is not None:
             raise ValueError("life-insurance DCF exports remain input-required until company-level capital and distribution assumptions are supplied")
-        comparable_routes = {"ev_ebitda", "revenue_multiple"}
+        comparable_routes = COMPARABLE_VALUATION_METHODS
         specialized = {"bank_residual_income", "insurance_pnc_residual_income", "reit_affo", "utility_dcf", "biotech_pipeline_rnpv", "asset_manager_aum_dcf", "telecom_subscriber_dcf", "mortgage_reit_residual_income", "integrated_energy_dcf", "mature_pharma_product_dcf", *comparable_routes}
         if self.valuation_model not in specialized and not self.forecasts:
             raise ValueError("forecasts must contain at least one period for a DCF export")

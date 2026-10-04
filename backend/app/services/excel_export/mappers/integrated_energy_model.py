@@ -6,6 +6,7 @@ from typing import Any
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -559,7 +560,4 @@ def apply_incomplete_integrated_energy_model(
     ]
     formula_cells.extend(f'B{row}' for row in (*range(91, 96), 97, 98))
     formula_cells.extend(f'{column}{row}' for row in range(103, 108) for column in 'CDEFG')
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith('='):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)

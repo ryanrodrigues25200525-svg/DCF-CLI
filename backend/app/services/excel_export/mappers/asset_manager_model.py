@@ -6,6 +6,7 @@ from typing import Any
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from .incomplete import gate_formulas_on_ready
 
 _INPUT_FONT = Font(name="Arial", size=10, color="0000FF")
 _FORMULA_FONT = Font(name="Arial", size=10, color="000000")
@@ -741,7 +742,4 @@ def apply_incomplete_asset_manager_model(
         formula_cells.extend(f"{column}{row}" for row in (*range(5, 15), *range(17, 31), *range(33, 48)))
     formula_cells.extend(f"B{row}" for row in (51, *range(53, 64), 65))
     formula_cells.extend(f"{column}{row}" for row in range(71, 76) for column in "CDEFG")
-    for cell_ref in formula_cells:
-        cell = sheet[cell_ref]
-        if isinstance(cell.value, str) and cell.value.startswith("="):
-            cell.value = f'=IF({status_ref}<>"READY","",{cell.value[1:]})'
+    gate_formulas_on_ready(sheet, status_ref, formula_cells)

@@ -1,5 +1,6 @@
 import type {DCFResults, MortgageReitHistoricalData, MortgageReitHistoricalYear} from '@/core/types';
 import type {CanonicalFinancialLine, MortgageReitCanonicalFinancials} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface MortgageReitAssumptionSources {
   assetYield: string;
@@ -117,15 +118,8 @@ interface ValidatedHistory {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} mortgage-REIT input ${name} is missing or ambiguous.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} mortgage-REIT input ${name} has incomplete SEC provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'mortgage-REIT');
 }
-
 function validateHistory(history: MortgageReitHistoricalData): ValidatedHistory {
   if (history.annual.length !== 4 || history.years.length !== 4) {
     throw new Error('Mortgage-REIT model requires an opening book-value observation and three operating years.');

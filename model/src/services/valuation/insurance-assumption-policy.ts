@@ -1,20 +1,11 @@
 import type { InsuranceHistoricalData, NativeUnifiedPayload } from '@/core/types';
 import type { CanonicalFinancialLine } from '@/core/types/native';
 import type { InsuranceModelAssumptions } from './insurance-model';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || (line.source !== 'sec_native' && line.source !== 'derived')) {
-    throw new Error(`FY${year} P&C assumption input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} P&C assumption input ${name} has no numeric value.`);
-  }
-  if (line.sources.length === 0 || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} P&C assumption input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'P&C assumption');
 }
-
 function lineSource(line: CanonicalFinancialLine, year: number): string {
   return `FY${year} ${line.method}: ${line.sources.map((source) =>
     `${source.concept || line.concept || 'derived'} accession ${source.accession} filed ${source.filed}`,

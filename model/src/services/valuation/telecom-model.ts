@@ -1,5 +1,6 @@
 import type {DCFResults, TelecomHistoricalData, TelecomHistoricalYear} from '@/core/types';
 import type {CanonicalFinancialLine, TelecomCanonicalFinancials} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface TelecomModelAssumptionSources {
   postpaidGrossAddRate: string;
@@ -155,18 +156,8 @@ function finite(value: number, name: string): number {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source)) {
-    throw new Error(`FY${year} telecom input ${name} is missing or ambiguous.`);
-  }
-  if (typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} telecom input ${name} has no finite filed or derived value.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} telecom input ${name} has incomplete filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'telecom');
 }
-
 function requiredTelecomLine(
   telecom: TelecomCanonicalFinancials | null,
   field: keyof TelecomCanonicalFinancials,

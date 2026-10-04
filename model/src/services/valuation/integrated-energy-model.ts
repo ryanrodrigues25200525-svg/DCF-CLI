@@ -1,5 +1,6 @@
 import type {DCFResults, EnergyHistoricalData, EnergyHistoricalYear} from '@/core/types';
 import type {CanonicalFinancialLine} from '@/core/types/native';
+import { requireFiledValue } from '@/services/valuation/source-guards';
 
 export interface IntegratedEnergyAssumptionSources {
   crudePriceChange: string;
@@ -139,15 +140,8 @@ export interface IntegratedEnergyModelResult extends DCFResults {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} XOM energy input ${name} is missing or ambiguous.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} XOM energy input ${name} lacks SEC filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'XOM energy');
 }
-
 function baseOperatingNetIncome(history: EnergyHistoricalYear): number {
   const energy = history.energy;
   return filedValue(energy.upstream_earnings_gaap, 'Upstream segment earnings', history.year)

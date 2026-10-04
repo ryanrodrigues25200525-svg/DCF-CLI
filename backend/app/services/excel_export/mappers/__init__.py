@@ -45,7 +45,7 @@ from .dcf import (
 )
 from .review import _map_data_review_sheet
 from .incomplete import apply_incomplete_workbook
-from app.services.valuation.model_eligibility import PRODUCTION_MODEL_ROUTES
+from app.services.valuation.model_eligibility import COMPARABLE_VALUATION_METHODS, PRODUCTION_MODEL_ROUTES
 from .utils import (
     SHEET_COMPS,
     SHEET_COVER,
@@ -154,7 +154,7 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
     comparable_requirements = comparable_requirements if isinstance(comparable_requirements, list) else []
     should_build_incomplete_comparable_model = (
         build_status == "input_required"
-        and payload.get("valuationModel") in {"ev_ebitda", "revenue_multiple"}
+        and payload.get("valuationModel") in COMPARABLE_VALUATION_METHODS
         and comparable_model.get("method") == payload.get("valuationModel")
         and any(
             isinstance(item, dict)
@@ -262,7 +262,7 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
             apply_incomplete_mature_pharma_model(workbook, payload, input_cells)
         return
 
-    if valuation_model in {"ev_ebitda", "revenue_multiple"}:
+    if valuation_model in COMPARABLE_VALUATION_METHODS:
         if should_build_incomplete_comparable_model:
             apply_incomplete_comparable_model(workbook, payload)
         else:

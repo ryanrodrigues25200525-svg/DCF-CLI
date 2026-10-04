@@ -66,6 +66,10 @@ PRODUCTION_MODEL_ROUTES = frozenset({
     "life_insurer_distributable_earnings_dcf",
 })
 
+# The trading-multiple routes, in one place: contracts, classifier, and
+# workbook mappers all consume this (mirrors TS COMPARABLE_VALUATION_METHODS).
+COMPARABLE_VALUATION_METHODS = frozenset({"ev_ebitda", "revenue_multiple"})
+
 
 class BlockedModel(BaseModel):
     model_config = ConfigDict(extra="forbid")

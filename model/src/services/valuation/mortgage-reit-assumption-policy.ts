@@ -1,17 +1,11 @@
 import type {NativeUnifiedPayload} from '@/core/types/native';
 import type {MortgageReitHistoricalData, MortgageReitHistoricalYear} from '@/core/types';
 import type {MortgageReitModelAssumptions, MortgageReitAssumptionSources} from './mortgage-reit-model';
+import { median as medianOf, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: {value: number | null; source: string; sources: Array<{accession: string | null; filed: string | null}>}, name: string, year: number): number {
-  if (!['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)) {
-    throw new Error(`FY${year} mortgage-REIT assumption input ${name} is missing or ambiguous.`);
-  }
-  if (!line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} mortgage-REIT assumption ${name} lacks SEC filing provenance.`);
-  }
-  return line.value;
+  return requireFiledValue(line, name, year, 'mortgage-REIT assumption');
 }
-
 function lineSource(line: {method: string; concept: string | null; sources: Array<{
   concept: string | null;
   accession: string | null;
@@ -24,12 +18,8 @@ function lineSource(line: {method: string; concept: string | null; sources: Arra
 }
 
 function median(values: number[], name: string): number {
-  if (!values.length || values.some((value) => !Number.isFinite(value))) throw new Error(`Mortgage-REIT ${name} requires finite filed history.`);
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  return medianOf(values, {label: 'Mortgage-REIT', name});
 }
-
 function freshTimestamp(value: number | null | undefined, name: string): void {
   const now = Date.now();
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > now || now - value > 24 * 60 * 60 * 1000) {
