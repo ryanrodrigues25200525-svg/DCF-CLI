@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ModelLibrary } from '@/library/store';
+import { findBackendPython } from '@/workbook/xlsx';
 import {
   applyApprovedProposal,
   previewProposal,
@@ -13,20 +14,21 @@ import {
 const out: Record<string, unknown> = {};
 const root = await mkdtemp(join(tmpdir(), 'dcf-prev-'));
 const lib = new ModelLibrary(root);
+const python = findBackendPython();
+if (!python) throw new Error('no python with openpyxl');
 
 function sha(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
 async function makeCompany(ticker: string, corrupt: boolean): Promise<{ hash: string }> {
-  const python = '/Users/ryanrodrigues/Documents/DCF CLI/backend/.venv/bin/python';
   const wbPath = join(root, 'w.xlsx');
-  const mk = spawnSync(python, ['-c',
+  const mk = spawnSync(python as string, ['-c',
     `import openpyxl, sys
 wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Model"
 ws["A1"] = 1; ws["A2"] = "=A1+1"
 wb.save(sys.argv[1])`, wbPath], { encoding: 'utf8' });
-  if (mk.status !== 0) throw new Error('mk failed');
+  if (mk.status !== 0) throw new Error('mk failed: ' + (mk.stderr || mk.stdout || `python=${python}`));
   const { readFile: rf, mkdir, copyFile } = await import('node:fs/promises');
   const { companyDir, currentWorkbookPath } = await import('@/library/store');
   const bytes = await rf(wbPath);

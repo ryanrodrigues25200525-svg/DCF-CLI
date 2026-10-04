@@ -1,0 +1,62 @@
+name: CI
+
+# Hermetic gate for every push and pull request. Runs only what needs no network,
+# no secrets, and no external binaries, so it stays fast and deterministic.
+# The live suite lives in live.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermetic:
+    name: Typecheck, unit suite, secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: model/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install model dependencies
+        run: npm --prefix model ci
+
+      # The unit suite shells out to a Python interpreter with openpyxl to build
+      # its synthetic workbooks (see findBackendPython). It needs nothing else
+      # from the backend stack, so install just that rather than all of
+      # requirements.txt. Placed at backend/.venv because that is the first
+      # location findBackendPython probes.
+      - name: Install openpyxl for the workbook probes
+        run: |
+          python3 -m venv backend/.venv
+          backend/.venv/bin/python -m pip install --upgrade pip
+          backend/.venv/bin/python -m pip install "openpyxl==3.1.5"
+
+      # Despite the *.unit.test.ts name, this suite exercises real services:
+      # proposal preview/apply recalculates the workbook, and apply-service
+      # fails closed without soffice. It still needs no network and no secrets.
+      - name: Install LibreOffice Calc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit suite
+        run: npm --prefix model run test
+
+      - name: Secret scan
+        run: npm run security:scan

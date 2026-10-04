@@ -1,0 +1,59 @@
+name: Live suite
+
+# The live suite needs SEC network access, EDGAR_IDENTITY, LibreOffice, and the
+# backend Python venv, so it is excluded from the pull-request gate. Run it from
+# this workflow before merging changes that touch workbook export, the candidate
+# gate, or the SEC integration, and nightly to catch upstream drift.
+#
+# Requires an EDGAR_IDENTITY repository secret. Its value is never logged.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 06:17 UTC daily. Off the hour to avoid the scheduler's peak.
+    - cron: '17 6 * * *'
+
+concurrency:
+  group: live-suite
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live model suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: model/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install LibreOffice Calc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
+
+      - name: Install model dependencies
+        run: npm --prefix model ci
+
+      - name: Install backend requirements
+        run: |
+          python3 -m venv backend/.venv
+          backend/.venv/bin/python -m pip install --upgrade pip
+          backend/.venv/bin/python -m pip install -r backend/requirements.txt
+          backend/.venv/bin/python -m pip install --no-deps -r backend/requirements-openbb-meta.txt
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Live suite
+        env:
+          EDGAR_IDENTITY: ${{ secrets.EDGAR_IDENTITY }}
+        run: npm run test:live
