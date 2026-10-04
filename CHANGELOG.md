@@ -10,9 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Hermetic test suite and GitHub Actions CI. `npm test` now runs only the
-  `*.unit.test.ts` suites, which need no network, secrets, LibreOffice, or Python
-  venv. A new `ci.yml` gates every push and pull request on typecheck, that
-  suite, and the secret scan.
+  `*.unit.test.ts` suites, which need no network, secrets, or LibreOffice. It
+  does need a Python interpreter with `openpyxl`, which its workbook probes use
+  to build synthetic `.xlsx` files. A new `ci.yml` gates every push and pull
+  request on typecheck, that suite, and the secret scan.
+- Fixed two workbook probes that hardcoded an absolute developer-specific
+  Python path (`model/src/test-probes/proposal-mcp-matrix.ts`,
+  `proposal-preview-matrix.ts`), so they failed on any machine but the
+  author's. Both now use the shared `findBackendPython()` discovery, and their
+  failures report the interpreter's stderr instead of a bare `mk failed`.
 - Added `live.yml`: the live suite runs on `workflow_dispatch` and nightly with
   LibreOffice Calc, the backend venv, and `EDGAR_IDENTITY` from repository
   secrets. Excluded from the pull-request gate because it needs SEC network
