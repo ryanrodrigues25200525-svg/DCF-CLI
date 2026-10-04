@@ -9,16 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Broad coverage for filed-company builds: cash / debt / NCI / CapEx / D&A /
+  marketable-securities lines now fall back to filed companyfacts when the
+  statement-row extraction omits them, and derive the missing leg of combined
+  "cash and short-term investments" lines (MSFT/TGT/KO style) and of the PP&E
+  roll-forward (CapEx = ΔPP&E + D&A) with full filing citations.
+- Genuine-absence proofs for marketable securities and noncontrolling interest
+  when the filing's own presentation carries no such row, cited to the 10-K.
+- Trading-multiple fallback for specialized archetypes (integrated energy,
+  mature pharma, unsupported financial subtypes, unclassified issuers) when
+  the specialist model has no source contract for the ticker: the specialist
+  block reason stays recorded, and only the source-disciplined EV/EBITDA or
+  EV/Revenue route is offered. Fallback peers still stage analyst
+  confirmations before entering the median (#32).
 - Offline test suite and GitHub Actions CI. `npm test` now runs only the
   `*.unit.test.ts` suites, which need no network and no `EDGAR_IDENTITY`. They
   still drive real services, so they need a Python interpreter with `openpyxl`
   and LibreOffice; CI installs exactly those. A new `ci.yml` gates every push
   and pull request on typecheck, that suite, and the secret scan.
-- Fixed two workbook probes that hardcoded an absolute developer-specific
-  Python path (`model/src/test-probes/proposal-mcp-matrix.ts`,
-  `proposal-preview-matrix.ts`), so they failed on any machine but the
-  author's. Both now use the shared `findBackendPython()` discovery, and their
-  failures report the interpreter's stderr instead of a bare `mk failed`.
 - Added `live.yml`: the live suite runs on `workflow_dispatch` and nightly with
   LibreOffice Calc, the backend venv, and `EDGAR_IDENTITY` from repository
   secrets. Excluded from the pull-request gate because it needs SEC network
@@ -29,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Comparable-valuation exports ship exactly the peer set that produced the
+  selected median, fixing a median-reconciliation 500 on live builds
+  (NVDA, META).
+- Revenue-multiple routes no longer demand filed EBITDA; incomplete
+  comparable payloads stage peer confirmations instead of failing contract
+  validation (NKE).
+- Semiconductor-equipment issuers (e.g. AMAT) are no longer misrouted to the
+  integrated-energy model by the word "materials" in their industry name.
+- The equity bridge accepts a filed-absence `not_applicable` noncontrolling
+  interest the same way it already accepted preferred equity (AMZN).
+- Fixed two workbook probes that hardcoded an absolute developer-specific
+  Python path (`model/src/test-probes/proposal-mcp-matrix.ts`,
+  `proposal-preview-matrix.ts`), so they failed on any machine but the
+  author's. Both now use the shared `findBackendPython()` discovery, and their
+  failures report the interpreter's stderr instead of a bare `mk failed`.
 - Live suites no longer throw at module load when a dependency is absent; they
   skip with a named reason instead. A bare `vitest run` previously crashed
   during collection, which is why `cli.live.test.ts` had to be hardcoded as the
