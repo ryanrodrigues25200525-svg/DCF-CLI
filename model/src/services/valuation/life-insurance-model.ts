@@ -27,7 +27,7 @@ export interface LifeInsuranceCapitalSchedule {
 }
 
 export interface LifeInsuranceDcfAssumptions extends LifeInsuranceForecastAssumptions {
-  ticker: 'MET' | 'PRU';
+  ticker: string;
   baseYear: number;
   forecastYears: 5;
   capitalSchedule: LifeInsuranceCapitalSchedule;
@@ -81,8 +81,8 @@ function validateAssumptions(assumptions: LifeInsuranceDcfAssumptions): number {
   if (!Number.isInteger(assumptions.baseYear) || assumptions.forecastYears !== LIFE_INSURANCE_FORECAST_YEARS) {
     throw new Error(`Life-insurance DCF requires an integer base year and ${LIFE_INSURANCE_FORECAST_YEARS} forecast years.`);
   }
-  if (assumptions.ticker !== 'MET' && assumptions.ticker !== 'PRU') {
-    throw new Error('The first life-insurance DCF source contract supports only MET and PRU.');
+  if (!assumptions.ticker.trim()) {
+    throw new Error('Life-insurance DCF requires an issuer ticker for labeling.');
   }
   if (assumptions.segments.length === 0 || assumptions.segments.some((segment) => !segment.segment.trim())) {
     throw new Error('Life-insurance DCF requires identified earnings segments.');
@@ -98,10 +98,10 @@ function validateAssumptions(assumptions: LifeInsuranceDcfAssumptions): number {
     throw new Error(`Life-insurance capital and upstream-capacity inputs require ${LIFE_INSURANCE_FORECAST_YEARS} years.`);
   }
   if (assumptions.earningsBasis === 'pre_tax_adjusted_operating_income' && assumptions.normalizedTaxRate === undefined) {
-    throw new Error('PRU pre-tax adjusted operating income requires a normalized tax-rate input.');
+    throw new Error('Pre-tax adjusted operating income requires a normalized tax-rate input.');
   }
   if (assumptions.earningsBasis === 'after_tax_adjusted_earnings_available_to_common' && assumptions.normalizedTaxRate !== undefined) {
-    throw new Error('MET adjusted earnings are after tax and must not be taxed again.');
+    throw new Error('After-tax adjusted earnings are already after tax and must not be taxed again.');
   }
   if (assumptions.normalizedTaxRate !== undefined) requireRange(assumptions.normalizedTaxRate, 'normalized tax rate', 0, 0.6);
   for (const segment of assumptions.segments) {

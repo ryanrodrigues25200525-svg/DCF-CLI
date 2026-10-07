@@ -115,6 +115,59 @@ def _looks_like_operating_peer(symbol: str) -> bool:
         return False
     return upper not in {"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI"}
 
+# Reporting currencies that indicate a domestic (US GAAP, 10-K/10-Q) filer.
+# Any other present value (TWD, EUR, ...) marks a foreign filer whose
+# statements are not comparable inside a USD multiple median.
+_DOMESTIC_REPORTING_CURRENCIES = frozenset({"USD", "US DOLLAR", "US DOLLARS"})
+
+
+def _reports_in_usd(peer: Dict[str, Any]) -> bool:
+    """Fail-open domestic-reporting check for a peer detail dict.
+
+    Only a present, non-USD reporting currency excludes the peer. Missing or
+    blank currency data keeps it: dropping peers on absent metadata would
+    silently shrink every set the provider under-describes.
+    """
+    if not isinstance(peer, dict):
+        return True
+    currency = peer.get("financialCurrency", peer.get("financial_currency"))
+    if currency is None:
+        return True
+    normalized = str(currency).strip().upper()
+    if not normalized:
+        return True
+    return normalized in _DOMESTIC_REPORTING_CURRENCIES
+
+
+def _exclude_foreign_reporters(
+    peers: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], set[str]]:
+    """Split peer details into domestic reporters and excluded foreign symbols."""
+    kept: List[Dict[str, Any]] = []
+    excluded: set[str] = set()
+    for peer in peers or []:
+        symbol = str(peer.get("symbol") or peer.get("ticker") or "").strip().upper() if isinstance(peer, dict) else ""
+        if _reports_in_usd(peer):
+            kept.append(peer)
+        elif symbol:
+            excluded.add(symbol)
+    return kept, excluded
+
+
+def _industry_match_count(peers: List[Dict[str, Any]], target_industry: str) -> int:
+    """Count peers whose industry matches the target (same rule as ranking)."""
+    target = str(target_industry or "").strip().lower()
+    if not target:
+        return 0
+    matches = 0
+    for peer in peers or []:
+        if not isinstance(peer, dict):
+            continue
+        industry = str(peer.get("industry") or "").strip().lower()
+        if industry and (industry == target or target in industry or industry in target):
+            matches += 1
+    return matches
+
 
 def _sec_filer_tickers() -> Optional[set[str]]:
     """Tickers with an SEC-filer identity, cached for the process lifetime.
@@ -423,8 +476,11 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
         )
 
         if details:
+            domestic, excluded_foreign = _exclude_foreign_reporters(details)
+            if excluded_foreign:
+                logger.info(f"Excluded {sorted(excluded_foreign)} from {ticker} peers: non-USD reporting currency (20-F/40-F filer).")
             ranked = _rank_peer_details(
-                peers=details,
+                peers=domestic,
                 target_ticker=ticker,
                 target_market_cap=target_market_cap,
                 target_sector=target_sector,
@@ -439,7 +495,7 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
                 }
                 for symbol in candidate_symbols:
                     upper = symbol.upper()
-                    if upper in existing:
+                    if upper in existing or upper in excluded_foreign:
                         continue
                     top.append(_build_symbol_fallback(upper))
                     existing.add(upper)
@@ -450,15 +506,24 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
                 _to_positive_float(peer.get("marketCap")) <= 0 and _to_positive_float(peer.get("enterpriseValue")) <= 0
                 for peer in top
             )
-            notes = None
+            industry_matches = _industry_match_count(top, target_industry)
+            weak_derived_set = candidate_source == "derived_screener" and industry_matches == 0
+            notes_parts = []
             if used_symbol_fallback:
-                notes = "One or more peer rows were backfilled from lightweight symbol fallbacks."
+                notes_parts.append("One or more peer rows were backfilled from lightweight symbol fallbacks.")
+            if excluded_foreign:
+                notes_parts.append(
+                    "Excluded non-USD reporters (" + ", ".join(sorted(excluded_foreign)) + "); "
+                    "20-F/40-F statements are not comparable in a USD multiple median."
+                )
+            if weak_derived_set:
+                notes_parts.append("No peer shares the target industry; the set needs analyst confirmation before it enters the median.")
 
             return {
                 "peers": top,
                 "source": candidate_source,
-                "fallback_used": used_symbol_fallback or candidate_source in {"default_symbols", "unavailable"},
-                "notes": notes,
+                "fallback_used": used_symbol_fallback or weak_derived_set or candidate_source in {"default_symbols", "unavailable"},
+                "notes": " ".join(notes_parts) or None,
                 "fetched_at_ms": int(time.time() * 1000),
             }
 
@@ -546,6 +611,7 @@ async def _fetch_peer_details(symbols: List[str], low_memory: bool = False) -> L
                 "totalDebt": sd_data.get("total_debt") or yf_info.get("totalDebt") or 0,
                 "cash": sd_data.get("total_cash") or yf_info.get("cash") or 0,
                 "taxRate": yf_info.get("effectiveTaxRate") or 0.21,
+                "financialCurrency": yf_info.get("financialCurrency") or sd_data.get("financial_currency"),
             }
         except Exception as e:
             logger.warning(f"Failed to fetch peer data for {symbol}: {e}")

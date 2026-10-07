@@ -4,7 +4,7 @@ import type {IncompleteIntegratedEnergyAssumptions, IntegratedEnergyAssumptions,
 import { median as medianOf, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  return requireFiledValue(line, name, year, 'XOM energy');
+  return requireFiledValue(line, name, year, 'integrated energy');
 }
 function filedOrZero(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
   if (line?.source === 'not_applicable' && line.sources.length > 0
@@ -13,24 +13,24 @@ function filedOrZero(line: CanonicalFinancialLine | undefined, name: string, yea
 }
 
 function lineSource(line: CanonicalFinancialLine | undefined, name: string, year: number): string {
-  if (!line) throw new Error(`FY${year} XOM source disclosure ${name} is unavailable.`);
+  if (!line) throw new Error(`FY${year} integrated-energy source disclosure ${name} is unavailable.`);
   return `FY${year} ${line.method}; ${line.sources.map((source) =>
     `${source.concept || line.concept || name} (accession ${source.accession}, filed ${source.filed}, ${source.fiscal_period || 'period unavailable'}, ${source.unit || 'unit unavailable'} ${source.unit_scale || ''})`,
   ).join('; ')}`;
 }
 
 function median(values: number[], name: string): number {
-  return medianOf(values, {label: 'XOM', name});
+  return medianOf(values, {label: 'integrated energy', name});
 }
 function freshTimestamp(value: number | null | undefined, name: string): void {
   const now = Date.now();
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > now || now - value > 24 * 60 * 60 * 1000) {
-    throw new Error(`A current ${name} timestamp within 24 hours is required for the XOM energy valuation.`);
+    throw new Error(`A current ${name} timestamp within 24 hours is required for the integrated-energy valuation.`);
   }
 }
 
 function positive(value: number | null | undefined, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`XOM energy model requires positive ${name}.`);
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`Integrated-energy model requires positive ${name}.`);
   return value;
 }
 
@@ -88,23 +88,22 @@ function buildIntegratedEnergyAssumptionValues(
   history: EnergyHistoricalData,
   allowMissingCrudeProduction: boolean,
 ): IntegratedEnergyAssumptionValues {
-  if (data.profile.ticker?.toUpperCase() !== 'XOM') throw new Error('The first integrated-energy route is issuer-specific to Exxon Mobil.');
   if (data.canonical_financials.currency?.toUpperCase() !== 'USD') throw new Error('Integrated energy DCF requires USD-denominated canonical financials.');
   if (history.annual.length !== 3 || history.years.length !== 3
     || history.annual.some((item, index) => item.year !== history.years[index] || (index > 0 && item.year !== history.annual[index - 1]!.year + 1))) {
-    throw new Error('XOM integrated-energy DCF requires three aligned consecutive annual periods.');
+    throw new Error('Integrated-energy DCF requires three aligned consecutive annual periods.');
   }
   if (!['live', 'cached'].includes(data.data_quality.market.status) || data.market.fallback_used === true) {
-    throw new Error('XOM integrated-energy DCF requires current non-fallback market inputs.');
+    throw new Error('Integrated-energy DCF requires current non-fallback market inputs.');
   }
   if (!['live', 'cached'].includes(data.data_quality.valuation_context.status)) {
-    throw new Error('XOM integrated-energy DCF requires current interest-rate and ERP inputs.');
+    throw new Error('Integrated-energy DCF requires current interest-rate and ERP inputs.');
   }
   freshTimestamp(data.market.fetched_at_ms, 'market');
   freshTimestamp(data.valuation_context.fetched_at_ms, 'valuation context');
   const recent = history.annual;
   const latest = recent.at(-1);
-  if (!latest || latest.year !== 2025) throw new Error('The initial XOM integrated-energy DCF requires FY2025 as the filed base year.');
+  if (!latest) throw new Error('Integrated-energy DCF requires filed annual history.');
   const latestEnergy = latest.energy;
   const currentPrice = positive(data.market.current_price, 'share price');
   const marketCapitalization = positive(data.market.market_cap, 'market capitalization');
@@ -128,7 +127,7 @@ function buildIntegratedEnergyAssumptionValues(
   const wacc = equityWeight * costOfEquity + debtWeight * costOfDebt * (1 - taxRate);
   const terminalGrowthRate = 0.025;
   if (wacc < 0.02 || wacc > 0.3 || terminalGrowthRate >= wacc) {
-    throw new Error('XOM integrated-energy WACC must be 2%–30% and exceed terminal growth.');
+    throw new Error('Integrated-energy WACC must be 2%–30% and exceed terminal growth.');
   }
   const upstreamEarnings = filedValue(latestEnergy.upstream_earnings_gaap, 'Upstream GAAP earnings', latest.year);
   const crudeProductionIsFiled = hasFiledCrudeProduction(latestEnergy.crude_oil_production);
@@ -136,7 +135,7 @@ function buildIntegratedEnergyAssumptionValues(
     ? null
     : productionGrossMargin(latest);
   if (upstreamEarnings <= 0 || (baseGrossProductionMargin !== null && baseGrossProductionMargin <= 0)) {
-    throw new Error('FY2025 Upstream results do not support a sourced earnings conversion factor.');
+    throw new Error('Filed Upstream results do not support a sourced earnings conversion factor.');
   }
   const upstreamEarningsConversionFactor = baseGrossProductionMargin === null
     ? null

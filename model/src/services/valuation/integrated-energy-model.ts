@@ -140,7 +140,7 @@ export interface IntegratedEnergyModelResult extends DCFResults {
 }
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  return requireFiledValue(line, name, year, 'XOM energy');
+  return requireFiledValue(line, name, year, 'integrated energy');
 }
 function baseOperatingNetIncome(history: EnergyHistoricalYear): number {
   const energy = history.energy;
@@ -175,7 +175,7 @@ function productionGrossMargin(year: EnergyHistoricalYear): number {
 function validateHistory(history: EnergyHistoricalData): EnergyHistoricalYear[] {
   if (history.annual.length !== 3 || history.years.length !== 3
     || history.annual.some((item, index) => item.year !== history.years[index] || (index > 0 && item.year !== history.annual[index - 1]!.year + 1))) {
-    throw new Error('XOM integrated energy model requires three aligned consecutive fiscal years.');
+    throw new Error('Integrated-energy model requires three aligned consecutive fiscal years.');
   }
   for (const item of history.annual) {
     const energy = item.energy;
@@ -200,18 +200,18 @@ function validateHistory(history: EnergyHistoricalData): EnergyHistoricalYear[] 
       + filedValue(energy.ngl_production, 'NGL', item.year)
       + filedValue(energy.bitumen_production, 'bitumen', item.year)
       + filedValue(energy.synthetic_oil_production, 'synthetic oil', item.year);
-    if (Math.abs(liquids - componentLiquids) > 5_000) throw new Error(`FY${item.year} XOM liquid-product volumes do not reconcile.`);
+    if (Math.abs(liquids - componentLiquids) > 5_000) throw new Error(`FY${item.year} liquid-product volumes do not reconcile.`);
     const oilEquivalent = liquids + filedValue(energy.natural_gas_production_available_for_sale, 'gas available for sale', item.year) / 6_000;
     if (Math.abs(oilEquivalent - filedValue(energy.oil_equivalent_production, 'oil-equivalent production', item.year)) > 5_000) {
-      throw new Error(`FY${item.year} XOM liquids and gas do not reconcile to oil-equivalent production.`);
+      throw new Error(`FY${item.year} liquids and gas do not reconcile to oil-equivalent production.`);
     }
     const proved = filedValue(energy.proved_oil_equivalent_reserves, 'proved reserves', item.year);
     const provedDeveloped = filedValue(energy.proved_developed_oil_equivalent_reserves, 'developed reserves', item.year);
     const provedUndeveloped = filedValue(energy.proved_undeveloped_oil_equivalent_reserves, 'undeveloped reserves', item.year);
-    if (Math.abs(proved - provedDeveloped - provedUndeveloped) > 1_000_000) throw new Error(`FY${item.year} XOM reserve classes do not reconcile to total proved reserves.`);
+    if (Math.abs(proved - provedDeveloped - provedUndeveloped) > 1_000_000) throw new Error(`FY${item.year} reserve classes do not reconcile to total proved reserves.`);
     const segmentEarnings = baseOperatingNetIncome(item);
-    const netIncome = filedValue(item.netIncome, 'net income attributable to ExxonMobil', item.year);
-    if (Math.abs(segmentEarnings - netIncome) > 2_000_000) throw new Error(`FY${item.year} XOM segment earnings do not reconcile to consolidated net income.`);
+    const netIncome = filedValue(item.netIncome, 'attributable net income', item.year);
+    if (Math.abs(segmentEarnings - netIncome) > 2_000_000) throw new Error(`FY${item.year} segment earnings do not reconcile to consolidated net income.`);
     for (const [line, name] of [
       [item.revenue, 'consolidated revenue'], [item.taxRate, 'effective tax rate'], [item.depreciation, 'depreciation and depletion'],
       [item.interestExpense, 'interest expense'], [item.currentDebt, 'current debt'], [item.longTermDebt, 'long-term debt'],
@@ -223,7 +223,7 @@ function validateHistory(history: EnergyHistoricalData): EnergyHistoricalYear[] 
 }
 
 function validateAssumptions(a: IntegratedEnergyAssumptions): void {
-  if (a.forecastYears !== 5) throw new Error('XOM integrated energy DCF requires a five-year forecast.');
+  if (a.forecastYears !== 5) throw new Error('Integrated-energy DCF requires a five-year forecast.');
   const values: Array<[string, number]> = [
     ['commodity prices', a.crudePrice + a.nglPrice + a.bitumenPrice + a.syntheticOilPrice + a.naturalGasPrice],
     ['liquids production growth', a.liquidsProductionGrowth], ['natural gas production growth', a.naturalGasProductionGrowth],
@@ -240,25 +240,25 @@ function validateAssumptions(a: IntegratedEnergyAssumptions): void {
     ['marketable securities', a.marketableSecurities], ['debt', a.debt], ['noncontrolling interest', a.nonControllingInterest],
     ['preferred equity', a.preferredEquity], ['tax rate', a.taxRate],
   ];
-  if (values.some(([, value]) => !Number.isFinite(value))) throw new Error('XOM integrated-energy assumptions must be finite.');
+  if (values.some(([, value]) => !Number.isFinite(value))) throw new Error('Integrated-energy assumptions must be finite.');
   const annualGrowth = [a.liquidsProductionGrowth, a.naturalGasProductionGrowth, a.revenueGrowth, a.energyProductsEarningsGrowth,
     a.chemicalProductsEarningsGrowth, a.specialtyProductsEarningsGrowth, a.corporateOperatingEarningsGrowth];
   if (annualGrowth.some((value) => value < -0.5 || value > 0.5)) throw new Error('Integrated-energy annual growth assumptions must be between -50% and 50%.');
   const priceChanges = [a.crudePriceChange, a.nglPriceChange, a.bitumenPriceChange, a.syntheticOilPriceChange, a.naturalGasPriceChange];
-  if (priceChanges.some((value) => Math.abs(value) > 100)) throw new Error('XOM energy price changes exceed supported bounds.');
+  if (priceChanges.some((value) => Math.abs(value) > 100)) throw new Error('Integrated-energy price changes exceed supported bounds.');
   if (a.productionCostPerBoe <= 0 || a.upstreamEarningsConversionFactor <= 0 || a.upstreamEarningsConversionFactor > 2
     || a.cashCapexPctRevenue < 0 || a.cashCapexPctRevenue > 0.5 || a.depreciationPctRevenue < 0 || a.depreciationPctRevenue > 0.5
     || Math.abs(a.workingCapitalInvestmentPctRevenue) > 0.3 || a.reserveReplacementRatio < 0 || a.reserveReplacementRatio > 3
-    || a.taxRate < 0 || a.taxRate > 0.6) throw new Error('XOM energy cost, reinvestment, reserve, or tax assumptions are outside supported bounds.');
+    || a.taxRate < 0 || a.taxRate > 0.6) throw new Error('Integrated-energy cost, reinvestment, reserve, or tax assumptions are outside supported bounds.');
   if (a.wacc < 0.02 || a.wacc > 0.3 || a.terminalGrowthRate < 0 || a.terminalGrowthRate >= a.wacc) {
-    throw new Error('XOM energy WACC must be 2%–30% and exceed terminal growth.');
+    throw new Error('Integrated-energy WACC must be 2%–30% and exceed terminal growth.');
   }
   if (a.commonSharesOutstanding <= 0 || a.marketCapitalization <= 0 || a.currentPrice <= 0
     || a.cash < 0 || a.marketableSecurities < 0 || a.debt < 0 || a.nonControllingInterest < 0 || a.preferredEquity < 0) {
-    throw new Error('XOM energy market and common-equity bridge inputs are outside supported bounds.');
+    throw new Error('Integrated-energy market and common-equity bridge inputs are outside supported bounds.');
   }
-  if (!/^20\d{2}-\d{2}-\d{2}$/.test(a.asOfDate)) throw new Error('XOM energy model requires a dated market context.');
-  if (Object.values(a.assumptionSources).some((source) => !source.trim())) throw new Error('XOM energy assumptions require source notes or explicit analyst-input disclosures.');
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(a.asOfDate)) throw new Error('Integrated-energy model requires a dated market context.');
+  if (Object.values(a.assumptionSources).some((source) => !source.trim())) throw new Error('Integrated-energy assumptions require source notes or explicit analyst-input disclosures.');
 }
 
 export function calculateIntegratedEnergyValuation(
@@ -302,7 +302,7 @@ export function calculateIntegratedEnergyValuation(
     const productionCostPerBoe = assumptions.productionCostPerBoe + index * assumptions.productionCostChangePerBoe;
     if ([crudePrice, nglPrice, bitumenPrice, syntheticOilPrice, naturalGasPrice].some((value) => value < 0)
       || productionCostPerBoe <= 0 || oilEquivalentProduction <= 0) {
-      throw new Error(`FY${year} XOM production, commodity prices, or production cost are outside supported bounds.`);
+      throw new Error(`FY${year} production, commodity prices, or production cost are outside supported bounds.`);
     }
     const upstreamProductionRevenue = (
       crudeOilProduction * crudePrice * 365 + nglProduction * nglPrice * 365
@@ -367,7 +367,7 @@ export function calculateIntegratedEnergyValuation(
   const upside = impliedSharePrice / assumptions.currentPrice - 1;
   if (![terminalValue, pvTerminalValue, enterpriseValue, equityValue, impliedSharePrice, upside].every(Number.isFinite)
     || enterpriseValue <= 0 || equityValue <= 0 || impliedSharePrice <= 0) {
-    throw new Error('XOM integrated-energy model returned a non-positive or non-finite equity bridge.');
+    throw new Error('Integrated-energy model returned a non-positive or non-finite equity bridge.');
   }
   return {
     forecasts: [],

@@ -23,13 +23,13 @@ export function buildIncompleteIntegratedEnergyModelExportData(
   assumptions: IncompleteIntegratedEnergyAssumptions,
 ): IncompleteIntegratedEnergyModelExportData {
   if (history.annual.length !== 3 || history.annual.some((item, index) => item.year !== history.years[index])) {
-    throw new Error('Incomplete XOM energy workbook requires three aligned annual periods.');
+    throw new Error('Incomplete integrated-energy workbook requires three aligned annual periods.');
   }
   const latest = history.annual.at(-1);
   if (!latest || (latest.energy.crude_oil_production.source === 'sec_native'
     || latest.energy.crude_oil_production.source === 'derived')
     && typeof latest.energy.crude_oil_production.value === 'number') {
-    throw new Error('Incomplete XOM energy workbook requires missing latest filed crude production.');
+    throw new Error('Incomplete integrated-energy workbook requires missing latest filed crude production.');
   }
   return {history, assumptions};
 }
@@ -39,13 +39,12 @@ export function buildIntegratedEnergyModelExportPayload(
   history: EnergyHistoricalData,
   assumptions: IntegratedEnergyAssumptions,
 ): DcfExportPayload {
-  if (company.ticker.toUpperCase() !== 'XOM') throw new Error('The first integrated-energy workbook is issuer-specific to XOM.');
   if (history.annual.length !== 3 || history.annual.some((item, index) => item.year !== history.years[index])) {
     throw new Error('Integrated-energy workbook requires three aligned annual years.');
   }
   const latest = history.annual.at(-1);
   if (!latest || latest.year !== assumptions.baseYear || latest.year !== history.years.at(-1)) {
-    throw new Error('XOM energy history, base year, and SEC filing periods do not align.');
+    throw new Error('Integrated-energy history, base year, and SEC filing periods do not align.');
   }
   const sourceNotes: string[] = [];
   for (const item of history.annual) {
@@ -73,8 +72,8 @@ export function buildIntegratedEnergyModelExportPayload(
   sourceNotes.push(
     `Dated WACC ${assumptions.wacc.toFixed(4)}; CAPM cost of equity ${(assumptions.riskFreeRate + assumptions.beta * assumptions.equityRiskPremium).toFixed(4)}; WACC inputs as of ${assumptions.asOfDate}.`,
     `FY${latest.year} is the latest annual operating base. The model does not include later quarterly production, earnings, cash-flow, or debt updates.`,
-    'The Upstream schedule forecasts filed crude, NGL, bitumen, synthetic-oil and gas volumes, total realized prices, and production costs. Its earnings conversion factor is calibrated to reported FY2025 Upstream GAAP earnings and the filed production-economics proxy.',
-    'ExxonMobil’s 2026 Brent, Henry Hub, and TTF earnings sensitivities appear as independent checks. They do not replace the model’s production-price-cost calculation.',
+    'The Upstream schedule forecasts filed crude, NGL, bitumen, synthetic-oil and gas volumes, total realized prices, and production costs. Its earnings conversion factor is calibrated to reported Upstream GAAP earnings and the filed production-economics proxy.',
+    'Filed Brent, Henry Hub, and TTF earnings sensitivities appear as independent checks. They do not replace the model\u2019s production-price-cost calculation.',
     'Cash CapEx uses the SEC-reported non-GAAP Cash CapEx reconciliation. Note 3 segment PP&E additions are presented separately and include noncash additions, including acquisition-related amounts.',
     'Operating working-capital investment is derived from four filed cash-flow impacts: receivables, inventory, other current assets, and accounts/other payables.',
     'No separate marketable-securities adjustment is added because equity-company production and earnings are included in the segment forecast; adding the combined investments-and-advances line would double count those operating assets.',

@@ -1,5 +1,4 @@
 import { Assumptions } from '@/core/types';
-import { SP500_TEMPLATE_MAP } from '@/core/data/sp500-template-map';
 
 export type IndustryPresetKey =
   | "tech-hardware"
@@ -173,20 +172,7 @@ const INDUSTRY_PRESETS: Record<IndustryPresetKey, { name: string; assumptions: I
   }
 };
 
-const TICKER_TEMPLATE_MAP: Record<string, IndustryPresetKey> = {
-  AAPL: "tech-hardware", MSFT: "tech-hardware", DELL: "tech-hardware", HPQ: "tech-hardware", INTC: "tech-hardware", AMD: "tech-hardware", NVDA: "tech-hardware", CSCO: "tech-hardware", IBM: "tech-hardware",
-  CRM: "tech-saas", NOW: "tech-saas", ADBE: "tech-saas", ORCL: "tech-saas", SNOW: "tech-saas", HUBS: "tech-saas", TEAM: "tech-saas", INTU: "tech-saas", WDAY: "tech-saas", SHOP: "tech-saas",
-  NKE: "consumer-discretionary", SBUX: "consumer-discretionary", MCD: "consumer-discretionary", AMZN: "consumer-discretionary", TSLA: "consumer-discretionary", HD: "consumer-discretionary", LOW: "consumer-discretionary", BKNG: "consumer-discretionary", ROST: "consumer-discretionary",
-  PG: "consumer-staples", KO: "consumer-staples", WMT: "consumer-staples", PEP: "consumer-staples", COST: "consumer-staples", CL: "consumer-staples", KMB: "consumer-staples", GIS: "consumer-staples",
-  BA: "industrials", CAT: "industrials", GE: "industrials", HON: "industrials", DE: "industrials", UPS: "industrials", RTX: "industrials", LMT: "industrials",
-  JNJ: "healthcare", UNH: "healthcare", PFE: "healthcare", ABBV: "healthcare", MRK: "healthcare", LLY: "healthcare", BMY: "healthcare", TMO: "healthcare",
-  JPM: "financials", GS: "financials", BAC: "financials", MS: "financials", C: "financials", WFC: "financials", BLK: "financials", SCHW: "financials",
-  XOM: "energy", CVX: "energy", NEE: "energy", DUK: "energy", COP: "energy", SLB: "energy", EOG: "energy", SO: "energy",
-  AMT: "real-estate", PLD: "real-estate", SPG: "real-estate", O: "real-estate", PSA: "real-estate", CBRE: "real-estate", WELL: "real-estate", EQIX: "real-estate",
-};
-
 export function detectIndustryTemplate(ticker?: string, sector?: string, industry?: string): IndustryPresetKey | null {
-  const t = (ticker || "").toUpperCase().trim();
   const s = `${sector || ""} ${industry || ""}`.toLowerCase();
 
   if (s.includes("telecom") || s.includes("wireless carrier") || s.includes("telecommunications")) return null;
@@ -201,8 +187,6 @@ export function detectIndustryTemplate(ticker?: string, sector?: string, industr
   if (s.includes("energy") || s.includes("utility") || s.includes("oil") || s.includes("gas")) return "energy";
   if (s.includes("real estate") || s.includes("reit")) return "real-estate";
 
-  if (t && SP500_TEMPLATE_MAP[t]) return SP500_TEMPLATE_MAP[t];
-  if (t && TICKER_TEMPLATE_MAP[t]) return TICKER_TEMPLATE_MAP[t];
   return null;
 }
 

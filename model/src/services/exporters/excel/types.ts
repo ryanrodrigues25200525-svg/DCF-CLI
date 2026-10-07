@@ -193,7 +193,7 @@ export interface IncompleteBiotechModelExportData {
 }
 
 export interface IncompleteLifeInsuranceModelExportData {
-    ticker: 'MET' | 'PRU';
+    ticker: string;
     baseYear: number;
     forecastYears: 5;
     earningsBasis: 'after_tax_adjusted_earnings_available_to_common' | 'pre_tax_adjusted_operating_income';
@@ -512,6 +512,7 @@ export interface ComparableModelExportData {
     method: 'ev_ebitda' | 'revenue_multiple';
     targetMetric: number;
     selectedMultiple: number;
+    peersUsedForMedian: string[];
     peerStatus: 'live' | 'cached';
     peerSource: string;
     peerFallbackUsed: boolean;
