@@ -71,6 +71,43 @@ from .wacc import (
 )
 
 
+def _life_fact_value(fact: dict[str, Any], camel: str, snake: str) -> Any:
+    value = fact.get(camel)
+    return value if value is not None else fact.get(snake)
+
+
+def _life_insurance_source_contract_resolves(life_model: Any) -> bool:
+    """Return True when payload filing facts resolve a complete filing-derived contract."""
+    if not isinstance(life_model, dict):
+        return False
+    facts = life_model.get("filingFacts")
+    if not isinstance(facts, list) or not facts:
+        return False
+    try:
+        from app.services.valuation.life_contract import resolve_life_source_contract
+    except ImportError:
+        return False
+    snake_facts = [
+        {
+            "metric": fact.get("metric"),
+            "segment": fact.get("segment"),
+            "capital_group": _life_fact_value(fact, "capitalGroup", "capital_group"),
+            "unit": fact.get("unit"),
+            "unit_scale": _life_fact_value(fact, "unitScale", "unit_scale"),
+            "fiscal_year": _life_fact_value(fact, "fiscalYear", "fiscal_year"),
+            "earnings_basis": _life_fact_value(fact, "earningsBasis", "earnings_basis"),
+        }
+        for fact in facts if isinstance(fact, dict)
+    ]
+    try:
+        contract = resolve_life_source_contract(snake_facts)
+    except Exception:
+        return False
+    if contract is None:
+        return False
+    return life_model.get("earningsBasis") == contract.get("earningsBasis")
+
+
 def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> None:
     build_status = payload.get("buildStatus", "ready")
     should_build_incomplete_operating_dcf = (
@@ -183,8 +220,7 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
     should_build_incomplete_life_insurance_model = (
         build_status == "input_required"
         and payload.get("valuationModel") == "life_insurer_distributable_earnings_dcf"
-        and life_insurance_model.get("ticker") in {"MET", "PRU"}
-        and isinstance(life_insurance_model.get("filingFacts"), list)
+        and _life_insurance_source_contract_resolves(life_insurance_model)
     )
     if build_status == "input_required" and not (
         should_build_incomplete_operating_dcf or should_build_incomplete_bank_model
@@ -287,7 +323,7 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
 
     if valuation_model == "life_insurer_distributable_earnings_dcf":
         if not should_build_incomplete_life_insurance_model:
-            raise ValueError("Life-insurance workbooks require a validated input-required MET or PRU source contract.")
+            raise ValueError("Life-insurance workbooks require a validated input-required filing-derived source contract.")
         input_cells = apply_incomplete_workbook(workbook, payload, preserve_existing=True)
         apply_incomplete_life_insurance_model(workbook, payload, input_cells)
         return

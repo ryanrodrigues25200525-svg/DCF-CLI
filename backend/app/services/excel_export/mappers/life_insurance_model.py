@@ -136,22 +136,37 @@ def apply_incomplete_life_insurance_model(
     payload: dict[str, Any],
     input_cells: dict[str, dict[str, str]],
 ) -> None:
-    """Map a source-complete but assumption-incomplete MET/PRU equity DCF."""
+    """Map a source-complete but assumption-incomplete life-insurer equity DCF."""
     if payload.get("valuationModel") != "life_insurer_distributable_earnings_dcf" or payload.get("buildStatus") != "input_required":
         raise ValueError("Life-insurance workbook requires an input-required distributable-earnings DCF payload.")
     life = _record(payload.get("lifeInsuranceModel"))
     ticker = str(life.get("ticker") or "").upper()
-    if ticker not in {"MET", "PRU"}:
-        raise ValueError("The first life-insurance workbook supports only MET and PRU.")
+    if not ticker:
+        raise ValueError("Life-insurance workbook requires an issuer ticker for labeling.")
+    from app.services.valuation.life_contract import resolve_life_source_contract
+    camel_facts = [fact for fact in life.get("filingFacts", []) if isinstance(fact, dict)]
+    snake_facts = [
+        {
+            "metric": fact.get("metric"), "segment": fact.get("segment", fact.get("segment")),
+            "capital_group": _fact_value(fact, "capitalGroup"), "unit": fact.get("unit"),
+            "unit_scale": _fact_value(fact, "unitScale"), "fiscal_year": _fact_value(fact, "fiscalYear"),
+            "earnings_basis": _fact_value(fact, "earningsBasis"),
+        }
+        for fact in camel_facts
+    ]
+    contract = resolve_life_source_contract(snake_facts)
+    if contract is None:
+        raise ValueError(f"The {ticker} life-insurance source facts do not resolve a complete source contract.")
     base_year = life.get("baseYear")
     if not isinstance(base_year, int) or life.get("forecastYears") != 5:
         raise ValueError("Life-insurance workbook requires a filed fiscal base year and five forecast years.")
     earnings_basis = life.get("earningsBasis")
-    expected_basis = "after_tax_adjusted_earnings_available_to_common" if ticker == "MET" else "pre_tax_adjusted_operating_income"
-    expected_metric = "adjusted_earnings_available_to_common" if ticker == "MET" else "adjusted_operating_income_pretax"
+    expected_basis = str(contract["earningsBasis"])
+    expected_metric = str(contract["earningsMetric"])
+    after_tax = expected_basis == "after_tax_adjusted_earnings_available_to_common"
     if earnings_basis != expected_basis:
         raise ValueError(f"The {ticker} life-insurance source earnings basis is inconsistent with its filed measure.")
-    facts = [fact for fact in life.get("filingFacts", []) if isinstance(fact, dict)]
+    facts = camel_facts
     current_segments = sorted({
         str(_fact_value(fact, "segment")) for fact in facts
         if _fact_value(fact, "metric") == expected_metric and _fact_value(fact, "fiscalYear") == base_year and _fact_value(fact, "segment")
@@ -234,7 +249,7 @@ def apply_incomplete_life_insurance_model(
         earnings_row = cursor
         growth_row = cursor + 1
         segment_earnings_rows.append(earnings_row)
-        model.cell(earnings_row, 1, f"{segment} — {'after-tax adjusted earnings' if ticker == 'MET' else 'pre-tax adjusted operating income'}")
+        model.cell(earnings_row, 1, f"{segment} — {'after-tax adjusted earnings' if after_tax else 'pre-tax adjusted operating income'}")
         model.cell(growth_row, 1, f"{segment} growth assumption")
         model.cell(growth_row, 1).font = Font(name="Arial", size=9, italic=True, color=_GRAY)
         for year in historical_years:
@@ -267,7 +282,7 @@ def apply_incomplete_life_insurance_model(
     model.cell(
         after_tax_row,
         1,
-        "Adjusted earnings available to common (after tax)" if ticker == "MET"
+        "Adjusted earnings available to common (after tax)" if after_tax
         else "Adjusted operating income after tax (normalized tax input)",
     )
     for year, column in year_columns.items():
@@ -275,7 +290,7 @@ def apply_incomplete_life_insurance_model(
         model[f"{column}{source_total_row}"] = f"=SUM({segment_cells})"
         model[f"{column}{source_total_row}"].number_format = _AMOUNT
         model[f"{column}{source_total_row}"].font = Font(name="Arial", size=9, bold=True)
-        if ticker == "MET":
+        if after_tax:
             model[f"{column}{after_tax_row}"] = f"={column}{source_total_row}"
         else:
             model[f"{column}{after_tax_row}"] = f'=IF(\'Input Required\'!$B$3<>"READY","",{column}{source_total_row}*(1-$K$9))'
@@ -284,9 +299,9 @@ def apply_incomplete_life_insurance_model(
     model.cell(source_total_row, 1).font = Font(name="Arial", size=9, bold=True)
     model.cell(after_tax_row, 1).font = Font(name="Arial", size=9, bold=True)
     model[f"A{source_total_row + 2}"] = (
-        "MET filed adjusted earnings are already after tax and are not taxed again."
-        if ticker == "MET" else
-        "PRU after-tax values are derived with the normalized tax assumption, not reported by the issuer; the input is applied to both historical and forecast values."
+        f"{ticker} filed adjusted earnings are already after tax and are not taxed again."
+        if after_tax else
+        "After-tax values are derived with the normalized tax assumption, not reported by the issuer; the input is applied to both historical and forecast values."
     )
     model.merge_cells(start_row=source_total_row + 2, start_column=1, end_row=source_total_row + 2, end_column=9)
     model[f"A{source_total_row + 2}"].font = Font(name="Arial", size=9, italic=True, color=_GRAY)
@@ -354,14 +369,14 @@ def apply_incomplete_life_insurance_model(
     model["K8"].font = Font(name="Arial", size=9, bold=True, color=_GREEN)
     model["L8"] = "Risk-free rate + beta × equity-risk premium"
     model["J9"] = "Normalized tax rate"
-    if ticker == "PRU":
+    if not after_tax:
         model["K9"] = _input_formula(input_cells, "life_normalized_tax_rate")
         model["K9"].number_format = _PERCENT
         model["K9"].font = Font(name="Arial", size=9, color=_GREEN)
-        model["L9"] = "Source-required analyst tax conversion for PRU pre-tax adjusted operating income."
+        model["L9"] = f"Source-required analyst tax conversion for {ticker} pre-tax adjusted operating income."
     else:
         model["K9"] = "Not applied"
-        model["L9"] = "MET adjusted earnings available to common are already after tax."
+        model["L9"] = f"{ticker} adjusted earnings available to common are already after tax."
     model["J10"] = "Terminal growth"
     model["K10"] = _input_formula(input_cells, "terminal_growth_rate")
     model["K10"].number_format = _PERCENT

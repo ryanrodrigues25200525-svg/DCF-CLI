@@ -46,6 +46,7 @@ import type { AssetManagerModelAssumptions } from '@/services/valuation/asset-ma
 import type { TelecomModelAssumptions } from '@/services/valuation/telecom-model';
 import type { MortgageReitModelAssumptions } from '@/services/valuation/mortgage-reit-model';
 import type { IntegratedEnergyAssumptions } from '@/services/valuation/integrated-energy-model';
+import {resolveLifeSourceContract} from '@/services/valuation/life-source-contract.js';
 import { COMPARABLE_VALUATION_METHODS, isComparableValuationMethod } from '@/services/valuation/multiple-model';
 
 const COMPANY_TYPES: readonly CompanyType[] = [
@@ -1850,7 +1851,8 @@ function parseIncompleteLifeInsuranceModelExportData(
   requiredInputs: readonly WorkbookInputRequirement[],
 ): IncompleteLifeInsuranceModelExportData {
   const model = requireRecord(value, 'export.lifeInsuranceModel');
-  const ticker = parseEnum(model.ticker, ['MET', 'PRU'] as const, 'export.lifeInsuranceModel.ticker');
+  const ticker = requireString(model.ticker, 'export.lifeInsuranceModel.ticker').toUpperCase();
+  if (!ticker.trim()) throw new TypeError('export.lifeInsuranceModel.ticker is required for labeling');
   const baseYear = requireFiniteNumber(model.baseYear, 'export.lifeInsuranceModel.baseYear');
   if (!Number.isInteger(baseYear) || requireFiniteNumber(model.forecastYears, 'export.lifeInsuranceModel.forecastYears') !== 5) {
     throw new TypeError('export.lifeInsuranceModel requires an integer base year and five forecast years');
@@ -1858,13 +1860,12 @@ function parseIncompleteLifeInsuranceModelExportData(
   const earningsBasis = parseEnum(model.earningsBasis, [
     'after_tax_adjusted_earnings_available_to_common', 'pre_tax_adjusted_operating_income',
   ] as const, 'export.lifeInsuranceModel.earningsBasis');
-  const expectedBasis = ticker === 'MET' ? 'after_tax_adjusted_earnings_available_to_common' : 'pre_tax_adjusted_operating_income';
-  const expectedMetric = ticker === 'MET' ? 'adjusted_earnings_available_to_common' : 'adjusted_operating_income_pretax';
-  if (earningsBasis !== expectedBasis) throw new TypeError(`export.lifeInsuranceModel.earningsBasis is invalid for ${ticker}`);
   const filingFacts = parseObjectList(model.filingFacts, 'export.lifeInsuranceModel.filingFacts', parseLifeInsuranceFilingFact);
-  const expectedSegments = ticker === 'MET'
-    ? ['Group Benefits', 'RIS', 'Asia', 'Latin America', 'EMEA', 'MIM', 'Corporate & Other']
-    : ['PGIM', 'Retirement Strategies', 'Group Insurance', 'Individual Life', 'International Businesses', 'Corporate and Other'];
+  const contract = resolveLifeSourceContract(filingFacts);
+  if (contract === null) throw new TypeError('export.lifeInsuranceModel does not resolve a complete filing-derived source contract');
+  if (contract.earningsBasis !== earningsBasis) throw new TypeError(`export.lifeInsuranceModel.earningsBasis is invalid for ${ticker}`);
+  const expectedMetric = contract.earningsMetric;
+  const expectedSegments = contract.segmentNames;
   for (const year of [baseYear - 2, baseYear - 1, baseYear]) {
     const rows = filingFacts.filter((fact) => fact.metric === expectedMetric && fact.fiscal_year === year);
     const segments = rows.map((fact) => fact.segment);
@@ -1872,11 +1873,9 @@ function parseIncompleteLifeInsuranceModelExportData(
       throw new TypeError(`export.lifeInsuranceModel is missing FY${year} ${ticker} segment earnings facts`);
     }
   }
-  const requiredCapitalMetric = ticker === 'MET' ? 'statement_based_combined_rbc_ratio_floor' : 'statutory_capital_and_surplus';
-  const requiredCapacityGroup = ticker === 'MET' ? 'Metropolitan Life Insurance Company' : 'PICA';
-  const hasRequiredCapitalFact = filingFacts.some((fact) => fact.metric === requiredCapitalMetric && fact.fiscal_year === baseYear);
+  const hasRequiredCapitalFact = filingFacts.some((fact) => fact.metric === contract.capitalMetric && fact.fiscal_year === baseYear);
   const hasDividendCapacityFact = filingFacts.some((fact) => fact.metric === 'permitted_ordinary_dividend_without_approval'
-    && fact.capital_group?.startsWith(requiredCapacityGroup) && fact.fiscal_year === baseYear + 1);
+    && fact.capital_group?.startsWith(contract.dividendCapacityGroup) && fact.fiscal_year === baseYear + 1);
   if (!hasRequiredCapitalFact || !hasDividendCapacityFact) {
     throw new TypeError(`export.lifeInsuranceModel is missing ${ticker} statutory-capital or dividend disclosures`);
   }
@@ -1891,7 +1890,7 @@ function parseIncompleteLifeInsuranceModelExportData(
     required.add(`life_permitted_upstream_dividends:${year}`);
     for (const segment of expectedSegments) required.add(`life_segment_earnings_growth:${segment}:${year}`);
   }
-  if (ticker === 'PRU') required.add('life_normalized_tax_rate:');
+  if (contract.requiresNormalizedTax) required.add('life_normalized_tax_rate:');
   if (model.currentPrice === undefined || model.currentPrice === null) required.add('life_current_share_price:');
   if (model.dilutedShares === undefined || model.dilutedShares === null) required.add(`life_diluted_shares:${baseYear}`);
   if (model.riskFreeRate === undefined || model.riskFreeRate === null) required.add('life_risk_free_rate:');
@@ -2365,6 +2364,10 @@ export function parseDcfExportPayload(value: unknown): DcfWorkbookPayload {
     if (requireFiniteNumber(multiple.targetMetric, 'export.comparableModel.targetMetric') <= 0
       || requireFiniteNumber(multiple.selectedMultiple, 'export.comparableModel.selectedMultiple') <= 0) {
       throw new TypeError('export.comparableModel target metric and selected multiple must be positive');
+    }
+    const peersUsedForMedian = requireStringArray(multiple.peersUsedForMedian, 'export.comparableModel.peersUsedForMedian');
+    if (peersUsedForMedian.length < 3) {
+      throw new TypeError('export.comparableModel.peersUsedForMedian must include at least three peers');
     }
     parseEnum(multiple.peerStatus, ['live', 'cached'] as const, 'export.comparableModel.peerStatus');
     requireString(multiple.peerSource, 'export.comparableModel.peerSource');
