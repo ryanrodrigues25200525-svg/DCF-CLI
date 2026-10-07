@@ -39,6 +39,7 @@ import {
 } from '@/services/integration/sec/native-normalizer';
 import { formatCliInputRequiredSuccess, formatCliSuccess, getAnnualHistoryDisclosure, getRevenueHistoryError } from '@/services/cli-preflight';
 import { calculateRoutedValuation } from '@/services/valuation/router';
+import {resolveLifeSourceContract} from '@/services/valuation/life-source-contract.js';
 import { buildOperatingModelProfile } from '@/services/valuation/operating-model';
 import type { ComparableValuationInput } from '@/services/valuation/multiple-model';
 import { isComparableValuationMethod } from '@/services/valuation/multiple-model';
@@ -1132,8 +1133,11 @@ function buildIncompleteInputRequirements(
       const ticker = data.profile.ticker.toUpperCase();
       const lifeFacts = Array.isArray(data.financials_native.life_insurance_filing_facts)
         ? data.financials_native.life_insurance_filing_facts : [];
-      const earningsMetric = ticker === 'MET' ? 'adjusted_earnings_available_to_common' : 'adjusted_operating_income_pretax';
-      const segmentNames = [...new Set(lifeFacts
+      const contract = resolveLifeSourceContract(lifeFacts);
+      const earningsMetric = contract?.earningsMetric ?? 'adjusted_earnings_available_to_common';
+      const earningsBasisLabel = contract?.earningsBasis === 'pre_tax_adjusted_operating_income'
+        ? 'pre-tax adjusted operating income' : 'after-tax adjusted earnings available to common';
+      const segmentNames = contract?.segmentNames ?? [...new Set(lifeFacts
         .filter((fact) => fact.metric === earningsMetric && fact.fiscal_year === baseYear)
         .map((fact) => fact.segment)
         .filter((segment): segment is string => Boolean(segment)))].sort();
@@ -1147,7 +1151,7 @@ function buildIncompleteInputRequirements(
               label: `${segment} adjusted-earnings growth`,
               inputType: 'analyst_assumption',
               sourceStatus: 'missing',
-              reason: `${sourceReason} Forecast FY${year}; the source basis remains ${ticker === 'MET' ? 'after-tax adjusted earnings available to common' : 'pre-tax adjusted operating income'}.`,
+              reason: `${sourceReason} Forecast FY${year}; the source basis remains ${earningsBasisLabel}.`,
               fiscalYear: year,
               unit: 'ratio',
               minimumValue: -0.95,
@@ -1212,7 +1216,7 @@ function buildIncompleteInputRequirements(
           label: 'Normalized tax rate on pre-tax adjusted operating income',
           inputType: 'analyst_assumption',
           sourceStatus: 'missing',
-          reason: `${sourceReason} PRU's source earnings measure is pre-tax; do not tax MET's after-tax adjusted earnings a second time.`,
+          reason: `${sourceReason} The source earnings measure is pre-tax; never tax after-tax adjusted earnings a second time.`,
           unit: 'ratio',
           minimumValue: 0,
           maximumValue: 0.6,
@@ -1378,7 +1382,7 @@ function buildIncompleteInputRequirements(
         for (const item of products) {
           const product = asRecord(item);
           const productName = typeof product.product_name === 'string' ? product.product_name.trim() : '';
-          if (!productName) throw new Error(`FY${yearRecord.year ?? 'unknown'} PFE product row has no name.`);
+          if (!productName) throw new Error(`FY${yearRecord.year ?? 'unknown'} product row has no name.`);
           const line = asRecord(product.revenue);
           const sources = Array.isArray(line.sources) ? line.sources : [];
           const hasFiledProductRevenue = (line.source === 'sec_native' || line.source === 'derived')
@@ -2194,6 +2198,7 @@ let comparablePeerTickers: string[] | undefined;
         method: comparableValuationInput.method,
         targetMetric: comparableValuationInput.targetMetric,
         selectedMultiple: comparableValuationInput.selectedMultiple,
+        peersUsedForMedian: comparablePeerTickers ?? [],
         peerStatus: peerQuality.status,
         peerSource: peerQuality.source,
         peerFallbackUsed: peerQuality.fallback_used,

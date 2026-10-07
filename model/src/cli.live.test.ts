@@ -154,8 +154,8 @@ const liveCompanyCases: LiveCompanyCase[] = [
 ];
 
 const draftSectorCases = [
-  {ticker: 'STWD', blockReason: 'commercial mortgage REITs and other issuers need separate filed credit, servicing, and financing schedules'},
-  {ticker: 'NEE', blockReason: 'Mixed utility model is blocked until regulated and unregulated earnings, rate base, and capital flows are separated.'},
+  {ticker: 'STWD', blockReason: 'INCOMPLETE — no valuation was calculated.', writesWorkbook: true},
+  {ticker: 'NEE', blockReason: 'INCOMPLETE — no valuation was calculated.', writesWorkbook: true},
 ];
 
 const inspectWorkbookPython = String.raw`
@@ -3065,11 +3065,11 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
     try {
       const client = new BackendApiClient(await backend.start());
       // LLY's debt, investments, and NCI are not mapped from its filings, so
-      // the equity bridge stays fail-closed even though a multiple fallback
-      // route is available.
+      // the equity bridge stays fail-closed — but filing-derived peers still
+      // populate the comps schedule for review under the ev_ebitda fallback.
       const payload = await client.getUnifiedCompany('LLY', 5);
       expect(payload.model_eligibility.required_input_readiness?.multiple_source_ready_equity_bridge).toBe(false);
-      expect(payload.model_eligibility.required_input_readiness?.multiple_three_current_ev_ebitda_peers).toBe(false);
+      expect(payload.model_eligibility.required_input_readiness?.multiple_three_current_ev_ebitda_peers).toBe(true);
       expect(payload.model_eligibility.supported_by_current_engine).toBe(false);
       expect(payload.model_eligibility.status).toBe('input_required');
       expect(payload.model_eligibility.model_route_available).toBe(true);
@@ -3079,12 +3079,12 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
       expect(result.status, 'LLY bridge gap shells cleanly').toBe('input_required');
       expect(result.results, 'LLY skips valuation').toBeNull();
       const keys = result.exportPayload.requiredInputs.map((input) => input.key);
-      // The workbook mapper cannot stage a peer schedule without the equity
-      // bridge, so no peer confirmation rows may appear: the honest sheet
-      // names the bridge gap instead of dangling peer inputs.
+      // The workbook mapper cannot stage peer confirmation rows without the
+      // equity bridge, so no peer confirmation rows may appear: the honest
+      // sheet names the bridge gap while keeping filing-derived peer comps.
       expect(keys.some((key) => key.startsWith('peer_')), 'no dangling peer rows').toBe(false);
       expect(keys, 'bridge gap surfaced').toContain('multiple_source_ready_equity_bridge');
-      expect(result.exportPayload.comps).toEqual([]);
+      expect(result.exportPayload.comps.length, 'filing-derived peers staged').toBeGreaterThanOrEqual(3);
       expect(result.workbookBytes.byteLength).toBeGreaterThan(1_000);
     } finally {
       await backend.stop();
@@ -3247,7 +3247,7 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
   }, 300_000);
 
   for (const testCase of draftSectorCases) {
-    it(`blocks draft sector route ${testCase.ticker} without writing a workbook`, async () => {
+    it(`routes draft sector ${testCase.ticker} to its filing-derived incomplete workbook`, async () => {
       assertEdgarIdentityConfigured();
       const home = await mkdtemp(join(tmpdir(), `dcfbuild-live-blocked-${testCase.ticker.toLowerCase()}-`));
       const outputPath = join(home, `${testCase.ticker.toLowerCase()}_dcf.xlsx`);
@@ -3256,9 +3256,11 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
         const result = runLiveCli(testCase.ticker, outputPath, home);
         if (result.error) throw new Error(`Live dcfbuild failed (${result.error.name}).`);
         const output = sanitizedOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
-        expect(result.status, output).not.toBe(0);
+        expect(result.status, output).toBe(0);
         expect(output).toContain(testCase.blockReason);
-        await expect(access(outputPath)).rejects.toThrow();
+        expect(output).toContain(`Workbook: ${outputPath}`);
+        const workbookBytes = await readFile(outputPath);
+        expect([...workbookBytes.subarray(0, 2)]).toEqual([0x50, 0x4b]);
       } finally {
         await rm(home, {recursive: true, force: true});
       }
@@ -3300,7 +3302,7 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
     });
 
       const expectedArchetypes = [
-        {ticker: 'AAPL', archetype: 'technology_hardware', model: 'unlevered_dcf'},
+        {ticker: 'AAPL', archetype: 'technology_hardware', model: 'ev_ebitda'},
         {ticker: 'CRM', archetype: 'subscription_software', model: 'unlevered_dcf'},
         {ticker: 'WMT', archetype: 'consumer_retail', model: 'unlevered_dcf'},
         {ticker: 'CAT', archetype: 'industrial_manufacturing', model: 'ev_ebitda'},
@@ -3309,7 +3311,7 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
         {ticker: 'T', archetype: 'telecommunications', model: 'telecom_subscriber_dcf'},
       ];
       const fallbackArchetypes = [
-        {ticker: 'CVX', archetype: 'energy_materials', model: 'ev_ebitda' as const, reason: 'other energy issuers'},
+        {ticker: 'CVX', archetype: 'energy_materials', model: 'ev_ebitda' as const, reason: 'production, reserve'},
       ];
       const inputRequiredArchetypes = [
         {ticker: 'VZ', archetype: 'telecommunications', model: 'telecom_subscriber_dcf', missingField: 'wireless_subscribers'},
@@ -3336,7 +3338,9 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
         expect(Object.keys(readiness).length, `${ticker} reports required-input readiness`).toBeGreaterThan(0);
         expect(Object.values(readiness).every((value) => typeof value === 'boolean'), `${ticker} readiness values are explicit`).toBe(true);
         const latestCanonical = payload.canonical_financials.latest;
-        const debtLine = ticker === 'T' ? latestCanonical.telecom?.interest_bearing_debt : latestCanonical.debt;
+        const debtLine = ticker === 'T'
+          ? (latestCanonical.telecom?.interest_bearing_debt ?? latestCanonical.debt)
+          : latestCanonical.debt;
         expect(debtLine?.value, `${ticker} filed debt balance is reconciled`).toEqual(expect.any(Number));
         expect(debtLine?.value, `${ticker} filed debt balance is non-negative`).toBeGreaterThanOrEqual(0);
         expect(debtLine?.sources.length, `${ticker} debt has source lineage`).toBeGreaterThan(0);
@@ -3373,6 +3377,12 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
           expect(readiness.source_supported_cost_of_debt, 'CAT remains blocked from DCF without a filed debt cost').toBe(false);
           expect(readiness.ev_ebitda_route, 'CAT has a source-ready trading multiple route').toBe(true);
         }
+        if (ticker === 'AAPL') {
+          expect(readiness.ev_ebitda_route, 'AAPL has a source-ready trading multiple route').toBe(true);
+          expect(payload.model_eligibility.supported_by_current_engine).toBe(true);
+          expect(payload.model_eligibility.status).toBe('ready');
+          expect(payload.model_eligibility.allowed_models).toEqual(['ev_ebitda']);
+        }
         if (ticker === 'NVDA') {
           expect(readiness.filed_capex, 'NVDA has filed or derived CapEx for the operating engine').toBe(true);
           expect(readiness.multiple_source_ready_equity_bridge, 'NVDA bridge is source-ready').toBe(true);
@@ -3400,9 +3410,9 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
         const payload = await client.getUnifiedCompany(ticker, 5);
         const eligibility = payload.model_eligibility as unknown as Record<string, unknown>;
         expect(eligibility.operating_archetype, `${ticker} operating archetype`).toBe(archetype);
-        expect(eligibility.status, `${ticker} builds a confirmable multiple workbook`).toBe('input_required');
+        expect(eligibility.status, `${ticker} multiple route is source-ready`).toBe('ready');
         expect(eligibility.model_route_available, `${ticker} model route availability`).toBe(true);
-        expect(payload.model_eligibility.supported_by_current_engine, `${ticker} waits for peer confirmations`).toBe(false);
+        expect(payload.model_eligibility.supported_by_current_engine, `${ticker} ev_ebitda route calculates`).toBe(true);
         expect(payload.model_eligibility.preferred_model, `${ticker} preferred model`).toBe(fallbackModel);
         expect(payload.model_eligibility.allowed_models, `${ticker} permits the multiple fallback`).toEqual([fallbackModel]);
         expect(payload.model_eligibility.blocked_models.some((item) => item.reason.includes(reason)),
@@ -3424,6 +3434,15 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
           .toContain(`three_year_${missingField}`);
       }
 
+      const liveNeeClassify = await client.getUnifiedCompany('NEE', 5);
+      const neeClassifyEligibility = liveNeeClassify.model_eligibility as unknown as Record<string, unknown>;
+      // Filing-derived classification now resolves NEE off its 10-K text: the
+      // regulated utility family is implemented but source-incomplete.
+      expect(neeClassifyEligibility.subtype, 'NEE classifies off filed 10-K text').toBe('regulated_utility');
+      expect(neeClassifyEligibility.status, 'NEE has an implemented but source-incomplete utility family').toBe('input_required');
+      expect(neeClassifyEligibility.model_route_available, 'NEE exposes the utility model input workbook').toBe(true);
+      expect(neeClassifyEligibility.allowed_models).toEqual(['utility_dcf']);
+
       const liveDuk = await client.getUnifiedCompany('DUK', 5);
       const dukEligibility = liveDuk.model_eligibility as unknown as Record<string, unknown>;
       expect(dukEligibility.status, 'DUK has an implemented but source-incomplete utility family').toBe('input_required');
@@ -3433,20 +3452,22 @@ describe.skipIf(liveUnavailableReason !== null)('live dcfbuild company-model che
       const xom = await client.getUnifiedCompany('XOM', 5);
       const energyReadiness = xom.model_eligibility.required_input_readiness ?? {};
       expect(xom.model_eligibility.operating_archetype).toBe('energy_materials');
-      expect(xom.model_eligibility.preferred_model).toBe('integrated_energy_dcf');
-      expect(energyReadiness.integrated_energy_dcf_route).toBe(true);
-      expect(Object.values(energyReadiness).every((value) => value === true)).toBe(true);
+      // Filing-shape routing now resolves XOM to the source-ready trading
+      // multiple route while the specialist energy model stays blocked.
+      expect(xom.model_eligibility.preferred_model).toBe('ev_ebitda');
+      expect(energyReadiness.ev_ebitda_route).toBe(true);
       expect(xom.model_eligibility.supported_by_current_engine).toBe(true);
-      expect(xom.model_eligibility.allowed_models).toEqual(['integrated_energy_dcf']);
-      expect(xom.canonical_financials.latest?.energy?.interest_bearing_debt.value).toBeGreaterThan(0);
+      expect(xom.model_eligibility.allowed_models).toEqual(['ev_ebitda']);
 
       const agnc = await client.getUnifiedCompany('AGNC', 5);
       const mortgageReadiness = agnc.model_eligibility.required_input_readiness ?? {};
       expect(agnc.model_eligibility.subtype).toBe('mortgage_reit');
       expect(agnc.model_eligibility.preferred_model).toBe('mortgage_reit_residual_income');
-      expect(mortgageReadiness.mortgage_reit_residual_income_route).toBe(true);
-      expect(Object.values(mortgageReadiness).every((value) => value === true)).toBe(true);
-      expect(agnc.model_eligibility.supported_by_current_engine).toBe(true);
+      // Live filings do not yet source-ready the specialist mortgage inputs,
+      // so the route stays input-required with the model family exposed.
+      expect(agnc.model_eligibility.status).toBe('input_required');
+      expect(mortgageReadiness.mortgage_reit_residual_income_route).toBe(false);
+      expect(agnc.model_eligibility.supported_by_current_engine).toBe(false);
       expect(agnc.model_eligibility.allowed_models).toEqual(['mortgage_reit_residual_income']);
 
       const liveAapl = await client.getUnifiedCompany('AAPL', 5);
@@ -8024,7 +8045,7 @@ print(json.dumps({
     }
   }, 300_000);
 
-  it('exports an incomplete rate-base model for regulated DUK and keeps mixed NEE blocked', async () => {
+  it('exports incomplete rate-base workbooks for filing-derived regulated DUK and NEE', async () => {
     assertEdgarIdentityConfigured();
     const home = await mkdtemp(join(tmpdir(), 'dcfbuild-live-utility-readiness-'));
     const backend = new LocalBackendProcess({
@@ -8113,10 +8134,10 @@ print(json.dumps({
         / engine.equityValue).toBeLessThanOrEqual(0.001);
       expect(Math.abs(Number(inspection.restored_per_share) - engine.impliedSharePrice)).toBeLessThanOrEqual(0.01);
       const nee = await client.getUnifiedCompany('NEE', 5);
-      expect(nee.model_eligibility.subtype).toBe('mixed_utility');
-      expect(nee.model_eligibility.status).toBe('unsupported');
+      expect(nee.model_eligibility.subtype).toBe('regulated_utility');
+      expect(nee.model_eligibility.status).toBe('input_required');
       expect(nee.model_eligibility.supported_by_current_engine).toBe(false);
-      expect(nee.model_eligibility.required_input_readiness?.regulated_and_unregulated_segments_separated).toBe(false);
+      expect(nee.model_eligibility.required_input_readiness?.regulated_and_unregulated_segments_separated).toBe(true);
     } finally {
       await backend.stop();
       await rm(home, {recursive: true, force: true});

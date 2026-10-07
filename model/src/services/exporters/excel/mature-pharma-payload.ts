@@ -26,14 +26,14 @@ export function buildIncompleteMaturePharmaModelExportData(
 ): IncompleteMaturePharmaModelExportData {
   if (history.years.length !== 3 || history.annual.length !== 3
     || history.annual.some((item, index) => item.year !== history.years[index])) {
-    throw new Error('Incomplete PFE workbook requires three aligned annual periods.');
+    throw new Error('Incomplete mature-pharma workbook requires three aligned annual periods.');
   }
   const hasMissingProductRevenue = history.annual.some((year) =>
     year.pharma.products.some((product) => (product.revenue.source !== 'sec_native' && product.revenue.source !== 'derived')
       || typeof product.revenue.value !== 'number'
       || product.revenue.sources.length === 0
       || product.revenue.sources.some((source) => !source.accession || !source.filed)));
-  if (!hasMissingProductRevenue) throw new Error('Incomplete PFE workbook requires a missing filed product revenue line.');
+  if (!hasMissingProductRevenue) throw new Error('Incomplete mature-pharma workbook requires a missing filed product revenue line.');
   return {history, assumptions};
 }
 
@@ -42,14 +42,13 @@ export function buildMaturePharmaModelExportPayload(
   history: PharmaHistoricalData,
   assumptions: MaturePharmaModelAssumptions,
 ): DcfExportPayload {
-  if (company.ticker.toUpperCase() !== 'PFE') throw new Error('The first mature-pharma workbook is issuer-specific to Pfizer.');
   if (history.years.length !== 3 || history.annual.length !== 3
     || history.annual.some((item, index) => item.year !== history.years[index])) {
     throw new Error('Mature-pharma workbook requires three aligned annual years.');
   }
   const latest = history.annual.at(-1);
   if (!latest || latest.year !== assumptions.baseYear || latest.year !== history.years.at(-1)) {
-    throw new Error('PFE product history and model base year do not align.');
+    throw new Error('Product history and model base year do not align.');
   }
   const sourceNotes: string[] = [];
   for (const year of history.annual) {
@@ -74,7 +73,7 @@ export function buildMaturePharmaModelExportPayload(
   sourceNotes.push(
     `FY${latest.year} is the latest annual operating base. The valuation excludes unlaunched pipeline assets and does not add patent-option NAV to enterprise value.`,
     'Reported regional basic patent dates are separate from the editable modeled global LOE year; patent expiry is not a generic-entry date.',
-    'The PFE product table groups some families and the source does not disclose revenue by territory; assumptions retain this uncertainty for analyst review.',
+    'The filed product table groups some families and the source does not disclose revenue by territory; assumptions retain this uncertainty for analyst review.',
     'Unallocated alliance, royalty, and other revenue is the reconciled residual of total revenue less individually disclosed product lines.',
     'Long-term equity-method and private investments are not added to the cash-like short-term investment bridge.',
   );
@@ -113,8 +112,7 @@ export function buildMaturePharmaModelExportPayload(
       printDate: new Date().toISOString().slice(0, 10), companyName: company.name,
       currency: company.currency || 'USD', confidenceLabel: 'Medium', confidenceScore: 0.58,
       warnings: [
-        `This PFE model starts from FY${latest.year} annual actuals; later quarterly product revenue is not included.`,
-        'Other pharma issuers remain blocked until their product-sales and patent source contracts pass live acceptance.',
+        `This model starts from FY${latest.year} annual actuals; later quarterly product revenue is not included.`,
       ],
       sourceNotes,
     },

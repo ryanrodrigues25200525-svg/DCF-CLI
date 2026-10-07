@@ -137,9 +137,9 @@ class LifeInsuranceFilingFact(WireModel):
         if self.metric in {"adjusted_earnings_available_to_common", "adjusted_operating_income_pretax"} and not self.segment:
             raise ValueError("life_insurance earnings facts require a source segment")
         if self.metric == "adjusted_earnings_available_to_common" and self.earnings_basis != "after_tax_adjusted_earnings_available_to_common":
-            raise ValueError("MET adjusted earnings must retain its after-tax basis")
+            raise ValueError("adjusted earnings available to common must retain their after-tax basis")
         if self.metric == "adjusted_operating_income_pretax" and self.earnings_basis != "pre_tax_adjusted_operating_income":
-            raise ValueError("PRU adjusted operating income must retain its pre-tax basis")
+            raise ValueError("adjusted operating income must retain its pre-tax basis")
         if self.metric in {"statutory_capital_and_surplus", "statutory_net_income", "permitted_ordinary_dividend_without_approval", "paid_upstream_dividend"} and not self.capital_group:
             raise ValueError("life_insurance capital and dividend facts require a capital group")
         if self.metric.endswith("_floor") and self.comparison_operator is None:
@@ -1634,6 +1634,7 @@ class ComparableModelExportData(ExportWireModel):
     method: Literal["ev_ebitda", "revenue_multiple"]
     target_metric: StrictFloat | StrictInt = Field(gt=0)
     selected_multiple: StrictFloat | StrictInt = Field(gt=0)
+    peers_used_for_median: list[str] = Field(min_length=3)
     peer_status: Literal["live", "cached"]
     peer_source: str
     peer_fallback_used: StrictBool
@@ -1826,7 +1827,7 @@ class IncompleteBiotechModelExportData(ExportWireModel):
 
 
 class IncompleteLifeInsuranceModelExportData(ExportWireModel):
-    ticker: Literal["MET", "PRU"]
+    ticker: str = Field(min_length=1)
     base_year: StrictInt
     forecast_years: Literal[5]
     earnings_basis: Literal[
@@ -1844,15 +1845,21 @@ class IncompleteLifeInsuranceModelExportData(ExportWireModel):
 
     @model_validator(mode="after")
     def validate_life_insurance_source_contract(self) -> IncompleteLifeInsuranceModelExportData:
-        expected_basis = "after_tax_adjusted_earnings_available_to_common" if self.ticker == "MET" else "pre_tax_adjusted_operating_income"
-        expected_metric = "adjusted_earnings_available_to_common" if self.ticker == "MET" else "adjusted_operating_income_pretax"
+        from app.services.valuation.life_contract import resolve_life_source_contract
+        raw_facts = [
+            {"metric": fact.metric, "segment": fact.segment, "capital_group": fact.capital_group,
+             "unit": fact.unit, "unit_scale": fact.unit_scale, "fiscal_year": fact.fiscal_year,
+             "earnings_basis": fact.earnings_basis}
+            for fact in self.filing_facts
+        ]
+        contract = resolve_life_source_contract(raw_facts)
+        if contract is None:
+            raise ValueError("life-insurance source facts do not resolve a complete filing-derived source contract")
+        expected_basis = str(contract["earningsBasis"])
+        expected_metric = str(contract["earningsMetric"])
+        expected_segments = set(contract["segmentNames"])
         if self.earnings_basis != expected_basis:
             raise ValueError(f"{self.ticker} life-insurance earnings basis does not match its filed measure")
-        expected_segments = (
-            {"Group Benefits", "RIS", "Asia", "Latin America", "EMEA", "MIM", "Corporate & Other"}
-            if self.ticker == "MET" else
-            {"PGIM", "Retirement Strategies", "Group Insurance", "Individual Life", "International Businesses", "Corporate and Other"}
-        )
         years = sorted({fact.fiscal_year for fact in self.filing_facts if fact.metric == expected_metric})
         if len(years) < 3 or years[-3:] != list(range(self.base_year - 2, self.base_year + 1)):
             raise ValueError("life-insurance source facts must include three consecutive filed earnings years through the base year")
@@ -1863,14 +1870,10 @@ class IncompleteLifeInsuranceModelExportData(ExportWireModel):
                 raise ValueError(f"life-insurance FY{year} segment earnings coverage is incomplete")
             if any(fact.unit != "USD" or fact.unit_scale != "millions" or fact.earnings_basis != expected_basis for fact in rows):
                 raise ValueError(f"life-insurance FY{year} segment earnings definitions or units are inconsistent")
-        if self.ticker == "MET":
-            capital_ready = any(fact.metric == "statement_based_combined_rbc_ratio_floor" and fact.fiscal_year == self.base_year for fact in self.filing_facts)
-            dividend_ready = any(fact.metric == "permitted_ordinary_dividend_without_approval"
-                and fact.capital_group == "Metropolitan Life Insurance Company" and fact.fiscal_year == self.base_year + 1 for fact in self.filing_facts)
-        else:
-            capital_ready = any(fact.metric == "statutory_capital_and_surplus" and fact.capital_group == "PICA" and fact.fiscal_year == self.base_year for fact in self.filing_facts)
-            dividend_ready = any(fact.metric == "permitted_ordinary_dividend_without_approval"
-                and fact.capital_group.startswith("PICA") and fact.fiscal_year == self.base_year + 1 for fact in self.filing_facts)
+        dividend_group = str(contract["dividendCapacityGroup"])
+        capital_ready = any(fact.metric == contract["capitalMetric"] and fact.fiscal_year == self.base_year for fact in self.filing_facts)
+        dividend_ready = any(fact.metric == "permitted_ordinary_dividend_without_approval"
+            and (fact.capital_group or "").startswith(dividend_group) and fact.fiscal_year == self.base_year + 1 for fact in self.filing_facts)
         if not capital_ready or not dividend_ready:
             raise ValueError(f"life-insurance statutory capital or dividend source facts are incomplete for {self.ticker}")
         if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", self.as_of_date):
@@ -2118,7 +2121,7 @@ class DcfExportRequest(ExportWireModel):
                 raise ValueError("biotech_model is only valid for biotech_pipeline_rnpv exports")
             if self.valuation_model == "life_insurer_distributable_earnings_dcf":
                 if not isinstance(self.life_insurance_model, IncompleteLifeInsuranceModelExportData):
-                    raise ValueError("incomplete life-insurance exports need a source-complete MET or PRU filing payload")
+                    raise ValueError("incomplete life-insurance exports need a source-complete filing-derived payload")
                 life_model = self.life_insurance_model
                 expected_periods = {
                     ("life_parent_cash", None),
@@ -2128,7 +2131,7 @@ class DcfExportRequest(ExportWireModel):
                     ("life_non_controlling_interest", None),
                     ("terminal_growth_rate", None),
                 }
-                expected_metric = "adjusted_earnings_available_to_common" if life_model.ticker == "MET" else "adjusted_operating_income_pretax"
+                expected_metric = "adjusted_earnings_available_to_common" if life_model.earnings_basis == "after_tax_adjusted_earnings_available_to_common" else "adjusted_operating_income_pretax"
                 expected_segments = {
                     fact.segment for fact in life_model.filing_facts
                     if fact.metric == expected_metric and fact.fiscal_year == life_model.base_year and fact.segment
@@ -2139,7 +2142,7 @@ class DcfExportRequest(ExportWireModel):
                     expected_periods.add(("life_net_capital_addition", year))
                     expected_periods.add(("life_permitted_upstream_dividends", year))
                     expected_periods.update((f"life_segment_earnings_growth:{segment}", year) for segment in expected_segments)
-                if life_model.ticker == "PRU":
+                if life_model.earnings_basis == "pre_tax_adjusted_operating_income":
                     expected_periods.add(("life_normalized_tax_rate", None))
                 if life_model.risk_free_rate is None:
                     expected_periods.add(("life_risk_free_rate", None))

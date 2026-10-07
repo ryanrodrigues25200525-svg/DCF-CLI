@@ -130,6 +130,24 @@ def create_app(services: RuntimeServices | None = None) -> FastAPI:
             headers={"X-Request-ID": request_id},
         )
 
+    @app.exception_handler(ValueError)
+    async def data_error_handler(request: Request, exc: ValueError):
+        request_id = getattr(request.state, "request_id", str(uuid4()))
+        reason = str(exc).strip() or "The request data failed backend validation."
+        logger.warning("Data error request_id=%s: %s", request_id, reason)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "DATA_ERROR",
+                    "message": reason,
+                    "reason": reason,
+                },
+                "request_id": request_id,
+            },
+            headers={"X-Request-ID": request_id},
+        )
+
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         request_id = getattr(request.state, "request_id", str(uuid4()))

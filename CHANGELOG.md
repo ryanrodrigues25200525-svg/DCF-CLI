@@ -18,10 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the filing's own presentation carries no such row, cited to the 10-K.
 - Trading-multiple fallback for specialized archetypes (integrated energy,
   mature pharma, unsupported financial subtypes, unclassified issuers) when
-  the specialist model has no source contract for the ticker: the specialist
+  the specialist model has no source contract for the issuer: the specialist
   block reason stays recorded, and only the source-disciplined EV/EBITDA or
   EV/Revenue route is offered. Fallback peers still stage analyst
   confirmations before entering the median (#32).
+- Universal ticker-free routing: model routing keys on filing-derived capability flags, never ticker equality. Life-insurance contracts resolve from segment/capital filing markers (`life_contract.py` / `life-source-contract.ts`), energy/pharma routes on production/product schedules, asset-manager subtype on filed-AUM facts plus business-description terms, agency-mREIT readiness on filed history lines, and `detectIndustryTemplate` on sector/industry text after deleting `sp500-template-map.ts` (closes #41, #40 follow-through).
+- Comparable median is single-source: exports carry `peers_used_for_median` end-to-end (engine → API contracts → workbook mapper), closing the GE/OXY/NEM/CVX median-reconciliation 500s (#41).
+- Peer quality gates by filing: derived sets exclude non-USD (20-F/40-F) reporters with a provenance note, and zero-industry-match derived sets flag `fallback_used` so they stage analyst confirmation before entering the median (#40).
+- Backend data errors surface: mapper/service `ValueError`s return 422 `DATA_ERROR` with the reason, printed once on CLI stderr (#41).
 - Offline test suite and GitHub Actions CI. `npm test` now runs only the
   `*.unit.test.ts` suites, which need no network and no `EDGAR_IDENTITY`. They
   still drive real services, so they need a Python interpreter with `openpyxl`

@@ -354,6 +354,14 @@ async function cmdBuild(tickerRaw: string | undefined, flags: GlobalFlags): Prom
     console.log(staged.valuationSummary);
     for (const line of staged.stdout) console.log(line);
     for (const line of staged.stderr) console.error(line);
+  } catch (error) {
+    if (error instanceof CliUsageError) throw error;
+    // Backend data errors (HTTP 422 DATA_ERROR) already carry the reason as
+    // the error message via BackendApiClient extraction: print the reason to
+    // stderr here and exit non-zero without rethrowing (main would print it
+    // a second time).
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   } finally {
     lib.close();
   }

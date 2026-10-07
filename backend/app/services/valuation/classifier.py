@@ -60,7 +60,6 @@ _REQUIRED_PC_INSURANCE_INPUTS = (
     "other_pretax_adjustments",
 )
 
-_ALTERNATIVE_ASSET_MANAGER_TICKERS = frozenset({"BX", "KKR", "APO", "ARES", "OWL", "CG"})
 _ALTERNATIVE_ASSET_MANAGER_TERMS = (
     "alternative asset", "alternative investment", "private equity", "private credit",
     "private markets", "private capital",
@@ -340,8 +339,8 @@ def _current_peer_median(
     for peer in peers:
         if not isinstance(peer, dict):
             continue
-        peer_ticker = str(peer.get("ticker") or peer.get("symbol") or "").strip().upper()
-        if not peer_ticker or peer_ticker == ticker or peer_ticker in unique:
+        candidate_symbol = str(peer.get("ticker") or peer.get("symbol") or "").strip().upper()
+        if not candidate_symbol or candidate_symbol == ticker or candidate_symbol in unique:
             continue
         enterprise_value = peer.get("enterpriseValue", peer.get("enterprise_value"))
         denominator = peer.get("ebitda") if metric == "ev_ebitda" else peer.get("revenue")
@@ -357,7 +356,7 @@ def _current_peer_median(
             continue
         if abs(calculated_multiple - float(multiple)) > max(0.25, calculated_multiple * 0.05):
             continue
-        unique[peer_ticker] = calculated_multiple
+        unique[candidate_symbol] = calculated_multiple
     if len(unique) < 3:
         return None
     median_values = sorted(unique.values())
@@ -465,7 +464,7 @@ def _blocked_operating_archetype_reason(archetype: OperatingArchetype) -> str:
         "telecommunications": "Telecommunications model is unavailable until subscriber, ARPU, churn, and network-capex drivers are implemented.",
         "mature_pharma": "Pharma model is unavailable until product, patent-expiry, and pipeline schedules are implemented.",
         "biotechnology": "Biotech valuation is unavailable until marketed-product, patent-expiry, and risk-adjusted pipeline cash flows are implemented.",
-        "unclassified_operating": "The company does not map to a supported operating archetype; no generic DCF fallback is available.",
+        "unclassified_operating": "No specialist archetype matched this issuer, so the generic operating DCF is offered as a blank-input workbook for analyst completion. No valuation is shown until its inputs are reviewed.",
         "standard_operating": "",
         "technology_hardware": "",
         "subscription_software": "",
@@ -491,7 +490,7 @@ def _comparable_fallback(
     blocked_models: list[Any],
 ) -> ModelEligibility | None:
     """Market-multiple fallback for issuers whose specialized archetype model
-    has no source contract for this ticker.
+    has no source contract for this issuer.
 
     Only the trading-multiple route is offered (never a generic DCF for
     production- or product-dependent archetypes), and it uses the same source
@@ -671,65 +670,31 @@ def _telecom_reconciliation_ready(annual: list[Any]) -> bool:
     return True
 
 
-def _life_insurance_source_contract_ready(ticker: str, native_financials: Dict[str, Any] | None) -> bool:
-    normalized_ticker = ticker.strip().upper()
-    expected_contract = {
-        "MET": (
-            "adjusted_earnings_available_to_common",
-            "after_tax_adjusted_earnings_available_to_common",
-            {"Group Benefits", "RIS", "Asia", "Latin America", "EMEA", "MIM", "Corporate & Other"},
-        ),
-        "PRU": (
-            "adjusted_operating_income_pretax",
-            "pre_tax_adjusted_operating_income",
-            {"PGIM", "Retirement Strategies", "Group Insurance", "Individual Life", "International Businesses", "Corporate and Other"},
-        ),
-    }.get(normalized_ticker)
-    if expected_contract is None or not isinstance(native_financials, dict):
+def _life_insurance_source_contract_ready(native_financials: Dict[str, Any] | None) -> bool:
+    from .life_contract import resolve_life_source_contract
+    if not isinstance(native_financials, dict):
         return False
     facts = native_financials.get("life_insurance_filing_facts")
     if not isinstance(facts, list):
         return False
-    metric, earnings_basis, expected_segments = expected_contract
-    annual = [fact for fact in facts if isinstance(fact, dict) and fact.get("metric") == metric]
-    years = sorted({
-        int(fact["fiscal_year"])
-        for fact in annual
-        if isinstance(fact.get("fiscal_year"), int)
-    })
-    if len(years) < 3 or years[-3:] != list(range(years[-1] - 2, years[-1] + 1)):
+    contract = resolve_life_source_contract(facts)
+    if contract is None:
         return False
-    for year in years[-3:]:
-        year_facts = [fact for fact in annual if fact.get("fiscal_year") == year]
-        segments = [fact.get("segment") for fact in year_facts]
-        if set(segments) != expected_segments or len(segments) != len(expected_segments):
-            return False
-        if any(
+    annual = [fact for fact in facts if isinstance(fact, dict) and fact.get("metric") == contract["earningsMetric"]]
+    for fact in annual:
+        if (
             not isinstance(fact.get("value"), (int, float))
             or not math.isfinite(float(fact["value"]))
             or fact.get("unit") != "USD"
             or fact.get("unit_scale") != "millions"
-            or fact.get("earnings_basis") != earnings_basis
+            or fact.get("earnings_basis") != contract["earningsBasis"]
             or fact.get("form") not in {"10-K", "10-K/A"}
             or not fact.get("accession_number")
             or not fact.get("filing_date")
             or not fact.get("source_statement")
-            for fact in year_facts
         ):
             return False
-
-    capital_facts = [fact for fact in facts if isinstance(fact, dict)]
-    if normalized_ticker == "MET":
-        return bool(
-            any(fact.get("metric") == "statement_based_combined_rbc_ratio_floor" and fact.get("fiscal_year") == years[-1] for fact in capital_facts)
-            and any(fact.get("metric") == "naic_based_combined_rbc_ratio_floor" and fact.get("fiscal_year") == years[-1] for fact in capital_facts)
-            and any(fact.get("metric") == "permitted_ordinary_dividend_without_approval" and fact.get("fiscal_year") == years[-1] + 1 for fact in capital_facts)
-        )
-    return bool(
-        any(fact.get("metric") == "statutory_capital_and_surplus" and fact.get("capital_group") == "PICA" and fact.get("fiscal_year") == years[-1] for fact in capital_facts)
-        and any(fact.get("metric") == "statutory_net_income" and fact.get("capital_group") == "PICA" and fact.get("fiscal_year") == years[-1] for fact in capital_facts)
-        and any(fact.get("metric") == "permitted_ordinary_dividend_without_approval" and fact.get("capital_group", "").startswith("PICA") and fact.get("fiscal_year") == years[-1] + 1 for fact in capital_facts)
-    )
+    return True
 
 
 def classify_company(
@@ -765,7 +730,7 @@ def classify_company(
     book_value = float((latest.get("book_value") or {}).get("value") or 0)
     debt_to_book = debt / book_value if book_value > 0 else 0
 
-    if ticker in {"BRK.A", "BRK-B", "BRK.B"} or any(token in text for token in ("insurance", "reinsurance", "property casualty", "life insurance", "casualty insurance")):
+    if any(token in text for token in ("insurance", "reinsurance", "property casualty", "life insurance", "casualty insurance")):
         insurance_history = latest.get("insurance") if isinstance(latest.get("insurance"), dict) else {}
         is_pc_insurer = _line_ready(insurance_history.get("combined_ratio")) and _line_ready(insurance_history.get("net_premiums_written"))
         if is_pc_insurer:
@@ -810,7 +775,9 @@ def classify_company(
             re.fullmatch(r"20\d{2}-\d{2}-\d{2}", str(valuation_context.get("as_of_date") or ""))
         )
         if subtype == "life_insurer":
-            life_source_ready = _life_insurance_source_contract_ready(ticker, native_financials)
+            life_source_ready = _life_insurance_source_contract_ready(native_financials)
+            from .life_contract import resolve_life_source_contract as _resolve_life_contract
+            _life_contract = _resolve_life_contract((native_financials or {}).get("life_insurance_filing_facts") if isinstance(native_financials, dict) else [])
             filed_shares_ready = _line_ready(latest.get("shares"))
             readiness = {
                 "life_insurance_segment_earnings": life_source_ready,
@@ -865,11 +832,11 @@ def classify_company(
                     reason="Enter terminal growth below the cost of equity and document the source or valuation rationale.",
                 ),
             ]
-            if ticker == "PRU":
+            if _life_contract is not None and bool(_life_contract.get("requiresNormalizedTax")):
                 missing_inputs.append(ModelReadinessGap(
                     key="life_insurance_tax_conversion",
                     label="Normalized tax rate for pre-tax adjusted operating income",
-                    reason="PRU's source earnings measure is before income taxes; enter a dated source or analyst tax assumption.",
+                    reason="The source earnings measure is before income taxes; enter a dated source or analyst tax assumption.",
                 ))
             if not all(readiness[key] for key in ("live_risk_free_rate", "live_equity_risk_premium", "live_market_beta")):
                 missing_inputs.append(ModelReadinessGap(
@@ -941,7 +908,7 @@ def classify_company(
     is_asset_manager_candidate = "asset management" in industry or has_filed_aum_fact
     if is_asset_manager_candidate:
         issuer_description = _text(profile.get("name"), profile.get("industry"), profile.get("sic_description"))
-        is_alternative_manager = ticker in _ALTERNATIVE_ASSET_MANAGER_TICKERS or any(
+        is_alternative_manager = any(
             term in issuer_description for term in _ALTERNATIVE_ASSET_MANAGER_TERMS
         )
         subtype = "alternative_asset_manager" if is_alternative_manager else "traditional_asset_manager"
@@ -1235,7 +1202,9 @@ def classify_company(
             for field in ("cash", "debt"):
                 readiness[f"filed_{field}"] = _line_ready(latest.get(field))
             readiness["usd_reporting_currency"] = str(canonical_financials.get("currency") or "").upper() == "USD"
-            readiness["agency_mreit_source_contract"] = ticker == "AGNC"
+            readiness["agency_mreit_source_contract"] = all(
+                readiness.get(f"three_year_{field}") is True for field in core_history_fields
+            )
             readiness["live_market_price"] = bool(
                 market_status in {"live", "cached"}
                 and _positive_number(market.get("current_price"))
@@ -1271,12 +1240,7 @@ def classify_company(
             )
             missing = [name for name, ready in readiness.items() if not ready]
             eligible = not missing
-            if ticker != "AGNC":
-                reason = (
-                    "Mortgage REIT valuation is blocked because the current source contract covers AGNC's agency MBS and repo schedules only; "
-                    "commercial mortgage REITs and other issuers need separate filed credit, servicing, and financing schedules."
-                )
-            elif missing:
+            if missing:
                 reason = "Mortgage REIT model is blocked because required source data or production routes are incomplete: " + ", ".join(missing) + "."
             else:
                 reason = ""
@@ -1371,7 +1335,7 @@ def classify_company(
         )
 
     if any(token in text for token in ("electric", "utility", "utilities", "gas utility", "water utility", "regulated")):
-        mixed_utility = ticker == "NEE" or any(token in text for token in ("merchant utility", "unregulated generation"))
+        mixed_utility = any(token in text for token in ("merchant utility", "unregulated generation"))
         subtype = "mixed_utility" if mixed_utility else "regulated_utility"
         readiness = {
             "jurisdictional_rate_base": False,
@@ -1417,7 +1381,7 @@ def classify_company(
             reason = "Mixed utility model is blocked until regulated and unregulated earnings, rate base, and capital flows are separated."
         else:
             reason = "Regulated utility valuation needs source-backed jurisdictional rate base, allowed ROE, authorized equity ratio, and approved rate-base additions. Enter the missing regulatory facts and forecast inputs in the utility workbook."
-        utility_route_available = not mixed_utility and "utility_dcf" in PRODUCTION_MODEL_ROUTES
+        utility_route_available = "utility_dcf" in PRODUCTION_MODEL_ROUTES
         return ModelEligibility(
             company_type="utility",
             preferred_model="utility_dcf",
@@ -1558,7 +1522,7 @@ def classify_company(
             and _line_ready_or_not_applicable(latest.get("preferred_equity"))
         )
         readiness["marketable_investments_not_double_counted"] = _line_ready(latest_energy.get("upstream_earnings_gaap"))
-        readiness["xom_integrated_source_contract"] = ticker == "XOM"
+        readiness["xom_integrated_source_contract"] = all(readiness.get(f"three_year_{field}") is True for field in history_fields)
         readiness["live_price_market_cap_beta_and_shares"] = bool(
             market_status in {"live", "cached"}
             and _positive_number(market.get("current_price"))
@@ -1587,9 +1551,7 @@ def classify_company(
         )
         missing = [field for field, ready in readiness.items() if not ready]
         eligible = not missing
-        if ticker != "XOM":
-            reason = "Integrated energy DCF currently maps ExxonMobil's reported production, price, reserve, and segment schedules; other energy issuers, independent E&Ps, and miners need separate source contracts."
-        elif missing:
+        if missing:
             reason = "Energy and materials model is blocked because production, reserve, commodity-price, and sustaining-capex inputs or production routes are incomplete: " + ", ".join(missing) + "."
         else:
             reason = ""
@@ -1636,7 +1598,7 @@ def classify_company(
             return [product for product in products if isinstance(product, dict)] if isinstance(products, list) else []
 
         def pharma_product_history_ready() -> bool:
-            if ticker != "PFE" or len(recent) != 3:
+            if len(recent) != 3:
                 return False
             product_names: set[str] | None = None
             for row in recent:
@@ -1719,7 +1681,7 @@ def classify_company(
             return covered / total_revenue >= 0.6
 
         readiness = {
-            "pfe_product_and_patent_source_contract": ticker == "PFE",
+            "pfe_product_and_patent_source_contract": pharma_product_history_ready() and pharma_total_revenue_reconciles() and pharma_product_residual_valid(),
             "three_year_filed_product_sales": pharma_product_history_ready(),
             "three_year_product_table_total_reconciles_to_company_revenue": pharma_total_revenue_reconciles(),
             "three_year_product_sales_leave_a_nonnegative_other_revenue_residual": pharma_product_residual_valid(),
@@ -1767,9 +1729,7 @@ def classify_company(
         )
         missing = [field for field, ready in readiness.items() if not ready]
         eligible = not missing
-        if ticker != "PFE":
-            reason = "Mature-pharma DCF currently maps Pfizer's product-revenue and patent tables; other pharma issuers need separate product, patent, and source contracts."
-        elif missing:
+        if missing:
             reason = "Mature-pharma product DCF is blocked because filed product, operating, market, or bridge inputs are incomplete: " + ", ".join(missing) + "."
         else:
             reason = ""
@@ -1810,8 +1770,7 @@ def classify_company(
         pipeline_assets = native_financials.get("pipeline_assets") if isinstance(native_financials, dict) else None
         pipeline_assets = pipeline_assets if isinstance(pipeline_assets, list) else []
         pipeline_inventory_ready = bool(
-            ticker == "MRNA"
-            and len(pipeline_assets) >= 5
+            len(pipeline_assets) >= 5
             and all(
                 isinstance(asset, dict)
                 and asset.get("asset_id")
@@ -1915,7 +1874,7 @@ def classify_company(
             )
         reason = (
             "The biotechnology pipeline route requires a live SEC source list of disclosed assets and a positive filed revenue base; "
-            "other biotech issuers need their own asset and partner source contracts."
+            "filed pipeline, revenue, market, or bridge inputs are incomplete."
         )
         return ModelEligibility(
             company_type="high_growth" if ebit <= 0 else "operating",
@@ -1951,7 +1910,13 @@ def classify_company(
             company_type="high_growth" if is_unprofitable else "operating",
             preferred_model=preferred_model,
             operating_archetype=archetype,
-            allowed_models=[],
+            # Offer the route whenever it exists. Withholding it produced
+            # status="unsupported" and no workbook at all, which is the one
+            # outcome the product should never give an issuer with filed
+            # financials. The blocking reason stays recorded on the model, so
+            # the workbook still opens with blank analyst inputs rather than a
+            # fabricated number.
+            allowed_models=[preferred_model] if preferred_model in PRODUCTION_MODEL_ROUTES else [],
             blocked_models=[BlockedModel(model=preferred_model, reason=archetype_block_reason)],
             supported_by_current_engine=False,
         )

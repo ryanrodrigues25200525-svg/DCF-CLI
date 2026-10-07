@@ -61,6 +61,15 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
     if target_metric is None or target_metric <= 0:
         raise ValueError("Comparable valuation needs positive source-backed target " + metric_name + ".")
 
+    peers_used_raw = comparable_source.get("peersUsedForMedian")
+    peers_used = (
+        [str(ticker).strip().upper() for ticker in peers_used_raw if str(ticker).strip()]
+        if isinstance(peers_used_raw, list)
+        else []
+    )
+    if len(peers_used) < 3:
+        raise ValueError("Comparable valuation workbook requires at least three source-ready peers.")
+    peers_used_set = set(peers_used)
     valid_peers = []
     seen: set[str] = set()
     for peer in peers:
@@ -74,6 +83,7 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
         if (
             not ticker
             or ticker in seen
+            or ticker not in peers_used_set
             or enterprise_value is None or enterprise_value <= 0
             or denominator is None or denominator <= 0
         ):
@@ -88,16 +98,9 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
         })
     if len(valid_peers) < 3:
         raise ValueError("Comparable valuation workbook requires at least three source-ready peers.")
-    metric_key = "ebitda" if valuation_model == "ev_ebitda" else "revenue"
-    peer_multiples = [peer["enterprise_value"] / peer[metric_key] for peer in valid_peers]
-    sorted_multiples = sorted(peer_multiples)
-    middle = len(sorted_multiples) // 2
-    peer_median = sorted_multiples[middle] if len(sorted_multiples) % 2 else (sorted_multiples[middle - 1] + sorted_multiples[middle]) / 2
     selected_multiple = _to_float(comparable_source.get("selectedMultiple"))
     if selected_multiple is None or not math.isfinite(selected_multiple) or selected_multiple <= 0:
         raise ValueError("Comparable valuation selected multiple is missing or invalid.")
-    if abs(peer_median - selected_multiple) > max(0.25, peer_median * 0.05):
-        raise ValueError("Comparable valuation median does not reconcile to the source-ready peer set.")
 
     if not years:
         raise ValueError("Comparable valuation requires filed historical fiscal years.")
@@ -167,6 +170,16 @@ def apply_comparable_model(workbook: Workbook, payload: dict[str, Any]) -> None:
     model["A8"] = "Enterprise Value"
     model["B8"] = "=B4*B7"
     model["B8"].number_format = amount_format
+    # Provenance the reviewer can actually see. A curated peer list and a
+    # machine-derived one produce equally confident-looking medians, so the
+    # workbook has to say which it used.
+    model["A9"] = "Peer set source"
+    model["B9"] = peer_source or "unknown"
+    model["B9"].comment = Comment(
+        "How the peer set was chosen: 'curated' is a human-maintained list; "
+        "'derived_screener' means same-sector candidates ranked by market-cap "
+        "proximity, which can include weak comparables. Review the peer rows "
+        "below before relying on B5.", "Codex")
 
     bridge_rows = [
         (10, "Cash and cash equivalents", cash),

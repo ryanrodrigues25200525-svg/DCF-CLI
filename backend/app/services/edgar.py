@@ -13,6 +13,7 @@ import edgar as edgar_lib
 import pandas as pd
 from bs4 import BeautifulSoup
 from edgar import Company, set_identity
+from edgar.core import is_probably_html
 from edgar.entity.search import find_company
 from edgar.reference.tickers import get_company_tickers
 
@@ -1108,7 +1109,61 @@ def _asset_manager_filing_facts_from_text(
                 )
             break
 
-    return output
+
+
+def _sgml_html_text(filing: Any, width: int = 500) -> str | None:
+    """Render filing text from SGML-derived HTML, bypassing the homepage index.
+
+    Installed edgartools (>=5.36.0 observed) `Filing.html()`/`text()` dereference
+    `homepage.primary_html_document` without a None guard; recent 10-K filings
+    whose homepage index carries zero documents raise
+    `AttributeError: 'NoneType' object has no attribute 'download'`. The SGML
+    payload itself is intact, so parse it directly with the same HTMLParser +
+    rich_to_text pipeline `Filing.text()` uses.
+    """
+    try:
+        html_content = filing.sgml().html()
+    except Exception:
+        return None
+    if not html_content or not is_probably_html(html_content):
+        return None
+    try:
+        from edgar.documents import HTMLParser, ParserConfig
+        from edgar.richtools import rich_to_text
+        parser = HTMLParser(ParserConfig(form=getattr(filing, "form", None)))
+        document = parser.parse(html_content)
+        if document is not None and not document.is_empty:
+            return rich_to_text(document, width=width)
+    except Exception:
+        return None
+    return None
+
+
+def _resilient_filing_text(filing: Any) -> str:
+    """Filing body text that survives the edgartools homepage-index drift."""
+    try:
+        return filing.text()
+    except Exception:
+        fallback = _sgml_html_text(filing)
+        if fallback:
+            return fallback
+        raise
+
+
+def _resilient_filing_html(filing: Any) -> str | None:
+    """Primary-document HTML that survives the edgartools homepage-index drift."""
+    try:
+        html = filing.html()
+    except Exception:
+        html = None
+    if html:
+        return html
+    try:
+        html_content = filing.sgml().html()
+    except Exception:
+        return html
+    return html_content or html
+
 
 
 def _bank_filing_facts_from_text(
@@ -1589,10 +1644,14 @@ def _life_insurance_filing_facts_from_html(
     form: str,
     primary_document: str | None,
 ) -> list[Dict[str, Any]]:
-    """Extract issuer-defined earnings and statutory-capital disclosures for MET and PRU."""
-    normalized_ticker = ticker.strip().upper()
-    if normalized_ticker not in {"MET", "PRU"}:
-        return []
+    """Extract issuer-defined earnings and statutory-capital disclosures from life-insurer 10-K HTML.
+
+    Dispatch is filing-marker driven: each schedule block is attempted and
+    no-ops when its markers are absent, so any life insurer whose filing
+    carries the same schedule shape resolves facts. `ticker` is retained
+    only for log context.
+    """
+    normalized_ticker = (ticker or "").strip().upper()
     try:
         report_year = int(report_date[:4])
     except (TypeError, ValueError):
@@ -1682,7 +1741,9 @@ def _life_insurance_filing_facts_from_html(
                     earnings_basis=earnings_basis,
                 )
 
-    if normalized_ticker == "MET":
+    met_markers_present = ("adjusted earnings available to common" in soup.get_text(" ", strip=True).lower())
+    pru_markers_present = ("adjusted operating income before income taxes" in soup.get_text(" ", strip=True).lower())
+    if met_markers_present:
         parse_segment_table(
             required_markers=("Adjusted earnings available to common shareholders on a constant currency basis", "Group Benefits"),
             segments=("Group Benefits", "RIS", "Asia", "Latin America", "EMEA", "MIM", "Corporate & Other"),
@@ -1737,7 +1798,7 @@ def _life_insurance_filing_facts_from_html(
                         capital_group=capital_group,
                         source_statement=f"SEC {form} MD&A, {column_label}; source row: {row}",
                     )
-    else:
+    if pru_markers_present:
         parse_segment_table(
             required_markers=("Adjusted operating income before income taxes by segment", "PGIM"),
             segments=("PGIM", "Retirement Strategies", "Group Insurance", "Individual Life", "International Businesses", "Corporate and Other"),
@@ -2061,7 +2122,7 @@ async def _fetch_issuer_debt_cost_facts(
     try:
         filings = await asyncio.to_thread(company.get_filings, form="10-K")
         filing = await asyncio.to_thread(filings.get, str(filing_record["accession_number"]))
-        filing_text = await asyncio.to_thread(filing.text)
+        filing_text = await asyncio.to_thread(_resilient_filing_text, filing)
     except Exception as exc:
         logger.info("Issuer debt-rate disclosure unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
         return []
@@ -2090,7 +2151,7 @@ async def _fetch_financial_institution_filing_facts(
     try:
         filings = await asyncio.to_thread(company.get_filings, form=["10-K", "10-K/A"])
         filing = await asyncio.to_thread(filings.get, str(filing_record["accession_number"]))
-        filing_text = await asyncio.to_thread(filing.text)
+        filing_text = await asyncio.to_thread(_resilient_filing_text, filing)
     except Exception as exc:
         logger.warning("Financial institution filing-table extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
         return [], [], []
@@ -2110,16 +2171,15 @@ async def _fetch_financial_institution_filing_facts(
         **source_metadata,
     )
     life_insurance_facts: list[Dict[str, Any]] = []
-    if ticker.strip().upper() in {"MET", "PRU"}:
-        try:
-            filing_html = await asyncio.to_thread(filing.html)
-            life_insurance_facts = _life_insurance_filing_facts_from_html(
-                filing_html,
-                ticker=ticker,
-                **source_metadata,
-            )
-        except Exception as exc:
-            logger.warning("Life-insurance filing extraction unavailable for %s (%s)", ticker, type(exc).__name__)
+    try:
+        filing_html = await asyncio.to_thread(_resilient_filing_html, filing)
+        life_insurance_facts = _life_insurance_filing_facts_from_html(
+            filing_html,
+            ticker=ticker,
+            **source_metadata,
+        )
+    except Exception as exc:
+        logger.warning("Life-insurance filing extraction unavailable for %s (%s)", ticker, type(exc).__name__)
     return bank_facts, insurance_facts, life_insurance_facts
 
 
@@ -2463,7 +2523,7 @@ async def _fetch_telecom_filing_facts(
             continue
         try:
             filing = await asyncio.to_thread(filings.get, accession)
-            filing_text = await asyncio.to_thread(filing.text)
+            filing_text = await asyncio.to_thread(_resilient_filing_text, filing)
         except Exception as exc:
             logger.warning("Telecom 10-K extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
@@ -2515,7 +2575,7 @@ async def _fetch_asset_manager_filing_facts(
             continue
         try:
             filing = await asyncio.to_thread(filings.get, accession)
-            filing_text = await asyncio.to_thread(filing.text)
+            filing_text = await asyncio.to_thread(_resilient_filing_text, filing)
         except Exception as exc:
             logger.info("Asset-manager 10-K extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
@@ -2568,7 +2628,7 @@ async def _fetch_reit_filing_facts(
     for filing_record in annual_filings:
         try:
             filing = await asyncio.to_thread(filings.get, str(filing_record["accession_number"]))
-            filing_text = await asyncio.to_thread(filing.text)
+            filing_text = await asyncio.to_thread(_resilient_filing_text, filing)
         except Exception as exc:
             logger.warning("REIT filing-table extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
@@ -2875,7 +2935,7 @@ async def _fetch_mortgage_reit_filing_facts(
             continue
         try:
             filing = await asyncio.to_thread(filings.get, accession)
-            text = await asyncio.to_thread(filing.text)
+            text = await asyncio.to_thread(_resilient_filing_text, filing)
         except Exception as exc:
             logger.warning("Mortgage-REIT 10-K extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
@@ -3056,7 +3116,7 @@ async def _fetch_pharma_filing_facts(
     try:
         filings = await asyncio.to_thread(company.get_filings, form=["10-K", "10-K/A"])
         filing = await asyncio.to_thread(filings.get, accession)
-        html = await asyncio.to_thread(filing.html)
+        html = await asyncio.to_thread(_resilient_filing_html, filing)
     except Exception as exc:
         logger.warning("Pharma SEC extraction unavailable for %s (%s)", getattr(company, "cik", "unknown CIK"), type(exc).__name__)
         return []
@@ -3171,7 +3231,7 @@ async def _fetch_biotech_pipeline_assets(
     try:
         filings = await asyncio.to_thread(company.get_filings, form=["10-K", "10-K/A"])
         filing = await asyncio.to_thread(filings.get, accession)
-        html = await asyncio.to_thread(filing.html)
+        html = await asyncio.to_thread(_resilient_filing_html, filing)
     except Exception as exc:
         logger.warning("Biotech pipeline extraction unavailable for %s (%s)", getattr(company, "cik", "unknown CIK"), type(exc).__name__)
         return []
@@ -3623,8 +3683,8 @@ async def _fetch_energy_filing_facts(
             continue
         try:
             filing = await asyncio.to_thread(filings.get, accession)
-            html = await asyncio.to_thread(filing.html)
-            text = await asyncio.to_thread(filing.text)
+            html = await asyncio.to_thread(_resilient_filing_html, filing)
+            text = await asyncio.to_thread(_resilient_filing_text, filing)
         except Exception as exc:
             logger.warning("Energy 10-K extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
@@ -3644,6 +3704,22 @@ async def _fetch_energy_filing_facts(
                 by_concept_period[key] = fact
     return sorted(by_concept_period.values(), key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
 
+def _company_sic_code(company: Any) -> int:
+    digits = re.sub(r"\D", "", str(getattr(company, "sic", "") or ""))
+    return int(digits) if len(digits) == 4 else 0
+
+
+def _is_energy_filer(company: Any) -> bool:
+    code = _company_sic_code(company)
+    return (1000 <= code <= 1499) or (2900 <= code <= 2999)
+
+
+def _is_pharma_filer(company: Any) -> bool:
+    return _company_sic_code(company) in {2833, 2834, 2835}
+
+
+def _is_biotech_filer(company: Any) -> bool:
+    return _company_sic_code(company) == 2836
 
 @async_retry(retries=3)
 async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[str, Any]:
@@ -3755,9 +3831,9 @@ async def _fetch_company_financials_native(normalized_ticker: str, periods: int)
     is_reit_filer = str(getattr(company, "sic", "")).strip() == "6798"
     reit_filing_facts = await _fetch_reit_filing_facts(company, source_filings) if is_reit_filer else []
     mortgage_reit_filing_facts = await _fetch_mortgage_reit_filing_facts(company, source_filings) if is_reit_filer else []
-    energy_filing_facts = await _fetch_energy_filing_facts(company, source_filings) if normalized_ticker == "XOM" else []
-    pharma_filing_facts = await _fetch_pharma_filing_facts(company, source_filings) if normalized_ticker == "PFE" else []
-    pipeline_assets = await _fetch_biotech_pipeline_assets(company, source_filings) if normalized_ticker == "MRNA" else []
+    energy_filing_facts = await _fetch_energy_filing_facts(company, source_filings) if _is_energy_filer(company) else []
+    pharma_filing_facts = await _fetch_pharma_filing_facts(company, source_filings) if _is_pharma_filer(company) else []
+    pipeline_assets = await _fetch_biotech_pipeline_assets(company, source_filings) if _is_biotech_filer(company) else []
     statement_years = [
         int(key[3:])
         for statement in statements.values()

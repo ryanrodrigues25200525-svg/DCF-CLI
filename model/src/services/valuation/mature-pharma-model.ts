@@ -108,7 +108,7 @@ export interface MaturePharmaModelResult extends DCFResults {
 function sourceValue(line: CanonicalFinancialLine | undefined, label: string, year: number): number {
   if (!line || !['sec_native', 'derived'].includes(line.source) || typeof line.value !== 'number' || !Number.isFinite(line.value)
     || !line.sources.length || line.sources.some((source) => !source.accession || !source.filed)) {
-    throw new Error(`FY${year} PFE ${label} is missing or lacks SEC filing provenance.`);
+    throw new Error(`FY${year} ${label} is missing or lacks SEC filing provenance.`);
   }
   return line.value;
 }
@@ -117,7 +117,7 @@ function historyProducts(year: PharmaHistoricalYear): Map<string, {indication: s
   const output = new Map<string, {indication: string; revenue: number}>();
   for (const item of year.pharma.products) {
     const productName = item.product_name.trim();
-    if (!productName || output.has(productName)) throw new Error(`FY${year.year} PFE product revenue table has a missing or duplicate product row.`);
+    if (!productName || output.has(productName)) throw new Error(`FY${year.year} product revenue table has a missing or duplicate product row.`);
     output.set(productName, {
       indication: item.indication ?? '',
       revenue: sourceValue(item.revenue, `${productName} product revenue`, year.year),
@@ -130,24 +130,24 @@ function validateHistory(history: PharmaHistoricalData): PharmaHistoricalYear[] 
   if (history.years.length !== 3 || history.annual.length !== 3
     || history.annual.some((row, index) => row.year !== history.years[index]
       || (index > 0 && row.year !== history.annual[index - 1]!.year + 1))) {
-    throw new Error('PFE mature-pharma DCF requires three aligned consecutive fiscal years.');
+    throw new Error('Mature-pharma DCF requires three aligned consecutive fiscal years.');
   }
   let commonProducts: Set<string> | undefined;
   for (const row of history.annual) {
-    if (row.pharma.products.length === 0) throw new Error(`FY${row.year} PFE product sales schedule is empty.`);
+    if (row.pharma.products.length === 0) throw new Error(`FY${row.year} product sales schedule is empty.`);
     const totalRevenue = sourceValue(row.pharma.reported_total_revenue, 'product-table total revenue', row.year);
     const revenue = sourceValue(row.revenue, 'consolidated revenue', row.year);
     if (Math.abs(totalRevenue - revenue) > Math.max(1_000_000, Math.abs(revenue) * 0.005)) {
-      throw new Error(`FY${row.year} PFE product-table total does not reconcile to consolidated revenue.`);
+      throw new Error(`FY${row.year} product-table total does not reconcile to consolidated revenue.`);
     }
     const products = historyProducts(row);
     const productTotal = [...products.values()].reduce((sum, item) => sum + item.revenue, 0);
     if (productTotal <= 0 || productTotal > totalRevenue * 1.005) {
-      throw new Error(`FY${row.year} PFE disclosed product rows do not reconcile to total revenue.`);
+      throw new Error(`FY${row.year} disclosed product rows do not reconcile to total revenue.`);
     }
     const names = new Set(products.keys());
     if (commonProducts && (commonProducts.size !== names.size || [...commonProducts].some((name) => !names.has(name)))) {
-      throw new Error('PFE product rows must align across the three filed annual periods.');
+      throw new Error('Product rows must align across the three filed annual periods.');
     }
     commonProducts = names;
     for (const [line, label] of [
@@ -159,7 +159,7 @@ function validateHistory(history: PharmaHistoricalData): PharmaHistoricalYear[] 
   const latest = history.annual.at(-1)!;
   const patents = latest.pharma.patents;
   if (patents.length < 10 || patents.some((patent) => !sourceValue(patent.year, `${patent.product_name} ${patent.region} patent year`, latest.year))) {
-    throw new Error('FY2025 PFE regional patent schedule is missing or incomplete.');
+    throw new Error(`FY${latest.year} regional patent schedule is missing or incomplete.`);
   }
   return history.annual;
 }
@@ -172,36 +172,36 @@ function validateAssumptions(a: MaturePharmaModelAssumptions, history: PharmaHis
     a.cash, a.marketableSecurities, a.debt, a.nonControllingInterest, a.preferredEquity,
   ];
   if (a.forecastYears !== 5 || a.baseYear !== history.at(-1)!.year || numeric.some((value) => !Number.isFinite(value))) {
-    throw new Error('PFE mature-pharma assumptions must be finite and match the five-year source-based model horizon.');
+    throw new Error('Mature-pharma assumptions must be finite and match the five-year source-based model horizon.');
   }
   if (a.otherRevenueBase < 0 || Math.abs(a.otherRevenueGrowth) > 0.5 || a.ebitMargin <= -0.5 || a.ebitMargin > 0.6
     || a.taxRate < 0 || a.taxRate > 0.6 || a.depreciationPctRevenue < 0 || a.depreciationPctRevenue > 0.3
     || a.capexPctRevenue < 0 || a.capexPctRevenue > 0.3 || Math.abs(a.workingCapitalInvestmentPctRevenue) > 0.2) {
-    throw new Error('PFE mature-pharma operating assumptions are outside supported ranges.');
+    throw new Error('Mature-pharma operating assumptions are outside supported ranges.');
   }
   if (a.wacc < 0.02 || a.wacc > 0.3 || a.terminalGrowthRate < 0 || a.terminalGrowthRate >= a.wacc) {
-    throw new Error('PFE mature-pharma WACC must be 2%–30% and exceed terminal growth.');
+    throw new Error('Mature-pharma WACC must be 2%–30% and exceed terminal growth.');
   }
   if (a.currentPrice <= 0 || a.marketCapitalization <= 0 || a.commonSharesOutstanding <= 0
     || [a.cash, a.marketableSecurities, a.debt, a.nonControllingInterest, a.preferredEquity].some((value) => value < 0)) {
-    throw new Error('PFE mature-pharma market or common-equity bridge inputs are outside supported ranges.');
+    throw new Error('Mature-pharma market or common-equity bridge inputs are outside supported ranges.');
   }
-  if (!/^20\d{2}-\d{2}-\d{2}$/.test(a.asOfDate)) throw new Error('PFE mature-pharma DCF requires dated market context.');
-  if (a.products.length !== history.at(-1)!.pharma.products.length) throw new Error('PFE assumptions must contain one forecast input row per filed product row.');
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(a.asOfDate)) throw new Error('Mature-pharma DCF requires dated market context.');
+  if (a.products.length !== history.at(-1)!.pharma.products.length) throw new Error('Assumptions must contain one forecast input row per filed product row.');
   const expectedNames = new Set(historyProducts(history.at(-1)!).keys());
   const seen = new Set<string>();
   for (const product of a.products) {
-    if (!expectedNames.has(product.productName) || seen.has(product.productName)) throw new Error('PFE product assumptions must uniquely match filed product rows.');
+    if (!expectedNames.has(product.productName) || seen.has(product.productName)) throw new Error('Product assumptions must uniquely match filed product rows.');
     seen.add(product.productName);
     if (!Number.isFinite(product.preLoeGrowthRate) || product.preLoeGrowthRate < -0.75 || product.preLoeGrowthRate > 1.5
       || !Number.isFinite(product.firstYearErosionRate) || product.firstYearErosionRate < 0 || product.firstYearErosionRate > 0.95
       || !Number.isFinite(product.postLoeAnnualErosionRate) || product.postLoeAnnualErosionRate < 0 || product.postLoeAnnualErosionRate > 0.75
       || (product.modeledGlobalLoeYear !== null && (!Number.isInteger(product.modeledGlobalLoeYear) || product.modeledGlobalLoeYear < 2020 || product.modeledGlobalLoeYear > 2100))) {
-      throw new Error(`PFE ${product.productName} growth/LOE assumptions are outside supported ranges.`);
+      throw new Error(`${product.productName} growth/LOE assumptions are outside supported ranges.`);
     }
-    if (!product.sourceNote.trim()) throw new Error(`PFE ${product.productName} requires a visible LOE/source note.`);
+    if (!product.sourceNote.trim()) throw new Error(`${product.productName} requires a visible LOE/source note.`);
   }
-  if (Object.values(a.assumptionSources).some((source) => !source.trim())) throw new Error('PFE mature-pharma assumptions require visible source/analyst disclosure.');
+  if (Object.values(a.assumptionSources).some((source) => !source.trim())) throw new Error('Mature-pharma assumptions require visible source/analyst disclosure.');
 }
 
 export function calculateMaturePharmaValuation(
@@ -216,7 +216,7 @@ export function calculateMaturePharmaValuation(
   const reportedRevenue = sourceValue(latest.pharma.reported_total_revenue, 'product-table total revenue', latest.year);
   const otherRevenueBase = reportedRevenue - [...productBases.values()].reduce((sum, product) => sum + product.revenue, 0);
   if (Math.abs(otherRevenueBase - assumptions.otherRevenueBase) > Math.max(1, reportedRevenue * 1e-8)) {
-    throw new Error('PFE other/alliance revenue base does not reconcile to the filed product table.');
+    throw new Error('Other/alliance revenue base does not reconcile to the filed product table.');
   }
 
   let previousRevenue = new Map([...productBases.entries()].map(([name, product]) => [name, product.revenue]));
@@ -235,7 +235,7 @@ export function calculateMaturePharmaValuation(
         : isLoeYear
           ? priorRevenue * (1 + product.preLoeGrowthRate) * (1 - product.firstYearErosionRate)
           : priorRevenue * (1 + product.preLoeGrowthRate);
-      if (!Number.isFinite(revenue) || revenue < 0) throw new Error(`FY${year} PFE ${name} forecast is negative or non-finite.`);
+      if (!Number.isFinite(revenue) || revenue < 0) throw new Error(`FY${year} ${name} forecast is negative or non-finite.`);
       products.push({productName: name, revenue, modeledGlobalLoeYear: product.modeledGlobalLoeYear, firstYearErosionApplied: isLoeYear});
     }
     const mappedProductRevenue = products.reduce((sum, product) => sum + product.revenue, 0);
@@ -255,7 +255,7 @@ export function calculateMaturePharmaValuation(
     const fcffIdentityCheck = fcff - (nopat + depreciation - capex - workingCapitalInvestment);
     const values = [mappedProductRevenue, otherRevenue, revenue, ebit, cashTaxes, nopat, depreciation, capex,
       workingCapitalInvestment, fcff, discountFactor, presentValueFcff, revenueReconciliationCheck, fcffIdentityCheck];
-    if (!values.every(Number.isFinite)) throw new Error(`FY${year} PFE mature-pharma forecast contains a non-finite value.`);
+    if (!values.every(Number.isFinite)) throw new Error(`FY${year} mature-pharma forecast contains a non-finite value.`);
     maturePharmaForecasts.push({year, products, mappedProductRevenue, otherRevenue, revenue, ebit, cashTaxes, nopat,
       depreciation, capex, workingCapitalInvestment, fcff, discountFactor, presentValueFcff,
       revenueReconciliationCheck, fcffIdentityCheck});
@@ -273,7 +273,7 @@ export function calculateMaturePharmaValuation(
   const upside = impliedSharePrice / assumptions.currentPrice - 1;
   if (![terminalValue, pvTerminalValue, enterpriseValue, equityValue, impliedSharePrice, upside].every(Number.isFinite)
     || enterpriseValue <= 0 || equityValue <= 0 || impliedSharePrice <= 0) {
-    throw new Error('PFE mature-pharma DCF returned a non-positive or non-finite equity valuation.');
+    throw new Error('Mature-pharma DCF returned a non-positive or non-finite equity valuation.');
   }
   return {
     forecasts: [], terminalValue, pvTerminalValue, enterpriseValue, equityValue, impliedSharePrice,

@@ -4,13 +4,13 @@ import type {IncompleteMaturePharmaModelAssumptions, IncompleteMaturePharmaProdu
 import { median as medianOf, requireFiledValue } from '@/services/valuation/source-guards';
 
 function filedValue(line: CanonicalFinancialLine | undefined, name: string, year: number): number {
-  return requireFiledValue(line, name, year, 'PFE');
+  return requireFiledValue(line, name, year, 'mature pharma');
 }
 function median(values: number[], name: string): number {
-  return medianOf(values, {label: 'PFE', name});
+  return medianOf(values, {label: 'mature pharma', name});
 }
 function requiredPositive(value: number | null | undefined, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`PFE mature-pharma DCF requires positive ${name}.`);
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`Mature-pharma DCF requires positive ${name}.`);
   return value;
 }
 
@@ -46,7 +46,7 @@ function productAssumptions(history: PharmaHistoricalData, allowMissingProductRe
   return latest.pharma.products.map((product) => {
     const revenues = recent.map((row) => {
       const matching = row.pharma.products.find((line) => line.product_name === product.product_name);
-      if (!matching) throw new Error(`PFE ${product.product_name} is not aligned across FY2023–FY2025 product tables.`);
+      if (!matching) throw new Error(`${product.product_name} is not aligned across FY2023–FY2025 product tables.`);
       const line = matching.revenue;
       const isFiled = (line.source === 'sec_native' || line.source === 'derived')
         && typeof line.value === 'number' && Number.isFinite(line.value)
@@ -80,7 +80,7 @@ function productAssumptions(history: PharmaHistoricalData, allowMissingProductRe
       : '';
     const loeNote = usPatentExpiryYear === null
       ? 'No matching U.S. basic patent row was disclosed for this product-table label; no LOE event is modeled unless the analyst enters one.'
-      : `Modeled global LOE year is initialized from the filed U.S. basic patent year ${usPatentExpiryYear}; Pfizer does not disclose product-level sales by patent territory or expected generic-entry dates. ${aliasNote}`;
+      : `Modeled global LOE year is initialized from the filed U.S. basic patent year ${usPatentExpiryYear}; product-level sales by patent territory or expected generic-entry dates are not disclosed in the filed product tables. ${aliasNote}`;
     const growthNote = missingRevenue
       ? 'A filed product-revenue year is missing; pre-LOE growth is calculated by the visible workbook formula after the required revenue input is restored.'
       : useLatestGrowth && latestGrowthIsValid
@@ -104,7 +104,7 @@ function productAssumptions(history: PharmaHistoricalData, allowMissingProductRe
       preLoeGrowthRate,
       firstYearErosionRate: 0.5,
       postLoeAnnualErosionRate: 0.15,
-      sourceNote: `${loeNote}${extensionNote} ${growthNote} Growth and erosion assumptions are editable and are not Pfizer guidance.`,
+      sourceNote: `${loeNote}${extensionNote} ${growthNote} Growth and erosion assumptions are editable analyst inputs, not issuer guidance.`,
     };
   });
 }
@@ -143,21 +143,20 @@ function buildMaturePharmaAssumptionValues(
   history: PharmaHistoricalData,
   allowMissingProductRevenue: boolean,
 ): MaturePharmaAssumptionValues {
-  if (data.profile.ticker?.toUpperCase() !== 'PFE') throw new Error('The initial mature-pharma route is issuer-specific to Pfizer.');
   if (data.canonical_financials.currency?.toUpperCase() !== 'USD') throw new Error('Mature-pharma DCF requires USD-denominated financials.');
   if (history.annual.length !== 3 || history.years.length !== 3
     || history.annual.some((row, index) => row.year !== history.years[index]
       || (index > 0 && row.year !== history.annual[index - 1]!.year + 1))) {
-    throw new Error('PFE mature-pharma DCF requires three aligned consecutive fiscal years.');
+    throw new Error('Mature-pharma DCF requires three aligned consecutive fiscal years.');
   }
   if (!['live', 'cached'].includes(data.data_quality.market.status) || data.market.fallback_used === true
     || !['live', 'cached'].includes(data.data_quality.valuation_context.status)) {
-    throw new Error('PFE mature-pharma DCF requires current non-fallback market and WACC inputs.');
+    throw new Error('Mature-pharma DCF requires current non-fallback market and WACC inputs.');
   }
   const requireFresh = (timestamp: number | null | undefined, name: string) => {
     const now = Date.now();
     if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp <= 0 || timestamp > now || now - timestamp > 24 * 60 * 60 * 1000) {
-      throw new Error(`PFE mature-pharma DCF requires a ${name} timestamp within 24 hours.`);
+      throw new Error(`Mature-pharma DCF requires a ${name} timestamp within 24 hours.`);
     }
   };
   requireFresh(data.market.fetched_at_ms, 'market');
@@ -182,7 +181,7 @@ function buildMaturePharmaAssumptionValues(
   const debt = debtBalances.at(-1)!;
   const costOfDebt = median(history.annual.slice(1).map((row, index) => {
     const averageDebt = (debtBalances[index]! + debtBalances[index + 1]!) / 2;
-    if (averageDebt <= 0) throw new Error(`PFE FY${row.year} average debt must be positive.`);
+    if (averageDebt <= 0) throw new Error(`FY${row.year} average debt must be positive.`);
     return Math.abs(filedValue(row.interestExpense, 'interest expense', row.year)) / averageDebt;
   }), 'interest expense divided by average debt');
   const debtWeight = debt / (marketCapitalization + debt);
@@ -190,7 +189,7 @@ function buildMaturePharmaAssumptionValues(
   const costOfEquity = riskFreeRate + beta * equityRiskPremium;
   const wacc = equityWeight * costOfEquity + debtWeight * costOfDebt * (1 - taxRate);
   const terminalGrowthRate = 0.025;
-  if (wacc < 0.02 || wacc > 0.3 || terminalGrowthRate >= wacc) throw new Error('PFE mature-pharma WACC must exceed terminal growth.');
+  if (wacc < 0.02 || wacc > 0.3 || terminalGrowthRate >= wacc) throw new Error('Mature-pharma WACC must exceed terminal growth.');
 
   const latestRevenue = revenues.at(-1)!;
   const latestProductRevenues = latest.pharma.products.map((product) => {
@@ -201,7 +200,7 @@ function buildMaturePharmaAssumptionValues(
   const otherRevenueBase = filedLatestProductRevenues.length !== latestProductRevenues.length
     ? null
     : latestRevenue - filedLatestProductRevenues.reduce((sum, value) => sum + value, 0);
-  if (otherRevenueBase !== null && otherRevenueBase < 0) throw new Error('PFE filed product rows exceed total revenue.');
+  if (otherRevenueBase !== null && otherRevenueBase < 0) throw new Error('Filed product rows exceed total revenue.');
   const residualHistory = history.annual.map((row) => {
     const total = filedValue(row.pharma.reported_total_revenue, 'reported total revenue', row.year);
     const productRevenues = row.pharma.products.map((product) => {
@@ -229,13 +228,13 @@ function buildMaturePharmaAssumptionValues(
   const sources = {
     productGrowth: 'Each product starts from its FY2023–FY2025 filed CAGR; COVID products, direction-reversal series, or out-of-range CAGRs use the latest filed year-over-year change instead.',
     modeledGlobalLoeYear: 'Editable analyst proxy initialized from the filed U.S. basic patent expiration; regional sales mix and generic-entry timing are not disclosed per product.',
-    firstYearErosionRate: 'Analyst base-case assumption: 50% sales decline in the modeled global LOE year; editable by product, not Pfizer guidance.',
-    postLoeAnnualErosionRate: 'Analyst base-case assumption: 15% annual decline after the modeled LOE year; editable by product, not Pfizer guidance.',
+    firstYearErosionRate: 'Analyst base-case assumption: 50% sales decline in the modeled global LOE year; editable by product, not issuer guidance.',
+    postLoeAnnualErosionRate: 'Analyst base-case assumption: 15% annual decline after the modeled LOE year; editable by product, not issuer guidance.',
     otherRevenueGrowth: otherRevenueGrowth === null
       ? 'A filed product-revenue line is missing; growth in the other/alliance revenue residual is calculated by formula after the source input is restored.'
       : 'Filed consolidated total revenue less detailed product rows, including alliance, royalty, and other unallocated revenue; starts from historical residual CAGR.',
     ebitMargin: 'Median FY2023–FY2025 GAAP EBIT / filed consolidated total revenue; editable and retains historical GAAP charges in actuals.',
-    taxRate: 'Analyst starting point: 21% U.S. federal corporate statutory rate per IRS Publication 542 (https://www.irs.gov/publications/p542); Pfizer global tax mix and tax attributes can differ.',
+    taxRate: 'Analyst starting point: 21% U.S. federal corporate statutory rate per IRS Publication 542 (https://www.irs.gov/publications/p542); global tax mix and tax attributes can differ by issuer.',
     depreciationPctRevenue: 'Median FY2023–FY2025 filed D&A / consolidated total revenue.',
     capexPctRevenue: 'Median FY2023–FY2025 filed PP&E purchases / consolidated total revenue.',
     workingCapitalInvestmentPctRevenue: 'Median FY2023–FY2025 filed cash-flow-derived operating working-capital investment / consolidated total revenue.',
@@ -281,6 +280,6 @@ export function buildSourcedIncompleteMaturePharmaModelAssumptions(
 ): IncompleteMaturePharmaModelAssumptions {
   const hasMissingProductRevenue = history.annual.some((year) =>
     year.pharma.products.some((product) => !hasFiledProductRevenue(product.revenue)));
-  if (!hasMissingProductRevenue) throw new Error('PFE product sales are fully filed; the workbook should be complete.');
+  if (!hasMissingProductRevenue) throw new Error('Product sales are fully filed; the workbook should be complete.');
   return buildMaturePharmaAssumptionValues(data, history, true);
 }

@@ -1,5 +1,6 @@
 import type {NativeUnifiedPayload} from '@/core/types/native';
 import type {IncompleteLifeInsuranceModelExportData} from './types';
+import {resolveLifeSourceContract} from '@/services/valuation/life-source-contract.js';
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -10,16 +11,16 @@ export function buildIncompleteLifeInsuranceModelExportData(
   data: NativeUnifiedPayload,
 ): IncompleteLifeInsuranceModelExportData {
   const normalizedTicker = ticker.toUpperCase();
-  if (normalizedTicker !== 'MET' && normalizedTicker !== 'PRU') {
-    throw new Error('Life-insurance payload builder supports only the MET and PRU source contracts.');
+  if (!normalizedTicker.trim()) {
+    throw new Error('Life-insurance payload builder requires an issuer ticker for labeling.');
   }
   const filingFacts = data.financials_native.life_insurance_filing_facts ?? [];
-  const earningsMetric = normalizedTicker === 'MET'
-    ? 'adjusted_earnings_available_to_common'
-    : 'adjusted_operating_income_pretax';
-  const earningsBasis = normalizedTicker === 'MET'
-    ? 'after_tax_adjusted_earnings_available_to_common'
-    : 'pre_tax_adjusted_operating_income';
+  const contract = resolveLifeSourceContract(filingFacts);
+  if (contract === null) {
+    throw new Error(`Life-insurance payload for ${normalizedTicker} does not resolve a complete filing-derived source contract.`);
+  }
+  const earningsMetric = contract.earningsMetric;
+  const earningsBasis = contract.earningsBasis;
   const earningsFacts = filingFacts.filter((fact) => fact.metric === earningsMetric && fact.earnings_basis === earningsBasis);
   const baseYear = Math.max(...earningsFacts.map((fact) => fact.fiscal_year));
   if (!Number.isFinite(baseYear) || earningsFacts.length === 0) {
