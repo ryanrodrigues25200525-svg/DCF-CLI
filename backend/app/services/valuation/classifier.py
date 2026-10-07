@@ -1936,6 +1936,12 @@ def classify_company(
         and _positive_number((latest_record.get("gross_profit") or {}).get("value"))
         and _positive_number((latest_record.get("cost_of_revenue") or {}).get("value"))
     )
+    # Informational, not blocking. EBIT is forecast from ebitMargin, not derived
+    # from gross margin, so a filer that presents no cost-of-revenue line (most
+    # utilities, telecoms, insurers and biotechs) can still be valued. This key is
+    # excluded from dcf_missing below. The workbook row is left blank rather than
+    # filled with a default, so nothing is invented.
+    readiness["gross_margin_display_only"] = True
     if archetype == "subscription_software":
         readiness["aggregate_operating_working_capital"] = _line_ready(latest_record.get("operating_net_working_capital"))
     else:
@@ -1993,7 +1999,11 @@ def classify_company(
         peer_fallback_used=peer_fallback_used,
         peer_fetched_at_ms=peer_fetched_at_ms,
     )
-    dcf_missing = [field for field, ready in readiness.items() if not ready]
+    dcf_missing = [
+        field
+        for field, ready in readiness.items()
+        if not ready and field != "positive_gross_profit_and_cost_of_revenue"
+    ]
     dcf_eligible = not dcf_missing
 
     latest_ebitda = latest_record.get("ebitda")

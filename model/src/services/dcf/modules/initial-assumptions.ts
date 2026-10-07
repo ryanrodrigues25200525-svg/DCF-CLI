@@ -89,7 +89,10 @@ export function calculateInitialAssumptions(
         forecastYears: 5,
         revenueGrowth: Number(revenueGrowth.toFixed(4)),
         ebitMargin: Number(computedEbitMargin.toFixed(4)),
-        grossMargin: safeDiv(safeGet(data.grossProfit, data.grossProfit.length - 1), lastRev, 0.4),
+        // NaN when the filer presents no gross-profit line (utilities, telecoms,
+        // insurers, biotechs). EBIT is forecast from ebitMargin independently, so
+        // this is a display-only figure and must not be invented from a default.
+        grossMargin: safeDiv(safeGet(data.grossProfit, data.grossProfit.length - 1), lastRev, NaN),
         rdMargin: safeDiv(safeGet(data.researchAndDevelopment || [], (data.researchAndDevelopment?.length || 0) - 1), lastRev, 0),
         sgaMargin: safeDiv(safeGet(data.generalAndAdministrative || [], (data.generalAndAdministrative?.length || 0) - 1), lastRev, 0.15),
         taxRate: 0.21,
