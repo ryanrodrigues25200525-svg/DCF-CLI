@@ -522,7 +522,8 @@ export function buildExportPayload(
     comps?: ComparableCompany[],
     precedents?: PrecedentTransaction[],
     revenueBuildData?: RevenueBuildData,
-    overrides: Overrides = {}
+    overrides: Overrides = {},
+    asOfDate?: string,
 ): DcfExportPayload {
     const marketSnapshot = buildMarketSnapshot(historicals, assumptions, company.marketCap);
     const historicalFinancials = buildHistoricalFinancials(historicals);
@@ -583,7 +584,7 @@ export function buildExportPayload(
             cik: company.cik,
             currency: historicals.currency || 'USD',
             unitsScale: 'millions',
-            asOfDate: new Date().toISOString().split('T')[0],
+            asOfDate: asOfDate ?? new Date().toISOString().split('T')[0],
             fiscalYearEnd: company.fiscalYearEnd,
             sector: company.sector,
             industry: company.industry,

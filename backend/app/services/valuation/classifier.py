@@ -1849,7 +1849,7 @@ def classify_company(
             "live_capm_inputs": "Current risk-free rate, beta, and equity-risk premium",
         }
         reason = (
-            "MRNA pipeline rNPV uses its live 10-K program list, but commercial forecasts, success probabilities, "
+            f"{ticker} pipeline rNPV uses its live 10-K program list, but commercial forecasts, success probabilities, "
             "launch timing, partner economics, and remaining development costs are not reported as valuation inputs."
         )
         gaps = [
@@ -1876,6 +1876,22 @@ def classify_company(
             "The biotechnology pipeline route requires a live SEC source list of disclosed assets and a positive filed revenue base; "
             "filed pipeline, revenue, market, or bridge inputs are incomplete."
         )
+        biotech_fallback = _comparable_fallback(
+            ticker=ticker,
+            archetype=archetype,
+            company_type="high_growth" if ebit <= 0 else "operating",
+            canonical_financials=canonical_financials,
+            market=market,
+            market_status=market_status,
+            peers=peers,
+            peer_status=peer_status,
+            peer_source=peer_source,
+            peer_fallback_used=peer_fallback_used,
+            peer_fetched_at_ms=peer_fetched_at_ms,
+            blocked_models=[BlockedModel(model="biotech_pipeline_rnpv", reason=reason)],
+        )
+        if biotech_fallback is not None:
+            return biotech_fallback
         return ModelEligibility(
             company_type="high_growth" if ebit <= 0 else "operating",
             preferred_model="biotech_pipeline_rnpv",

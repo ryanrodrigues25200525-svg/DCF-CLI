@@ -63,22 +63,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function errorCorrelationSuffix(value: unknown): string {
+  if (!isRecord(value)) return '';
+  const parts: string[] = [];
+  const error = value.error;
+  if (isRecord(error) && typeof error.kind === 'string' && error.kind.trim()) parts.push(error.kind.trim());
+  const requestId = value.request_id ?? value.requestId;
+  if (typeof requestId === 'string' && requestId.trim()) parts.push(`request ${requestId.trim()}`);
+  return parts.length ? ` (${parts.join(', ')})` : '';
+}
+
 function errorMessage(value: unknown, status: number): string {
+  let message = `Backend request failed (${status}).`;
   if (isRecord(value)) {
     const error = value.error;
-    if (isRecord(error) && typeof error.message === 'string' && error.message.trim()) return error.message;
-    if (typeof value.detail === 'string' && value.detail.trim()) return value.detail;
-    if (Array.isArray(value.detail)) {
+    if (isRecord(error) && typeof error.message === 'string' && error.message.trim()) message = error.message;
+    else if (typeof value.detail === 'string' && value.detail.trim()) message = value.detail;
+    else if (Array.isArray(value.detail)) {
       const messages = value.detail.flatMap((item) => {
         if (!isRecord(item) || typeof item.msg !== 'string') return [];
         const location = Array.isArray(item.loc) ? item.loc.join('.') : '';
         return [`${location ? `${location}: ` : ''}${item.msg}`];
       });
-      if (messages.length) return messages.join('; ');
+      if (messages.length) message = messages.join('; ');
     }
-    if (typeof value.message === 'string' && value.message.trim()) return value.message;
+    else if (typeof value.message === 'string' && value.message.trim()) message = value.message;
   }
-  return `Backend request failed (${status}).`;
+  return `${message}${errorCorrelationSuffix(value)}`;
 }
 
 async function responseJson(response: Response, requestName: string): Promise<unknown> {

@@ -100,6 +100,21 @@ export interface IncompleteValuationJobResult extends ValuationJobResultBase {
 
 export type ValuationJobResult = ReadyValuationJobResult | IncompleteValuationJobResult;
 
+/** Fail closed instead of wall-clock-dating sources when the backend omits its valuation date (#55). */
+export function requireValuationAsOfDate(data: Pick<NativeUnifiedPayload, 'valuation_context'>): string {
+  const asOfDate = data.valuation_context.as_of_date;
+  if (!asOfDate || !/^20\d{2}-\d{2}-\d{2}$/.test(asOfDate)) {
+    throw new Error('Export requires a dated valuation context; refusing to wall-clock-date sources.');
+  }
+  return asOfDate;
+}
+
+/** Ready-path specialist workbook warnings exist for every specialist model, not just asset managers (#47). */
+export function specialistModelWarnings(exportPayload: DcfExportPayload, hasSpecialistModel: boolean): string[] {
+  if (!hasSpecialistModel) return [];
+  return exportPayload.uiMeta?.warnings ?? [];
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -1659,7 +1674,7 @@ export function buildIncompleteExportPayload(
       cik: profile.cik,
       currency: historicals.currency || 'USD',
       unitsScale: 'millions',
-      asOfDate: data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10),
+      asOfDate: requireValuationAsOfDate(data),
       fiscalYearEnd: profile.fiscalYearEnd,
       sector: profile.sector,
       industry: profile.industry,
@@ -1819,7 +1834,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
     const latestAnnualRecord = asRecord(latestAnnual);
     const filedShares = asRecord(latestAnnualRecord.shares);
     const filedShareSource = asRecord(Array.isArray(filedShares.sources) ? filedShares.sources[0] : undefined);
-    const utilityAsOfDate = data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10);
+    const utilityAsOfDate = requireValuationAsOfDate(data);
     const utilityReadiness = eligibility.required_input_readiness ?? {};
     const incompleteUtilityModel: IncompleteUtilityModelExportData | undefined = eligibility.preferred_model === 'utility_dcf'
       ? {
@@ -2195,7 +2210,7 @@ let comparablePeerTickers: string[] | undefined;
   } else if (utilityAssumptions) {
     exportPayload = buildUtilityModelExportPayload(profile, {
       ...utilityAssumptions,
-      asOfDate: data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10),
+      asOfDate: requireValuationAsOfDate(data),
       assumptionSources: {},
     }, results.forecasts);
   } else if (biotechAssumptions) {
@@ -2219,6 +2234,9 @@ let comparablePeerTickers: string[] | undefined;
         ? peers.filter((peer) => comparablePeerTickers!.includes(peer.ticker))
         : peers,
       getPrecedentTransactionsBySector(profile.sector || 'Technology'),
+      undefined,
+      {},
+      requireValuationAsOfDate(data),
     );
     if (comparableValuationInput) {
       exportPayload.valuationModel = comparableValuationInput.method;
@@ -2253,7 +2271,12 @@ let comparablePeerTickers: string[] | undefined;
   enrichSourceNotes(exportPayload, data, historicals, bankHistorical || insuranceHistorical || reitHistorical || assetManagerHistorical ? [] : operatingSourceNotes);
   exportPayload = {...exportPayload, buildStatus: 'ready', requiredInputs: []};
   const workbookBytes = await backend.exportDcf(exportPayload);
-  const modelWarnings = assetManagerHistorical ? exportPayload.uiMeta?.warnings ?? [] : [];
+  const hasSpecialistModel = Boolean(
+    bankHistorical || insuranceHistorical || reitHistorical || assetManagerHistorical
+    || telecomHistorical || mortgageReitHistorical || energyHistorical || pharmaHistorical
+    || utilityAssumptions || biotechAssumptions || lifeAssumptions,
+  );
+  const modelWarnings = specialistModelWarnings(exportPayload, hasSpecialistModel);
   const warnings = [...qualityWarnings(data), ...modelWarnings, results.sectorWarning]
     .filter((warning): warning is string => Boolean(warning));
 
