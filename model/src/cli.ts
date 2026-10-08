@@ -30,6 +30,7 @@ import {
   rejectCandidate,
 } from '@/review/build-candidate';
 import { runBuildStaging } from '@/review/build-staging';
+import { acceptManualEdits } from '@/review/accept-edits';
 import { getWatchStatus, setWatchEnabled } from '@/watch/watch-service';
 import { syncFilingSnapshot } from '@/watch/source-sync';
 import { formatProposalMarkdown, validateProposalDraft, type ProposalDraft } from '@/review/proposal';
@@ -101,6 +102,7 @@ function usage(): string {
     '                   dcf model candidate <ticker> [--models-dir <dir>]',
     '                   dcf model candidate-verify <candidate-id> --verification <text> --by <name> [--models-dir <dir>]',
     '                   dcf model accept <candidate-id> --approve [--by <name>] [--models-dir <dir>]',
+    '                   dcf model accept-edits <ticker> [--note <text>] [--models-dir <dir>]',
     '                   dcf model candidate-reject <candidate-id> [--reason <text>] [--models-dir <dir>]',
     '                   dcf model apply <proposal-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model reject <proposal-id> [--reason <text>] [--models-dir <dir>]',
@@ -238,6 +240,7 @@ interface GlobalFlags {
   set?: string;
   reason?: string;
   verification?: string;
+  note?: string;
   from?: string;
   to?: string;
   interval?: number;
@@ -269,6 +272,7 @@ function parseLibraryArgs(argv: string[]): GlobalFlags {
     else if (arg === '--from') flags.from = takeValue(arg);
     else if (arg === '--to') flags.to = takeValue(arg);
     else if (arg === '--verification') flags.verification = takeValue(arg);
+    else if (arg === '--note') flags.note = takeValue(arg);
     else if (arg === '--interval') {
       const raw = takeValue(arg);
       const seconds = Number(raw);
@@ -859,6 +863,19 @@ async function cmdModelAccept(candidateIdRaw: string | undefined, flags: GlobalF
   }
 }
 
+async function cmdModelAcceptEdits(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model accept-edits <ticker> [--note <text>] [--models-dir <dir>]');
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const accepted = await acceptManualEdits({lib, root, ticker: tickerRaw, note: flags.note});
+    console.log(`Accepted manual edits for ${accepted.ticker} as revision ${accepted.revisionId} (${accepted.previousHash ?? 'no prior hash'} → ${accepted.newHash}).`);
+    console.log(`Archived library copy: ${accepted.archivedPath}`);
+  } finally {
+    lib.close();
+  }
+}
+
 async function cmdCandidateReject(candidateIdRaw: string | undefined, flags: GlobalFlags): Promise<void> {
   if (!candidateIdRaw) throw new CliUsageError('Usage: dcf model candidate-reject <candidate-id> [--reason <text>] [--models-dir <dir>]');
   const root = libraryRoot(flags.modelsDir);
@@ -1001,7 +1018,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
     const usageByCommand: Record<string, string> = {
       build: 'Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
       models: 'Usage: dcf models list [--json]',
-      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|candidate-reject ...',
+      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...',
       filings: 'Usage: dcf filings sync <ticker>',
       watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
       config: 'Usage: dcf config models-dir|review-hook [--set <value>]',
@@ -1033,8 +1050,9 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'candidate') await cmdModelCandidate(args[0], flags);
       else if (sub === 'candidate-verify') await cmdCandidateVerify(args[0], flags);
       else if (sub === 'accept') await cmdModelAccept(args[0], flags);
+      else if (sub === 'accept-edits') await cmdModelAcceptEdits(args[0], flags);
       else if (sub === 'candidate-reject') await cmdCandidateReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|candidate-reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');
