@@ -1,20 +1,23 @@
 # Bugs and open workflow gaps
 
-Last reviewed: **3 October 2026**. This register contains concrete issues found
+Last reviewed: **8 October 2026**. This register contains concrete issues found
 in the current code review. “Open” means the behavior still needs a code or
 product change; it is separate from model-coverage limits listed in
 [Model coverage](docs/MODEL_COVERAGE.md).
 
 ## GitHub tracker snapshot
 
-Checked on **4 October 2026** with `gh issue list --state open` and
-`gh pr list --state open`: **20 open GitHub issues and 2 open pull requests**
-(PR [#21](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/21) ready for review,
-PR [#17](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/17) draft).
-Issues #1–#8 are fixed on branch `fix/open-issues-1-8` (PR #21, live suite 82/82 green);
-issues #22 and #23 were filed during verification. Each confirmed bug below has
-a matching GitHub issue. This file remains the
-local summary; the GitHub tracker holds the work items. [Open the issue
+Checked on **8 October 2026** with `list_issues --state OPEN` and
+`list_pull_requests --state open`: **23 open GitHub issues and 1 open pull
+request** (PR [#34](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/34),
+draft RFC, unchanged). Issues #1–#8 are closed upstream. The ready-path chain
+(#43–#45, #54, #57–#59), fetch gates (#46, #61, #62), peer fallback (#60),
+and export sweep (#44, #47, #49, #50, #53, #55, #63) are fixed on branch
+`fix/derive-peers-from-filings` (unit suites green; live suite re-run in
+progress for #48); the issues stay open until that verification lands and
+they are closed in the tracker. Each confirmed bug below has a matching
+GitHub issue. This file remains the local summary; the GitHub tracker holds
+the work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Fixed in this update
@@ -28,9 +31,18 @@ tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 | The operating DCF fallback could substitute a market-cap-derived pseudo-value and then be marked valuation-supported despite having no forecast rows. | Fixed in `model/src/services/dcf/engine.ts` and `model/src/services/valuation/router.ts` | Fallback now returns no enterprise/equity/per-share value and is unsupported; a live CRM-source redaction check covers the route. |
 | Comparable median recomputed downstream instead of shipping the engine's peer set (GE/OXY/NEM/CVX 500s). | Fixed: exports carry `peers_used_for_median` end-to-end (engine → contracts → mapper); backend `ValueError` data errors surface as 422 `DATA_ERROR` with reason on CLI stderr. | [#41](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/41) |
 | Derived peer sets could include 20-F/40-F (non-USD) filers; weak zero-industry-match sets entered the median silently. | Fixed in `backend/app/services/finance/peers.py`: non-USD reporters excluded with provenance note; zero-industry-match derived sets flag `fallback_used` and require analyst confirmation. | [#40](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/40) |
-| Ticker-equality gates pinned routes to named issuers (MET/PRU life contracts, XOM/PFE model cuts, AGNC mREIT, alt-manager allowlist, S&P 500 template map). | Fixed: routing now keys on filing-derived capability flags (life source contracts, production/product schedules, filed AUM, industry-template sector text); `sp500-template-map.ts` deleted, `detectIndustryTemplate` is sector/industry text only. | Live MET/PRU unchanged; synthetic third-insurer + non-XOM energy unit tests cover the filing-shape path. |
+| Ticker-equality gates pinned routes to named issuers (MET/PRU life contracts, XOM/PFE model cuts, AGNC mREIT, alt-manager allowlist, S&P 500 template map). | Fixed: routing now keys on filing-derived capability flags (life source contracts, production/product schedules, filed AUM, industry-template sector text); `sp500-template-map.ts` deleted, `detectIndustryTemplate` is sector/industry text only. | [#40](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/40) follow-through |
+| Specialist fetch gates were SIC-only, so description/industry-identified biotech/pharma/telecom/energy/asset-manager filers never fetched specialist facts; telecom missed SIC 4812. | Fixed in `backend/app/services/edgar.py`: fetch predicates widened to the classifier's description-OR-SIC predicates (`_is_telecom_filer`/`_is_asset_manager_filer` added). | [#61](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/61), [#62](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/62), [#46](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/46); `test_edgar_fetch_gates.py` 7/7 |
+| Hardcoded sector/industry peer tables passed the curated non-fallback guard into the ready median. | Fixed in `backend/app/services/finance/peers.py`: `_is_fallback_peer_source` flags `sector_industry_table` (and `symbol_only_fallback`) as fallback, so the comparable ready guard blocks them. | [#60](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/60); `test_peer_fallback_flag.py` 3/3 |
+| Precedent transactions fell back to SOFTWARE comps for any unmapped sector. | Fixed in `model/src/core/data/precedent-transactions.ts`: unmapped sectors return no precedents instead of wrong-sector comps. | [#49](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/49); `precedent-transactions.unit.test.ts` 2/2 |
+| Life-insurer ready route had no router case; utility/biotech results wiped forecasts to `[]` while reporting supported. | Fixed in `model/src/services/valuation/router.ts`: life case added; specialist sidecars mapped into canonical forecasts (`specialist-forecasts.ts`); supported-ness gated on non-empty forecasts for utility/biotech/life/telecom. | [#45](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/45), [#58](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/58), [#59](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/59); `router.unit.test.ts` 4/4 |
+| Ready utility/biotech router inputs were never passed; ready export had no utility/biotech/life branches; pre-revenue biotech blocked by the operating revenue gate. | Fixed in `model/src/application/run-valuation-job.ts`: sourced specialist builders (`specialist-ready-assumptions.ts`, filed facts only, named analyst-input errors otherwise) feed the router; ready utility/biotech payload builders added (`utility-payload.ts`, `biotech-payload.ts`); life ready export fails closed with a named error; revenue gate exempts `biotech_pipeline_rnpv` and life; rNPV accepts a zero commercial base (pipeline-only value). | [#43](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/43), [#54](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/54), [#57](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/57); job + builder + payload unit tests green |
+| Export `asOfDate` used wall-clock when the valuation context date was missing; ready specialist warnings dropped except asset managers; generic 500s opaque; preferred-equity absence needed weaker proof than securities/NCI; biotech false-readiness had no comparable fallback and an MRNA-hardcoded reason; specialist failure diagnostics printed operating-DCF internals. | Fixed: `requireValuationAsOfDate` fails closed (all export sites); `specialistModelWarnings` surfaces every specialist model's warnings; 500s carry triage-safe `kind` + `request_id` and the CLI prints them; preferred-equity absence requires a 10-K/10-K/A with accession/filing date plus no presented row (NCI parity); biotech false-readiness stages a trading-multiple fallback and reasons name the issuer ticker; ready-path failure message is model-aware (`valuationFailureMessage`). Specialist parsers verified 10-K-gated (20-F yields no facts). | [#55](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/55), [#47](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/47), [#53](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/53), [#63](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/63), [#44](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/44), [#50](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/50), [#56](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/56); `test_task5_correctness.py` 4/4, export-guard + backend-client + failure-message unit tests green |
 
 ## Confirmed open bugs
+
+Issues #1–#8 below are closed upstream and kept here for history; the live
+tracker holds the current work items (#40, #41, #43–#63).
 
 | Priority | Area | Issue and impact | Workaround | GitHub |
 | --- | --- | --- | --- | --- |
@@ -48,9 +60,13 @@ tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 - **No managed acceptance path for spreadsheet edits.** Editing
   `companies/<TICKER>/current.xlsx` changes its hash; proposal application
   refuses to proceed until that conflict is resolved. There is no command yet
-  to accept a manually edited workbook as a new library revision. For now,
+  to accept a manually edited workbook as a new library revision. Tracked in
+  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51). For now,
   keep analyst experiments in a separate workbook copy and preserve the
-  library copy for proposal/revision workflows.
+  library copy for proposal/revision workflows. Ready utility/biotech/life
+  valuations stay behind this workflow: their analyst inputs (rate base,
+  pipeline economics, segment forecasts) cannot be filed, so the CLI builders
+  fail closed with named errors until acceptance exists.
 - **No hosted HTTP MCP endpoint in this repository.** The MCP server is local
   stdio. ChatGPT can inspect an uploaded workbook, or the user can configure a
   supported Secure MCP Tunnel / HTTP deployment. The repository itself does
@@ -58,7 +74,8 @@ tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 - **AI review notes are not persisted as a library artifact.** ChatGPT's
   free-form findings stay in the conversation; structured, source-backed cell
   changes can be retained as proposals. There is no review-report or comments
-  export yet.
+  export yet. Tracked in
+  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51).
 - **An update rebuilds the latest data mapped by the selected route.** Several
   specialist routes still use annual actuals and do not incorporate every new
   quarter automatically. Check the route-specific as-of limits in

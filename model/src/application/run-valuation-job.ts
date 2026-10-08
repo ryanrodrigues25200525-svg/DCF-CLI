@@ -1,5 +1,5 @@
 import type { Assumptions, AssetManagerHistoricalData, ComparableCompany, CompanyProfile, DCFResults, EnergyHistoricalData, HistoricalData, MortgageReitHistoricalData, PharmaHistoricalData, TelecomHistoricalData } from '@/core/types';
-import type { CanonicalFinancialLine, NativeUnifiedPayload } from '@/core/types/native';
+import type { CanonicalFinancialLine, ModelEligibility, NativeUnifiedPayload } from '@/core/types/native';
 import {isProductionModelRoute, type ProductionValuationModel} from '@/core/types/native';
 import type { BackendPort } from '@/api/backend-client';
 import { getPrecedentTransactionsBySector } from '@/core/data/precedent-transactions';
@@ -113,6 +113,25 @@ export function requireValuationAsOfDate(data: Pick<NativeUnifiedPayload, 'valua
 export function specialistModelWarnings(exportPayload: DcfExportPayload, hasSpecialistModel: boolean): string[] {
   if (!hasSpecialistModel) return [];
   return exportPayload.uiMeta?.warnings ?? [];
+}
+
+const OPERATING_DIAGNOSTIC_MODELS: ReadonlySet<string> = new Set(['unlevered_dcf', 'ev_ebitda', 'revenue_multiple']);
+
+/** Model-aware ready-path failure diagnostic: operating internals only for operating routes (#56). */
+export function valuationFailureMessage(
+  ticker: string,
+  eligibility: ModelEligibility,
+  results: DCFResults,
+  assumptions: Assumptions,
+): string {
+  const reason = eligibility.blocked_models.find((item) => item.reason)?.reason
+    ?? results.modelWarning
+    ?? results.sectorWarning;
+  if (reason) return reason;
+  if (OPERATING_DIAGNOSTIC_MODELS.has(eligibility.preferred_model)) {
+    return `The DCF engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; WACC=${assumptions.wacc}; tax=${assumptions.taxRate}; EBIT margin=${assumptions.ebitMargin}; CapEx ratio=${assumptions.capexRatio}; NWC residual=${assumptions.nwcChangeRatio}; first FCFF=${results.forecasts[0]?.fcff}; final FCFF=${results.forecasts.at(-1)?.fcff}; terminal value=${results.terminalValue}; terminal growth value=${results.terminalValueGordon}).`;
+  }
+  return `The ${eligibility.preferred_model} engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; forecasts=${results.forecasts.length}; terminal value=${results.terminalValue}).`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -2184,10 +2203,7 @@ let comparablePeerTickers: string[] | undefined;
     || !Number.isFinite(results.impliedSharePrice)
     || results.impliedSharePrice <= 0
   ) {
-    const reason = eligibility.blocked_models.find((item) => item.reason)?.reason
-      ?? results.modelWarning
-      ?? results.sectorWarning;
-    throw new Error(reason || `The DCF engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; WACC=${assumptions.wacc}; tax=${assumptions.taxRate}; EBIT margin=${assumptions.ebitMargin}; CapEx ratio=${assumptions.capexRatio}; NWC residual=${assumptions.nwcChangeRatio}; first FCFF=${results.forecasts[0]?.fcff}; final FCFF=${results.forecasts.at(-1)?.fcff}; terminal value=${results.terminalValue}; terminal growth value=${results.terminalValueGordon}).`);
+    throw new Error(valuationFailureMessage(ticker, eligibility, results, assumptions));
   }
 
   let exportPayload: DcfExportPayload;
