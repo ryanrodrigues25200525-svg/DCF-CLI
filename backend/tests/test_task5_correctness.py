@@ -52,6 +52,17 @@ def _native_with_filings(form):
     }
 
 
+def test_preferred_equity_absence_ignores_valueless_presented_row():
+    """A presented preferred-stock row with no reported year value (e.g. authorized-but-unissued)
+    must not block genuine-absence proof the way a valued row does."""
+    native = _native_with_filings("10-K")
+    native["statements"]["balance_sheet"] = [
+        {"concept": "PreferredStockValue", "label": "Preferred stock, none issued", "FY 2024": None}
+    ]
+    annual = build_canonical_financials(native, {"currency": "USD"})["annual"]
+    assert annual[0]["preferred_equity"]["source"] == "not_applicable"
+
+
 def test_preferred_equity_absence_requires_filed_10k():
     market = {"currency": "USD"}
     annual_q = build_canonical_financials(_native_with_filings("10-Q"), market)["annual"]

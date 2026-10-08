@@ -1109,6 +1109,8 @@ def _asset_manager_filing_facts_from_text(
                 )
             break
 
+    return output
+
 
 
 def _sgml_html_text(filing: Any, width: int = 500) -> str | None:

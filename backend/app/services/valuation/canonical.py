@@ -2395,6 +2395,7 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         ]
         has_preferred_row = any(
             _norm(str(row.get("concept") or row.get("standard_concept") or "")) in preferred_concept_keys
+            and _value_for_year(row, year) is not None
             for row in balance_rows
         )
         filing = next((
