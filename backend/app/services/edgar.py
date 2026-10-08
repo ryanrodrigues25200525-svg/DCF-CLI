@@ -3709,17 +3709,49 @@ def _company_sic_code(company: Any) -> int:
     return int(digits) if len(digits) == 4 else 0
 
 
+def _company_text(company: Any) -> str:
+    return " ".join(
+        str(getattr(company, part, "") or "")
+        for part in ("sic_description", "industry", "name")
+    ).lower()
+
+
 def _is_energy_filer(company: Any) -> bool:
     code = _company_sic_code(company)
-    return (1000 <= code <= 1499) or (2900 <= code <= 2999)
+    if (1000 <= code <= 1499) or (2900 <= code <= 2999):
+        return True
+    text = _company_text(company)
+    return any(
+        token in text
+        for token in ("energy", "oil & gas", "oil and gas", "petroleum", "mining", "coal", "materials")
+    )
 
 
 def _is_pharma_filer(company: Any) -> bool:
-    return _company_sic_code(company) in {2833, 2834, 2835}
+    if _company_sic_code(company) in {2833, 2834, 2835}:
+        return True
+    text = _company_text(company)
+    return any(token in text for token in ("pharma", "pharmaceutical", "drug manufacturer"))
 
 
 def _is_biotech_filer(company: Any) -> bool:
-    return _company_sic_code(company) == 2836
+    if _company_sic_code(company) == 2836:
+        return True
+    text = _company_text(company)
+    return any(token in text for token in ("biotech", "biotechnology", "biopharmaceutical"))
+
+
+def _is_telecom_filer(company: Any) -> bool:
+    if str(getattr(company, "sic", "") or "").strip() in {"4812", "4813"}:
+        return True
+    text = _company_text(company)
+    return any(token in text for token in ("telecom", "wireless carrier", "wireless telecommunication"))
+
+
+def _is_asset_manager_filer(company: Any) -> bool:
+    if str(getattr(company, "sic", "") or "").strip() in {"6211", "6282"}:
+        return True
+    return "asset management" in str(getattr(company, "industry", "") or "").lower()
 
 @async_retry(retries=3)
 async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[str, Any]:
@@ -3823,10 +3855,10 @@ async def _fetch_company_financials_native(normalized_ticker: str, periods: int)
     else:
         bank_filing_facts, insurance_filing_facts, life_insurance_filing_facts = [], [], []
     asset_manager_facts = []
-    if str(getattr(company, "sic", "")).strip() in {"6211", "6282"}:
+    if _is_asset_manager_filer(company):
         asset_manager_facts = await _fetch_asset_manager_filing_facts(company, source_filings)
     telecom_facts = []
-    if str(getattr(company, "sic", "")).strip() == "4813":
+    if _is_telecom_filer(company):
         telecom_facts = await _fetch_telecom_filing_facts(company, source_filings)
     is_reit_filer = str(getattr(company, "sic", "")).strip() == "6798"
     reit_filing_facts = await _fetch_reit_filing_facts(company, source_filings) if is_reit_filer else []
