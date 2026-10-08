@@ -31,6 +31,7 @@ import {
 } from '@/review/build-candidate';
 import { runBuildStaging } from '@/review/build-staging';
 import { acceptManualEdits } from '@/review/accept-edits';
+import { collectModelReviewLines, exportModelReview, ModelNotFoundError } from '@/review/review-export';
 import { getWatchStatus, setWatchEnabled } from '@/watch/watch-service';
 import { syncFilingSnapshot } from '@/watch/source-sync';
 import { formatProposalMarkdown, validateProposalDraft, type ProposalDraft } from '@/review/proposal';
@@ -103,6 +104,7 @@ function usage(): string {
     '                   dcf model candidate-verify <candidate-id> --verification <text> --by <name> [--models-dir <dir>]',
     '                   dcf model accept <candidate-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model accept-edits <ticker> [--note <text>] [--models-dir <dir>]',
+    '                   dcf model review-export <ticker> [--output <file.md>] [--force] [--models-dir <dir>]',
     '                   dcf model candidate-reject <candidate-id> [--reason <text>] [--models-dir <dir>]',
     '                   dcf model apply <proposal-id> --approve [--by <name>] [--models-dir <dir>]',
     '                   dcf model reject <proposal-id> [--reason <text>] [--models-dir <dir>]',
@@ -584,52 +586,24 @@ async function cmdModelReview(tickerRaw: string | undefined, flags: GlobalFlags)
   const root = libraryRoot(flags.modelsDir);
   const lib = openLibrary(flags.modelsDir);
   try {
-    const manifest = lib.getCompany(ticker);
-    if (!manifest) throw new CliUsageError(`No model found for ticker ${ticker}.`);
-    const workbookPath = currentWorkbookPath(root, ticker);
-    const checks = runStaticWorkbookChecks(workbookPath);
-    const hashMatches = manifest.workbook_hash !== null && checks.sha256 === manifest.workbook_hash;
-    const manifestFile = await readManifest(root, ticker);
-    for (const problem of verifyManifest(manifestFile, checks.exists ? checks.sha256 : null)) {
-      console.log(`Manifest problem: ${problem}`);
+    try {
+      for (const line of await collectModelReviewLines({lib, root, ticker})) console.log(line);
+    } catch (error) {
+      if (error instanceof ModelNotFoundError) throw new CliUsageError(error.message);
+      throw error;
     }
-    const python = findBackendPython();
-    if (python && checks.exists) {
-      try {
-        const inspection = await inspectWorkbook(python, workbookPath);
-        console.log(`Workbook structure: ${inspection.sheets.length} sheets (${inspection.sheets.join(', ') || 'none'}), ${inspection.formulaCount} formulas.`);
-        if (inspection.hasInputRequiredSheet) {
-          console.log(`Input Required status: ${inspection.inputRequiredStatus ?? 'blank'}.`);
-        }
-        console.log(`Data Review rows: ${inspection.dataReviewRows}.`);
-        if (inspection.cachedErrorCells.length > 0) {
-          console.log(`Cached formula errors (${inspection.cachedErrorCells.length}):`);
-          for (const cell of inspection.cachedErrorCells.slice(0, 20)) console.log(`  ${cell}`);
-        } else {
-          console.log('Cached formula errors: none.');
-        }
-      } catch (error) {
-        console.log(`Workbook inspection unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    const watch = lib.getWatch(ticker);
-    const snapshot = lib.getLatestSnapshot(ticker);
-    const proposals = lib.listProposals(ticker).filter((p) => p.status === 'proposed' || p.status === 'accepted');
-    console.log(formatReviewReport(
-      {ticker: manifest.ticker, route: manifest.route ?? undefined, revisionHash: manifest.workbook_hash ?? undefined},
-      snapshot ? {accession: snapshot.accession, filedDate: snapshot.filed_date ?? 'unknown'} : null,
-      checks,
-      proposals.length > 0 ? {summary: `${proposals.length} open proposal(s)`, changeCount: proposals.length} : null,
-    ));
-    console.log(hashMatches
-      ? 'Hash check: on-disk workbook matches the manifest.'
-      : 'Hash check: MISMATCH — the workbook may have been edited outside the library. Do not apply proposals until reviewed.');
-    if (watch?.update_ready === 1) {
-      console.log(`Watch: update-ready (latest ${watch.latest_accession ?? 'unknown'}). Run \`dcf model propose-update ${ticker}\` to draft changes.`);
-    }
-    for (const proposal of proposals) {
-      console.log(`Open proposal: ${proposal.id} status=${proposal.status} base=${proposal.base_revision_hash ?? '-'}`);
-    }
+  } finally {
+    lib.close();
+  }
+}
+
+async function cmdModelReviewExport(tickerRaw: string | undefined, flags: GlobalFlags): Promise<void> {
+  if (!tickerRaw) throw new CliUsageError('Usage: dcf model review-export <ticker> [--output <file.md>] [--force] [--models-dir <dir>]');
+  const root = libraryRoot(flags.modelsDir);
+  const lib = openLibrary(flags.modelsDir);
+  try {
+    const result = await exportModelReview({lib, root, ticker: tickerRaw, output: flags.output, force: flags.force});
+    console.log(`Review report: ${result.path}`);
   } finally {
     lib.close();
   }
@@ -1018,7 +992,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
     const usageByCommand: Record<string, string> = {
       build: 'Usage: dcf build <ticker> [--output <file.xlsx>] [--force] [--models-dir <dir>]',
       models: 'Usage: dcf models list [--json]',
-      model: 'Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...',
+      model: 'Usage: dcf model inspect|compare|open|review|review-export|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...',
       filings: 'Usage: dcf filings sync <ticker>',
       watch: 'Usage: dcf watch status|check [ticker]|run [--interval <seconds>] [ticker]|pause <ticker>|resume <ticker>',
       config: 'Usage: dcf config models-dir|review-hook [--set <value>]',
@@ -1041,6 +1015,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'compare') await cmdModelCompare(args[0], flags);
       else if (sub === 'open') await cmdModelOpen(args[0], flags);
       else if (sub === 'review') await cmdModelReview(args[0], flags);
+      else if (sub === 'review-export') await cmdModelReviewExport(args[0], flags);
       else if (sub === 'update') await cmdModelUpdate(args[0], flags);
       else if (sub === 'export') await cmdModelExport(args[0], flags);
       else if (sub === 'propose-update') await cmdModelProposeUpdate(args[0], flags);
@@ -1052,7 +1027,7 @@ async function dispatchLibraryCommands(argv: string[]): Promise<boolean> {
       else if (sub === 'accept') await cmdModelAccept(args[0], flags);
       else if (sub === 'accept-edits') await cmdModelAcceptEdits(args[0], flags);
       else if (sub === 'candidate-reject') await cmdCandidateReject(args[0], flags);
-      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...');
+      else throw new CliUsageError('Usage: dcf model inspect|compare|open|review|review-export|update|export|propose-update|preview|apply|reject|candidate|candidate-verify|accept|accept-edits|candidate-reject ...');
       return true;
     case 'filings':
       if (sub !== 'sync') throw new CliUsageError('Usage: dcf filings sync <ticker>');
