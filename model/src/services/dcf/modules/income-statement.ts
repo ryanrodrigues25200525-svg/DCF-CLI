@@ -51,13 +51,17 @@ export function projectIncomeStatement(
     const revenue = ov.revenue || (previousRevenue * (1 + growthRate));
 
     // 2. Gross Profit & Margins
-    let grossMargin = ov.grossMargin || assumptions.grossMargin;
-    if (assumptions.advancedMode && index > 3) {
+    // A filer that presents no gross-profit line yields NaN, which exports as a
+    // blank cell rather than a fabricated default. EBIT below is forecast from
+    // ebitMargin independently, so the valuation is unaffected.
+    let grossMargin = ov.grossMargin ?? assumptions.grossMargin;
+    if (assumptions.advancedMode && index > 3 && Number.isFinite(previousGrossMargin) && Number.isFinite(grossMargin)) {
         const convergenceProgress = Math.min(1, (index - 3) / 5);
-        grossMargin = previousGrossMargin + (assumptions.grossMargin - previousGrossMargin) * convergenceProgress;
+        grossMargin = previousGrossMargin + (grossMargin - previousGrossMargin) * convergenceProgress;
     }
-    const grossProfit = revenue * grossMargin;
-    const costOfRevenue = revenue - grossProfit;
+    const hasGrossMargin = Number.isFinite(grossMargin);
+    const grossProfit = hasGrossMargin ? revenue * grossMargin : NaN;
+    const costOfRevenue = hasGrossMargin ? revenue - grossProfit : NaN;
 
     // 3. OpEx
     const rdExpense = revenue * (assumptions.rdMargin || 0);
