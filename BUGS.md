@@ -57,25 +57,23 @@ tracker holds the current work items (#40, #41, #43–#63).
 
 ## Product and workflow gaps
 
-- **No managed acceptance path for spreadsheet edits.** Editing
-  `companies/<TICKER>/current.xlsx` changes its hash; proposal application
-  refuses to proceed until that conflict is resolved. There is no command yet
-  to accept a manually edited workbook as a new library revision. Tracked in
-  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51). For now,
-  keep analyst experiments in a separate workbook copy and preserve the
-  library copy for proposal/revision workflows. Ready utility/biotech/life
-  valuations stay behind this workflow: their analyst inputs (rate base,
-  pipeline economics, segment forecasts) cannot be filed, so the CLI builders
-  fail closed with named errors until acceptance exists.
+- **No managed acceptance path for spreadsheet edits.** Tracked in
+  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51) —
+  SHIPPED on this branch: `dcf model accept-edits <ticker> [--note <text>]`
+  accepts a manually edited `current.xlsx` as a child revision of the accepted
+  hash (pending proposals go stale through the existing gate). Note: this
+  versions the edited file; analyst workbook values still do not flow back
+  into CLI valuations, so ready utility/biotech/life builders keep failing
+  closed with named errors until value ingestion exists.
 - **No hosted HTTP MCP endpoint in this repository.** The MCP server is local
   stdio. ChatGPT can inspect an uploaded workbook, or the user can configure a
   supported Secure MCP Tunnel / HTTP deployment. The repository itself does
   not create or host that connection.
-- **AI review notes are not persisted as a library artifact.** ChatGPT's
-  free-form findings stay in the conversation; structured, source-backed cell
-  changes can be retained as proposals. There is no review-report or comments
-  export yet. Tracked in
-  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51).
+- **AI review notes are not persisted as a library artifact.** Tracked in
+  [#51](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/51) —
+  SHIPPED on this branch: `dcf model review-export <ticker> [--output
+  <file.md>] [--force]` writes the exact `model review` report to a markdown
+  snapshot file.
 - **An update rebuilds the latest data mapped by the selected route.** Several
   specialist routes still use annual actuals and do not incorporate every new
   quarter automatically. Check the route-specific as-of limits in

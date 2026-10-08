@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardcoded sector/industry peer tables are flagged `fallback_used` and blocked from the ready median; unmapped sectors get no precedent transactions instead of wrong-sector SOFTWARE comps (#60, #49).
 - Ready-path specialist valuations: life-insurer router case, specialist sidecar forecasts mapped into canonical `forecasts` with supported-ness gated on non-empty forecasts, utility/biotech ready export payloads, and sourced specialist assumption builders that fail closed with named analyst-input errors (#43, #45, #54, #57, #58, #59).
 - Export hardening: `asOfDate` fails closed without a dated valuation context; ready specialist warnings surface for every model; 500s carry triage-safe `kind` + `request_id` printed by the CLI; preferred-equity absence needs 10-K proof at NCI parity; biotech false-readiness stages a trading-multiple fallback with ticker-named reasons; ready-path failure diagnostics are model-aware (#44, #47, #50, #53, #55, #56, #63).
+- Workflow dead-ends closed: `dcf model accept-edits <ticker>` accepts a manually edited workbook as a child revision (proposals go stale, never rebased); `dcf model review-export <ticker>` writes the `model review` report to a markdown snapshot (#51).
 - Offline test suite and GitHub Actions CI. `npm test` now runs only the
   `*.unit.test.ts` suites, which need no network and no `EDGAR_IDENTITY`. They
   still drive real services, so they need a Python interpreter with `openpyxl`
