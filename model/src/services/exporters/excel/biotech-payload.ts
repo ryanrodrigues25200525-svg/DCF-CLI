@@ -8,8 +8,8 @@ export function buildBiotechModelExportPayload(
   assumptions: BiotechRnpvAssumptions,
   pipelineAssets: PipelineAssetNativeFact[],
   forecasts: ForecastYear[],
+  asOfDate: string,
 ): DcfExportPayload {
-  const asOfDate = new Date().toISOString().slice(0, 10);
   const biotechModel: BiotechModelExportData = {
     baseYear: assumptions.baseYear,
     forecastYears: 10,

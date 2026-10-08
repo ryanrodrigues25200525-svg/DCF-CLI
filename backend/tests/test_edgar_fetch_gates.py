@@ -33,6 +33,11 @@ def test_asset_manager_industry_gate():
     assert gate(company) is True
 
 
+def test_asset_manager_description_gate():
+    company = _company(sic="9999", industry="Capital Markets", sic_description="alternative asset management")
+    assert edgar_module._is_asset_manager_filer(company) is True
+
+
 def test_telecom_4812_fetch():
     gate = getattr(edgar_module, "_is_telecom_filer", None)
     assert gate is not None, "missing _is_telecom_filer helper"

@@ -3753,7 +3753,8 @@ def _is_telecom_filer(company: Any) -> bool:
 def _is_asset_manager_filer(company: Any) -> bool:
     if str(getattr(company, "sic", "") or "").strip() in {"6211", "6282"}:
         return True
-    return "asset management" in str(getattr(company, "industry", "") or "").lower()
+    text = _company_text(company)
+    return "asset management" in text
 
 @async_retry(retries=3)
 async def fetch_company_financials_native(ticker: str, years: int = 5) -> Dict[str, Any]:

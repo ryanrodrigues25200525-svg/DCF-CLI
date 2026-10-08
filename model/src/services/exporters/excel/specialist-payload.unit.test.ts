@@ -86,7 +86,9 @@ describe('specialist ready export payloads (#54)', () => {
 
   it('biotech payload carries pipeline assets and rNPV assumptions', () => {
     const results = calculateBiotechRnpv(biotechAssumptions);
-    const payload = buildBiotechModelExportPayload(company, biotechAssumptions, [], mapBiotechForecasts(results.forecasts));
+    const payload = buildBiotechModelExportPayload(company, biotechAssumptions, [], mapBiotechForecasts(results.forecasts), '2026-02-01');
+    expect(payload.valuationModel).toBe('biotech_pipeline_rnpv');
+    expect(payload.company.asOfDate).toBe('2026-02-01');
     expect(payload.valuationModel).toBe('biotech_pipeline_rnpv');
     expect(payload.biotechModel?.assumptions.assets).toHaveLength(1);
     expect(payload.forecasts.length).toBeGreaterThan(0);

@@ -92,8 +92,8 @@ def _build_biotech_model(
         assumption_sources = _record(assumptions.get("assumptionSources"))
     if not isinstance(base_year, int) or forecast_years != 10:
         raise ValueError("Biotech workbook requires a filed fiscal base year and ten forecast years.")
-    if not isinstance(revenue_base, (int, float)) or revenue_base <= 0:
-        raise ValueError("Biotech workbook requires positive filed consolidated revenue.")
+    if not isinstance(revenue_base, (int, float)) or revenue_base < 0:
+        raise ValueError("Biotech workbook requires non-negative filed consolidated revenue (zero values a pipeline-only franchise).")
     if any(not isinstance(value, (int, float)) or value <= 0 for value in (risk_free, erp, beta)):
         raise ValueError("Biotech workbook requires a current risk-free rate, ERP, and beta.")
     assets = _rnpv_assets(pipeline_assets)

@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+from pydantic import ValidationError
+
+from app.api.contracts import IncompleteLifeInsuranceModelExportData
 from app.services.valuation.canonical import build_canonical_financials
 from app.services.valuation.classifier import classify_company
 
@@ -173,6 +177,17 @@ def test_foreign_form_yields_no_telecom_facts():
     ]
     facts = asyncio.run(edgar_module._fetch_telecom_filing_facts(company, source_filings))
     assert facts == []
+
+
+def test_life_ticker_whitespace_rejected():
+    with pytest.raises(ValidationError):
+        IncompleteLifeInsuranceModelExportData(
+            ticker="   ",
+            base_year=2025,
+            forecast_years=5,
+            earnings_basis="after_tax_adjusted_earnings_available_to_common",
+            filing_facts=[],
+        )
 
 
 def test_500_response_carries_kind_and_request_id():

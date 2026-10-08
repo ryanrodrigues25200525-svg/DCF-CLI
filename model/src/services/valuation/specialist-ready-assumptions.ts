@@ -36,7 +36,11 @@ export function buildSourcedUtilityModelAssumptions(_data: NativeUnifiedPayload)
 export function buildSourcedBiotechRnpvAssumptions(data: NativeUnifiedPayload): BiotechRnpvAssumptions {
   const latest = data.canonical_financials.latest;
   if (!latest) throw new Error('Biotech rNPV requires a latest filed commercial-revenue base.');
-  const commercialRevenueBase = filedNumber(latest.revenue) ?? 0;
+  const baseValue = filedNumber(latest.revenue);
+  if (baseValue === null) {
+    throw new Error('Biotech rNPV requires a filed commercial-revenue base (null reads as missing, not zero).');
+  }
+  const commercialRevenueBase = baseValue;
   if (commercialRevenueBase < 0) throw new Error('Biotech rNPV requires a non-negative filed commercial-revenue base.');
   const rawAssets = data.financials_native.pipeline_assets;
   const inventory: PipelineAssetNativeFact[] = Array.isArray(rawAssets) ? rawAssets : [];

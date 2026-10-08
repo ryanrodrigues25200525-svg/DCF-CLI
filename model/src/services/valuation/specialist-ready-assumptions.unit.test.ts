@@ -24,8 +24,12 @@ describe('specialist ready assumption builders (#43)', () => {
     }
   });
 
-  it('life builder names the missing analyst schedules once the source contract resolves', () => {
-    const data = biotechPayload(100_000_000);
+  it('biotech builder reports a missing base instead of the pre-revenue path when revenue is unknown', () => {
+    const data = biotechPayload(null);
+    expect(() => buildSourcedBiotechRnpvAssumptions(data)).toThrow(/commercial-revenue base/i);
+  });
+
+  it('life builder names the missing analyst schedules once the source contract resolves', () => {    const data = biotechPayload(100_000_000);
     const facts = [];
     for (const year of [2023, 2024, 2025]) {
       for (const segment of ['Annuities', 'Protection', 'Corporate']) {

@@ -2233,7 +2233,7 @@ let comparablePeerTickers: string[] | undefined;
     const pipelineAssets = Array.isArray(data.financials_native.pipeline_assets)
       ? data.financials_native.pipeline_assets
       : [];
-    exportPayload = buildBiotechModelExportPayload(profile, biotechAssumptions, pipelineAssets, results.forecasts);
+    exportPayload = buildBiotechModelExportPayload(profile, biotechAssumptions, pipelineAssets, results.forecasts, requireValuationAsOfDate(data));
   } else if (lifeAssumptions) {
     throw new Error(
       'Life-insurer ready export requires an analyst-completed input-required workbook; '
@@ -2246,13 +2246,11 @@ let comparablePeerTickers: string[] | undefined;
       historicals,
       assumptions,
       results,
+      requireValuationAsOfDate(data),
       comparablePeerTickers && comparablePeerTickers.length > 0
         ? peers.filter((peer) => comparablePeerTickers!.includes(peer.ticker))
         : peers,
       getPrecedentTransactionsBySector(profile.sector || 'Technology'),
-      undefined,
-      {},
-      requireValuationAsOfDate(data),
     );
     if (comparableValuationInput) {
       exportPayload.valuationModel = comparableValuationInput.method;

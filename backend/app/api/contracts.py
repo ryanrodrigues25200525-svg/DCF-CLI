@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, field_validator, model_validator
 
 from app.models.schemas import CompanyProfile
 from app.services.valuation.model_eligibility import COMPARABLE_VALUATION_METHODS, ModelEligibility, OperatingArchetype, PreferredModel, PRODUCTION_MODEL_ROUTES
@@ -1828,6 +1828,12 @@ class IncompleteBiotechModelExportData(ExportWireModel):
 
 class IncompleteLifeInsuranceModelExportData(ExportWireModel):
     ticker: str = Field(min_length=1)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def _strip_ticker(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
     base_year: StrictInt
     forecast_years: Literal[5]
     earnings_basis: Literal[

@@ -13,7 +13,7 @@ function stubBackend(data: NativeUnifiedPayload): BackendPort {
 
 describe('run-valuation-job specialist ready path (#43, #54, #57)', () => {
   it('pre-revenue biotech passes the revenue gate and reaches pipeline-economics validation', async () => {
-    const data = biotechPayload(null);
+    const data = biotechPayload(0);
     await expect(runValuationJob('TST', stubBackend(data))).rejects.toThrow(/pipeline asset economics/i);
     await expect(runValuationJob('TST', stubBackend(data))).rejects.not.toThrow(/positive revenue/i);
   });
