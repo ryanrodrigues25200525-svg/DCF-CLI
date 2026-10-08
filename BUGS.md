@@ -7,16 +7,13 @@ product change; it is separate from model-coverage limits listed in
 
 ## GitHub tracker snapshot
 
-Checked on **8 October 2026** with `list_issues --state OPEN` and
-`list_pull_requests --state open`: **23 open GitHub issues and 1 open pull
-request** (PR [#34](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/pull/34),
-draft RFC, unchanged). Issues #1–#8 are closed upstream. The ready-path chain
-(#43–#45, #54, #57–#59), fetch gates (#46, #61, #62), peer fallback (#60),
-and export sweep (#44, #47, #49, #50, #53, #55, #63) are fixed on branch
-`fix/derive-peers-from-filings` (unit suites green; live suite re-run in
-progress for #48); the issues stay open until that verification lands and
-they are closed in the tracker. Each confirmed bug below has a matching
-GitHub issue. This file remains the local summary; the GitHub tracker holds
+Checked on **8 October 2026** (close-out): issues #43–#63 plus #48/#51/#52
+are closed with evidence comments after verification (unit 37/37, backend
+35/35, tsc clean, live 84/84 effective, fresh branch review with fix pass).
+Remaining open: #40/#41 (fixes ship on this branch, awaiting closure) and
+draft RFC PR #34. Open PRs: #64 (this work, 2.2.0). Each confirmed bug below
+has a matching GitHub issue. This file remains the local summary; the GitHub
+tracker holds
 the work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
