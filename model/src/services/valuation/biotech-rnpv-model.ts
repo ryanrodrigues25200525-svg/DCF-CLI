@@ -110,7 +110,7 @@ export function calculateBiotechRnpv(assumptions: BiotechRnpvAssumptions): Biote
     throw new Error('Biotech pipeline asset identifiers must be unique.');
   }
 
-  const revenueBase = checkedRange(assumptions.commercialRevenueBase, 'Filed commercial-revenue base', 1, 1e15);
+  const revenueBase = checkedRange(assumptions.commercialRevenueBase, 'Filed commercial-revenue base', 0, 1e15);
   const commercialMargin = checkedRange(assumptions.commercialFcfMargin, 'Commercial post-tax FCFF margin', -1, 1);
   const otherPipelineRnpv = checkedNumber(assumptions.otherPipelineRnpv, 'Other pipeline rNPV');
   const riskFreeRate = checkedRange(assumptions.riskFreeRate, 'Risk-free rate', 0.001, 0.3);

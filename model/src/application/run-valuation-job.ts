@@ -65,6 +65,16 @@ import { buildSourcedIncompleteMaturePharmaModelAssumptions, buildSourcedMatureP
 import type { MaturePharmaModelAssumptions } from '@/services/valuation/mature-pharma-model';
 import { buildIncompleteMaturePharmaModelExportData, buildMaturePharmaModelExportPayload } from '@/services/exporters/excel/mature-pharma-payload';
 import { selectBiotechAssetsForRnpv, selectOtherBiotechAssetsForRnpv } from '@/services/valuation/biotech-rnpv-model';
+import type { BiotechRnpvAssumptions } from '@/services/valuation/biotech-rnpv-model';
+import type { LifeInsuranceDcfAssumptions } from '@/services/valuation/life-insurance-model';
+import type { UtilityModelAssumptions } from '@/services/valuation/utility-model';
+import {
+  buildSourcedBiotechRnpvAssumptions,
+  buildSourcedLifeInsuranceAssumptions,
+  buildSourcedUtilityModelAssumptions,
+} from '@/services/valuation/specialist-ready-assumptions.js';
+import { buildBiotechModelExportPayload } from '@/services/exporters/excel/biotech-payload';
+import { buildUtilityModelExportPayload } from '@/services/exporters/excel/utility-payload';
 import { buildIncompleteLifeInsuranceModelExportData } from '@/services/exporters/excel/life-insurance-payload';
 import { median } from '@/services/valuation/source-guards';
 
@@ -1900,7 +1910,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
   }
 
   const {profile, historicals, peers} = buildModelInputs(data, ticker, {
-    requirePositiveRevenue: !['mortgage_reit_residual_income', 'integrated_energy_dcf'].includes(eligibility.preferred_model),
+    requirePositiveRevenue: !['mortgage_reit_residual_income', 'integrated_energy_dcf', 'biotech_pipeline_rnpv', 'life_insurer_distributable_earnings_dcf'].includes(eligibility.preferred_model),
     allowCurrentMarketShareCount: eligibility.preferred_model === 'integrated_energy_dcf',
   });
   let assumptions: Assumptions;
@@ -2111,6 +2121,15 @@ let comparablePeerTickers: string[] | undefined;
   const pharmaAssumptions: MaturePharmaModelAssumptions | undefined = pharmaHistorical
     ? buildSourcedMaturePharmaModelAssumptions(data, pharmaHistorical)
     : undefined;
+  const utilityAssumptions: UtilityModelAssumptions | undefined = eligibility.preferred_model === 'utility_dcf'
+    ? buildSourcedUtilityModelAssumptions(data)
+    : undefined;
+  const biotechAssumptions: BiotechRnpvAssumptions | undefined = eligibility.preferred_model === 'biotech_pipeline_rnpv'
+    ? buildSourcedBiotechRnpvAssumptions(data)
+    : undefined;
+  const lifeAssumptions: LifeInsuranceDcfAssumptions | undefined = eligibility.preferred_model === 'life_insurer_distributable_earnings_dcf'
+    ? buildSourcedLifeInsuranceAssumptions(data)
+    : undefined;
   const results = calculateRoutedValuation(
     historicals,
     assumptions,
@@ -2141,6 +2160,9 @@ let comparablePeerTickers: string[] | undefined;
     pharmaHistorical && pharmaAssumptions
       ? {historical: pharmaHistorical, assumptions: pharmaAssumptions}
       : undefined,
+    utilityAssumptions,
+    biotechAssumptions,
+    lifeAssumptions ? {assumptions: lifeAssumptions} : undefined,
   );
   if (
     !results.isValuationSupported
@@ -2170,6 +2192,23 @@ let comparablePeerTickers: string[] | undefined;
     exportPayload = buildIntegratedEnergyModelExportPayload(profile, energyHistorical, energyAssumptions);
   } else if (pharmaHistorical && pharmaAssumptions) {
     exportPayload = buildMaturePharmaModelExportPayload(profile, pharmaHistorical, pharmaAssumptions);
+  } else if (utilityAssumptions) {
+    exportPayload = buildUtilityModelExportPayload(profile, {
+      ...utilityAssumptions,
+      asOfDate: data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10),
+      assumptionSources: {},
+    }, results.forecasts);
+  } else if (biotechAssumptions) {
+    const pipelineAssets = Array.isArray(data.financials_native.pipeline_assets)
+      ? data.financials_native.pipeline_assets
+      : [];
+    exportPayload = buildBiotechModelExportPayload(profile, biotechAssumptions, pipelineAssets, results.forecasts);
+  } else if (lifeAssumptions) {
+    throw new Error(
+      'Life-insurer ready export requires an analyst-completed input-required workbook; '
+      + 'the backend ships no complete life-insurance workbook mapper yet, so the ready life route '
+      + 'stays behind the analyst-input acceptance workflow.',
+    );
   } else {
     exportPayload = buildExportPayload(
       profile,
