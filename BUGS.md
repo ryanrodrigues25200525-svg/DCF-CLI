@@ -78,6 +78,11 @@ tracker holds the current work items (#40, #41, #43–#63).
   specialist routes still use annual actuals and do not incorporate every new
   quarter automatically. Check the route-specific as-of limits in
   [Model coverage](docs/MODEL_COVERAGE.md).
+- **Alternative-manager subtype detection is text-only.** BX/KKR carry no
+  alternative marker in name/industry/sic and file no parseable alt-manager
+  tables, so they resolve `traditional_asset_manager` and stay blocked from
+  ready. Fact-based alternative detection (carried-interest/incentive-fee
+  table shapes) is future work; no issue filed yet.
 - **The live suite needs external services.** The core model suite requires
   SEC identity, network access, current provider data, Python dependencies,
   and LibreOffice. It can be slow and may fail closed when provider data is
