@@ -27,8 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   placeholders as expected absence (never as presentation), and canonical
   output is unchanged.
 
+### Changed
+
+- edgartools upgraded to 5.61.1 with lxml 6.1.3 (native FactQuery columns,
+  `include_missing` statements, attached footnote markers in table labels).
+
 ### Fixed
 
+- Statement source facts carry their true per-fact provenance - accession,
+  filing date, and form - read from the edgartools FactQuery columns instead
+  of a year-keyed newest-filing guess, so a comparative year cites both the
+  original filing and the comparative 10-K that repeated it (frames without
+  native columns keep the old fallback).
 - edgartools 5.61 attaches table footnote markers to row labels
   (`Total Mobility Subscribers1`); the telecom parser now accepts attached and
   separated markers, restoring AT&T subscriber/churn/broadband extraction.
