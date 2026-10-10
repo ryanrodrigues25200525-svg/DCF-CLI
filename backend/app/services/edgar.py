@@ -268,6 +268,19 @@ def _normalized_concept(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", concept.lower())
 
 
+def _str_or_none(value: Any) -> str | None:
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _accession_key(value: Any) -> str:
+    return str(value or "").replace("-", "").strip()
+
+
 def _finite_reported_number(value: Any) -> float | None:
     try:
         parsed = float(value)
@@ -339,7 +352,14 @@ _ADDITIONAL_CANONICAL_FACTS = {
 
 
 def _fetch_source_frames(company: Any, limit: int) -> tuple[pd.DataFrame, list[Dict[str, Any]]]:
-    facts = company.get_facts().to_dataframe()
+    entity_facts = company.get_facts()
+    try:
+        # FactQuery frames carry native per-fact provenance (accession,
+        # filing_date, form_type); the plain facts view does not, which forced
+        # year-keyed filing guesses downstream.
+        facts = entity_facts.query().to_dataframe()
+    except Exception:
+        facts = entity_facts.to_dataframe()
     filings: list[Dict[str, Any]] = []
     for form in ("10-K", "10-K/A"):
         try:
@@ -396,7 +416,11 @@ def _source_facts_for_statements(
     concepts.update(_ADDITIONAL_CANONICAL_FACTS)
 
     filings_by_year: dict[int, list[Dict[str, Any]]] = {}
+    filings_by_accession: dict[str, Dict[str, Any]] = {}
     for filing in source_filings:
+        accession_key = _accession_key(filing.get("accession_number"))
+        if accession_key:
+            filings_by_accession.setdefault(accession_key, filing)
         try:
             filing_year = int(str(filing["report_date"])[:4])
         except (KeyError, TypeError, ValueError):
@@ -429,9 +453,15 @@ def _source_facts_for_statements(
             source_fiscal_year = int(fact.get("fiscal_year"))
         except (TypeError, ValueError):
             source_fiscal_year = period_year
-        filing = next(iter(filings_by_year.get(source_fiscal_year, [])), None)
-        if filing is None:
-            filing = next(iter(filings_by_year.get(period_year, [])), None)
+        # Native provenance travels with the fact row when the source frame
+        # comes from FactQuery; only frames without it fall back to the
+        # year-keyed filing guess.
+        native_accession = _str_or_none(fact.get("accession"))
+        filing = filings_by_accession.get(_accession_key(native_accession)) if native_accession else None
+        if filing is None and native_accession is None:
+            filing = next(iter(filings_by_year.get(source_fiscal_year, [])), None)
+            if filing is None:
+                filing = next(iter(filings_by_year.get(period_year, [])), None)
         fact_records.append({
             "concept": str(fact.get("concept") or ""),
             "label": str(fact.get("label") or "") or None,
@@ -440,9 +470,15 @@ def _source_facts_for_statements(
             "period_end": period_end,
             "fiscal_year": source_fiscal_year,
             "fiscal_period": str(fact.get("fiscal_period") or "FY"),
-            "accession_number": filing.get("accession_number") if filing else None,
-            "filing_date": filing.get("filing_date") if filing else None,
-            "form": filing.get("form") if filing else None,
+            "accession_number": native_accession or (filing.get("accession_number") if filing else None),
+            "filing_date": (
+                _str_or_none(fact.get("filing_date"))
+                or (filing.get("filing_date") if filing else None)
+            ),
+            "form": (
+                _str_or_none(fact.get("form_type") or fact.get("form"))
+                or (filing.get("form") if filing else None)
+            ),
             "report_date": filing.get("report_date") if filing else None,
             "primary_document": filing.get("primary_document") if filing else None,
         })
