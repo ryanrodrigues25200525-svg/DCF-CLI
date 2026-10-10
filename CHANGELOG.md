@@ -5,6 +5,14 @@ All notable changes to **DCF CLI** are documented in this file. Early entries de
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- edgartools 5.61 attaches table footnote markers to row labels
+  (`Total Mobility Subscribers1`); the telecom parser now accepts attached and
+  separated markers, restoring AT&T subscriber/churn/broadband extraction.
+
 ## [2.2.0] — 2026-10-08
 
 ### Added
@@ -224,9 +232,9 @@ Initial public desktop release. Published as installers on GitHub Releases (row 
 
 ## Links
 
-- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
+- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.2.0...HEAD
 - [2.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...v2.0.0
 - [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/1.0.0...v1.3.0
 - [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/releases/tag/1.0.0
 
-[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.2.0...HEAD

@@ -2326,11 +2326,11 @@ def _telecom_filing_facts_from_text(
                 ("TelecomPostpaidPhoneSubscribers", "Postpaid phone subscribers", r"Postpaid phone\s+(?=\d)"),
                 ("TelecomPrepaidSubscribers", "Prepaid wireless subscribers", r"Prepaid\s+(?=\d)"),
                 ("TelecomResellerSubscribers", "Reseller wireless subscribers", r"Reseller\s+(?=\d)"),
-                ("TelecomWirelessSubscribers", "Total Mobility subscribers", r"Total Mobility Subscribers\s+1\s+"),
+                ("TelecomWirelessSubscribers", "Total Mobility subscribers", r"Total Mobility Subscribers\s*\d+\s+(?=\d)"),
                 ("TelecomPostpaidPhoneNetAdditions", "Postpaid phone net additions", r"Postpaid Phone Net Additions\s+"),
-                ("TelecomWirelessNetAdditions", "Mobility net subscriber additions", r"Mobility Net Subscriber Additions\s+2,3\s+"),
-                ("TelecomPostpaidChurn", "Postpaid monthly churn", r"Postpaid Churn\s+4\s+"),
-                ("TelecomPostpaidPhoneChurn", "Postpaid phone monthly churn", r"Postpaid Phone Churn\s+4\s+"),
+                ("TelecomWirelessNetAdditions", "Mobility net subscriber additions", r"Mobility Net Subscriber Additions\s*\d+(?:,\d+)*\s+(?=\d)"),
+                ("TelecomPostpaidChurn", "Postpaid monthly churn", r"Postpaid Churn\s*\d+\s+(?=\d)"),
+                ("TelecomPostpaidPhoneChurn", "Postpaid phone monthly churn", r"Postpaid Phone Churn\s*\d+\s+(?=\d)"),
             ):
                 unit = "percent" if "Churn" in concept else "subscribers"
                 scale = "monthly" if "Churn" in concept else "thousands"
@@ -2370,9 +2370,9 @@ def _telecom_filing_facts_from_text(
         if broadband_start is not None:
             broadband_end = find_line(r"AT&T Inc\.", broadband_start + 1, consumer_wireline_end) or consumer_wireline_end
             for concept, label, row in (
-                ("TelecomBroadbandConnections", "Consumer Wireline broadband connections", r"Broadband\s+1\s+"),
+                ("TelecomBroadbandConnections", "Consumer Wireline broadband connections", r"Broadband\s*\d+\s+(?=\d)"),
                 ("TelecomFiberBroadbandConnections", "Fiber broadband connections", r"Fiber Broadband Connections\s+(?=\d)"),
-                ("TelecomBroadbandNetAdditions", "Broadband net additions", r"Broadband Net Additions\s+1,2\s+"),
+                ("TelecomBroadbandNetAdditions", "Broadband net additions", r"Broadband Net Additions\s*\d+(?:,\d+)*\s+(?=\d)"),
                 ("TelecomFiberBroadbandNetAdditions", "Fiber broadband net additions", r"Fiber Broadband Net Additions\s+(?=\d)"),
             ):
                 series(concept, label, row, broadband_start + 1, broadband_end,
@@ -3834,7 +3834,7 @@ async def _fetch_company_financials_native(normalized_ticker: str, periods: int)
             as_dataframe=False,
         ),
         asyncio.to_thread(
-            company.cashflow_statement,
+            company.cash_flow_statement,
             periods=periods,
             period="annual",
             as_dataframe=False,
