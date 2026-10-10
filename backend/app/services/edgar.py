@@ -7,7 +7,7 @@ import re
 import time
 from collections import OrderedDict
 from functools import wraps
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import edgar as edgar_lib
 import pandas as pd
@@ -485,6 +485,75 @@ def _source_facts_for_statements(
 
     earliest_year = years[max(0, len(years) - periods - 1)]
     return [fact for fact in fact_records if int(str(fact["period_end"])[:4]) >= earliest_year]
+
+
+_STRUCTURED_STATEMENT_TYPES = (
+    ("income_statement", "IncomeStatement", "IncomeStatement"),
+    ("balance_sheet", "BalanceSheet", "BalanceSheet"),
+    ("cashflow_statement", "CashFlow", "CashFlowStatement"),
+)
+
+
+def _iter_statement_items(items: Any) -> Iterator[Any]:
+    for item in items or []:
+        yield item
+        yield from _iter_statement_items(getattr(item, "children", None))
+
+
+def _absence_rows_for_statements(
+    company: Any,
+    fiscal_year: int | None,
+    statements: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Canonical concepts the latest annual filing is expected to report but does not.
+
+    The structured statement builder with ``include_missing=True`` emits a
+    placeholder for every canonical concept without a fact in the period.
+    Those become ``is_missing`` rows so downstream proofs can distinguish
+    expected absence from filer presentation (which stays in the reported
+    rows). Display grids keep coming from the stitched multi-period faces.
+    """
+    gaps: Dict[str, List[Dict[str, Any]]] = {key: [] for key, _, _ in _STRUCTURED_STATEMENT_TYPES}
+    if not fiscal_year:
+        return gaps
+    for key, structured_type, wire_type in _STRUCTURED_STATEMENT_TYPES:
+        try:
+            structured = company.get_structured_statement(
+                statement_type=structured_type,
+                fiscal_year=fiscal_year,
+                fiscal_period="FY",
+                include_missing=True,
+            )
+        except Exception:
+            continue
+        if structured is None:
+            continue
+        reported = {
+            _normalized_concept(row.get("concept") or row.get("standard_concept"))
+            for row in statements.get(key, [])
+        }
+        for item in _iter_statement_items(structured.items):
+            if item.source != "placeholder" or getattr(item, "is_abstract", False):
+                continue
+            if item.value is not None:
+                continue
+            concept = _normalized_concept(item.concept)
+            if not concept or concept in reported:
+                continue
+            try:
+                confidence = float(item.confidence)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            gaps[key].append({
+                "concept": item.concept,
+                "label": item.label,
+                "section": getattr(item, "section", None),
+                "confidence": confidence,
+                "is_missing": True,
+                "row_id": f"{wire_type}:{item.concept}:placeholder",
+                "statement": wire_type,
+            })
+    return gaps
 
 
 def _reported_amount_after_label(line: str, label_pattern: str) -> float | None:
@@ -3914,6 +3983,11 @@ async def _fetch_company_financials_native(normalized_ticker: str, periods: int)
     ]
     latest_statement_year = max(statement_years) if statement_years else None
     latest_year_key = f"FY {latest_statement_year}" if latest_statement_year else ""
+    absence_rows = await asyncio.to_thread(
+        _absence_rows_for_statements, company, latest_statement_year, statements
+    )
+    for statement_key, gap_rows in absence_rows.items():
+        statements[statement_key].extend(gap_rows)
     has_reported_interest_expense = bool(latest_year_key) and any(
         "interestexpense" in _normalized_concept(row.get("concept") or row.get("label"))
         and _finite_reported_number(row.get(latest_year_key)) is not None

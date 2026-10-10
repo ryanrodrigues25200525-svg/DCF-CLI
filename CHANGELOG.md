@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Absence-aware statement rows: `financials_native.statements` now carry
+  `is_missing: true` placeholder rows for canonical concepts the latest annual
+  filing does not report (edgartools structured statements with
+  `include_missing`), each with concept, section, and template occurrence rate.
+  Display grids still use the stitched multi-period faces, absence proofs treat
+  placeholders as expected absence (never as presentation), and canonical
+  output is unchanged.
+
 ### Fixed
 
 - edgartools 5.61 attaches table footnote markers to row labels
