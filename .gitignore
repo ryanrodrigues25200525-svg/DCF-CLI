@@ -53,6 +53,7 @@ venv/
 
 # local sqlite caches / debug artifacts
 backend/data/*.db
+backend/data/*.db-*
 backend/.tmp_*.xml
 backend/*_debug.json
 backend/*.spec
@@ -63,6 +64,7 @@ model/eslint_report.json
 dcf_export_test.xlsx
 
 # generated workbooks and local implementation scratch
+tmp/
 *.xlsx
 !"excel model"/*.xlsx
 library.db

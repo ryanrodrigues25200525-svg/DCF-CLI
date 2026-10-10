@@ -132,7 +132,7 @@ flowchart LR
 
 ## Contracts and data preservation
 
-- The unified-data response is a Pydantic response model with explicit profile, native statements, canonical financials, eligibility, market/context, quality, completeness, and source-metadata fields. Statement rows allow dynamic fiscal-year columns and extra source fields so periods, units, concepts, row IDs, and nulls survive validation.
+- The unified-data response is a Pydantic response model with explicit profile, native statements, canonical financials, eligibility, market/context, quality, completeness, and source-metadata fields. Statement rows allow dynamic fiscal-year columns and extra source fields so periods, units, concepts, row IDs, and nulls survive validation. The latest annual period also carries `is_missing: true` placeholder rows for canonical concepts the filing does not report, each with concept, section, and template occurrence rate; display grids exclude them, and absence proofs treat them as expected absence, never as presentation.
 - The export request is a Pydantic request model with separate complete and `input_required` rules. Ready exports require market, historicals, assumptions, and forecasts; incomplete exports require a production route, canonical provenance, and a structured input manifest. Runtime validation does not fill missing values with zero or discard source warnings.
 - The TypeScript client parses both responses from `unknown`, reports the failing field path, and preserves unknown allowed metadata while converting the boundary to domain types.
 - Wire aliases and existing route paths stay unchanged. A schema change that alters the public JSON shape requires an intentional migration rather than a silent casing change.
