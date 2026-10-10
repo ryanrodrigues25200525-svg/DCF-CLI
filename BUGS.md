@@ -1,20 +1,17 @@
 # Bugs and open workflow gaps
 
-Last reviewed: **8 October 2026**. This register contains concrete issues found
+Last reviewed: **10 October 2026**. This register contains concrete issues found
 in the current code review. “Open” means the behavior still needs a code or
 product change; it is separate from model-coverage limits listed in
 [Model coverage](docs/MODEL_COVERAGE.md).
 
 ## GitHub tracker snapshot
 
-Checked on **8 October 2026** (close-out): issues #43–#63 plus #48/#51/#52
-are closed with evidence comments after verification (unit 37/37, backend
-35/35, tsc clean, live 84/84 effective, fresh branch review with fix pass).
-Remaining open: #40/#41 (fixes ship on this branch, awaiting closure) and
-draft RFC PR #34. Open PRs: #64 (this work, 2.2.0). Each confirmed bug below
-has a matching GitHub issue. This file remains the local summary; the GitHub
-tracker holds
-the work items. [Open the issue
+Checked on **10 October 2026**: all issues #40–#63 are closed with evidence
+comments; PR #64 is merged to `main` as 2.2.0 (`1f6df8d`). Remaining: draft RFC
+PR #34 (decision pending) and enhancement #65 (derived-peer recall). Each
+confirmed bug below has a matching GitHub issue. This file remains the local
+summary; the GitHub tracker holds the work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Fixed in this update
@@ -39,7 +36,7 @@ tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 ## Confirmed open bugs
 
 Issues #1–#8 below are closed upstream and kept here for history; the live
-tracker holds the current work items (#40, #41, #43–#63).
+tracker holds the current work items (#65 enhancement and draft RFC PR #34).
 
 | Priority | Area | Issue and impact | Workaround | GitHub |
 | --- | --- | --- | --- | --- |
