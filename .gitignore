@@ -64,6 +64,7 @@ model/eslint_report.json
 dcf_export_test.xlsx
 
 # generated workbooks and local implementation scratch
+tmp/
 *.xlsx
 !"excel model"/*.xlsx
 library.db

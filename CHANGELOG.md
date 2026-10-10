@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Specialist 10-K facts are now sourced from the filing's XBRL document
+  (`xbrl_facts` selectors) for every metric whose tagged fact reproduces the
+  parsed value: telecom (AT&T), integrated energy (Exxon), bank (JPMorgan),
+  P&C insurance (AIG), life insurance (MET/PRU), mature pharma, and asset
+  managers (BLK/TROW, per-ticker member sets). Overlaid facts carry
+  `value from XBRL (<concept> @ <axes>)` provenance in `source_statement` and
+  raw reported units with a corrected `unit_scale`; the narrative parser stays
+  the value source for metrics with no reproducing tagged fact (AUM-rollforward
+  lines, FFO bridges, subscriber counts), so the overlay can replace but never
+  fabricate.
 - Absence-aware statement rows: `financials_native.statements` now carry
   `is_missing: true` placeholder rows for canonical concepts the latest annual
   filing does not report (edgartools structured statements with

@@ -7,7 +7,7 @@ import re
 import time
 from collections import OrderedDict
 from functools import wraps
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import edgar as edgar_lib
 import pandas as pd
@@ -20,6 +20,7 @@ from edgar.reference.tickers import get_company_tickers
 from app.core.config import settings
 from app.core.errors import ResourceNotFound
 from app.models.schemas import CompanyProfile
+from app.services import xbrl_facts
 
 logger = logging.getLogger("sec-service")
 
@@ -1217,6 +1218,73 @@ def _asset_manager_filing_facts_from_text(
     return output
 
 
+# --- Asset-manager XBRL selectors (verified against BLK/TROW 10-Ks) ---
+# Keyed by ticker: BLK and TROW tag the same metrics under different member
+# sets, and most fee lines are member-scoped revenue facts, so one table
+# cannot serve both issuers. AUM-rollforward lines are non-GAAP narrative and
+# stay unmapped (the parser's values are kept).
+_ASSET_MANAGER_XBRL_SELECTORS: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+    "BLK": {
+        "AssetManagerBaseFees": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {
+                "srt:ProductOrServiceAxis": "us-gaap:InvestmentAdviceMember",
+                "us-gaap:RelatedPartyTransactionsByRelatedPartyAxis": "blk:InvestmentAdvisoryAndAdministrationFeesMember",
+            },
+        }],
+        "AssetManagerPerformanceFees": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "us-gaap:InvestmentPerformanceMember"},
+        }],
+        "AssetManagerSecuritiesLendingRevenue": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {
+                "srt:ProductOrServiceAxis": "us-gaap:InvestmentAdviceMember",
+                "us-gaap:RelatedPartyTransactionsByRelatedPartyAxis": "blk:SecuritiesLendingRevenueMember",
+            },
+        }],
+        "AssetManagerTechnologyRevenue": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "blk:TechnologyServicesAndSubscriptionRevenueMember"},
+        }],
+        "AssetManagerDistributionRevenue": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "us-gaap:DistributionAndShareholderServiceMember"},
+        }],
+        "AssetManagerOtherRevenue": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "us-gaap:ServiceOtherMember"},
+        }],
+        "AssetManagerDepreciation": [{"concept": "us-gaap:DepreciationAmortizationAndAccretionNet"}],
+        # cash-flow working capital: asset legs add, liability legs subtract
+        "AssetManagerWorkingCapitalChange": [
+            {"concept": "us-gaap:IncreaseDecreaseInAccountsReceivable"},
+            {"concept": "us-gaap:IncreaseDecreaseInTradingSecurities"},
+            {"concept": "us-gaap:IncreaseDecreaseInOtherOperatingAssets"},
+            {"concept": "us-gaap:IncreaseDecreaseInEmployeeRelatedLiabilities", "transform": "x-1"},
+            {"concept": "us-gaap:IncreaseDecreaseInAccountsPayableAndAccruedLiabilities", "transform": "x-1"},
+            {"concept": "us-gaap:IncreaseDecreaseInOtherOperatingLiabilities", "transform": "x-1"},
+        ],
+    },
+    "TROW": {
+        "AssetManagerBaseFees": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "us-gaap:AssetManagement1Member"},
+        }],
+        "AssetManagerPerformanceFees": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "trow:PerformanceBasedAdvisoryFeesMember"},
+        }],
+        "AssetManagerCapitalAllocationIncome": [{
+            "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+            "dimensions": {"srt:ProductOrServiceAxis": "trow:CapitalAllocationBasedIncomeMember"},
+        }],
+        "AssetManagerDepreciation": [{"concept": "trow:DepreciationAmortizationAndImpairmentOfPropertyEquipmentAndSoftware"}],
+        "AssetManagerAcquisitionAmortization": [{"concept": "trow:AmortizationOfAcquisitionRelatedAssetsAndRetentionArrangements"}],
+        "AssetManagerWorkingCapitalChange": [{"concept": "us-gaap:IncreaseDecreaseInOtherOperatingCapitalNet"}],
+    },
+}
+
 
 def _sgml_html_text(filing: Any, width: int = 500) -> str | None:
     """Render filing text from SGML-derived HTML, bypassing the homepage index.
@@ -2243,6 +2311,235 @@ async def _fetch_issuer_debt_cost_facts(
     )
 
 
+# --- Financial-institution XBRL selectors (verified against JPM/AIG 10-Ks) ---
+_BANK_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    "BankNoninterestIncome": [{"concept": "us-gaap:NoninterestIncome", "unit": "USD"}],
+    "BankNoninterestExpense": [{"concept": "us-gaap:NoninterestExpense", "unit": "USD"}],
+    "BankProvisionForCreditLosses": [{"concept": "us-gaap:ProvisionForLoanLeaseAndOtherLosses", "unit": "USD"}],
+    "BankCommonDividendsDeclared": [{
+        "concept": "us-gaap:DividendsCommonStockCash",
+        "dimensions": {"us-gaap:StatementEquityComponentsAxis": "us-gaap:RetainedEarningsMember"},
+        "unit": "USD",
+    }],
+    # JPM tags capital ratios as decimals; the parser stores percent points.
+    "BankMinimumCet1Ratio": [{
+        "concept": "us-gaap:BankingRegulationCommonEquityTierOneRiskBasedCapitalRatioCapitalAdequacyMinimum",
+        "dimensions": {
+            "dei:LegalEntityAxis": "jpm:BankHoldingCompaniesMember",
+            "us-gaap:RiskWeightedAssetsCalculationMethodologyAxis": "jpm:BaselIIIStandardizedMember",
+        },
+        "transform": "x100",
+        "unit": "percent",
+        "unit_scale": "percent",
+    }],
+    "BankCET1Capital": [{
+        "concept": "jpm:CommonEquityTier1Capital",
+        "dimensions": {
+            "srt:ConsolidatedEntitiesAxis": "srt:ParentCompanyMember",
+            "us-gaap:RiskWeightedAssetsCalculationMethodologyAxis": "jpm:BaselIIIStandardizedMember",
+        },
+        "unit": "USD",
+    }],
+    "BankRiskWeightedAssets": [{
+        "concept": "us-gaap:RiskWeightedAssets",
+        "dimensions": {
+            "srt:ConsolidatedEntitiesAxis": "srt:ParentCompanyMember",
+            "us-gaap:RiskWeightedAssetsCalculationMethodologyAxis": "jpm:BaselIIIStandardizedMember",
+        },
+        "unit": "USD",
+    }],
+}
+
+_INSURANCE_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    # The underwriting table totals live in the segment-total context;
+    # dimensionless siblings are divisional scopes and must not be used.
+    **{
+        metric: [{"concept": concept, "dimensions": {"srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember"}}]
+        for metric, concept in (
+            ("InsuranceNetPremiumsWritten", "us-gaap:PremiumsWrittenNet"),
+            ("InsuranceNetPremiumsEarned", "us-gaap:PremiumsEarnedNet"),
+            ("InsuranceLossesAndLAE", "us-gaap:PolicyholderBenefitsAndClaimsIncurredNet"),
+            ("InsuranceGeneralOperatingExpenses", "us-gaap:SellingGeneralAndAdministrativeExpense"),
+            ("InsuranceUnderwritingIncome", "us-gaap:UnderwritingIncomeLoss"),
+            ("InsuranceNetInvestmentIncome", "us-gaap:NetInvestmentIncome"),
+        )
+    },
+    "InsuranceAcquisitionExpenses": [
+        {
+            "concept": "us-gaap:DeferredPolicyAcquisitionCostsAndPresentValueOfFutureProfitsAmortization1",
+            "dimensions": {"srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember"},
+        },
+        {
+            "concept": "us-gaap:DeferredPolicyAcquisitionCostAmortizationExpenseOther",
+            "dimensions": {"srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember"},
+        },
+    ],
+    "InsuranceUnpaidLossReservesBeginning": [{
+        "concept": "us-gaap:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseNet",
+    }],
+    "InsuranceLossesIncurredForReserveRollforward": [{
+        "concept": "us-gaap:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseIncurredClaims1",
+    }],
+    # The parser reads the parenthesised paid-losses row as negative.
+    "InsuranceLossesPaidForReserveRollforward": [
+        {"concept": "us-gaap:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseClaimsPaidCurrentYear1", "transform": "x-1"},
+        {"concept": "us-gaap:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseClaimsPaidPriorYears1", "transform": "x-1"},
+    ],
+    "InsuranceReserveOtherChanges": [{
+        "concept": "aig:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseOtherNet",
+    }],
+    "InsuranceUnpaidLossReserves": [{
+        "concept": "us-gaap:LiabilityForUnpaidClaimsAndClaimsAdjustmentExpenseNet",
+    }],
+    "InsuranceReinsuranceRecoverable": [{
+        "concept": "us-gaap:ReinsuranceRecoverableForUnpaidClaimsAndClaimsAdjustments",
+    }],
+    "InsuranceGrossLossReserves": [{
+        "concept": "us-gaap:LiabilityForClaimsAndClaimsAdjustmentExpense",
+    }],
+    "InsuranceStatutoryCapitalSurplus": [{
+        "concept": "us-gaap:StatutoryAccountingPracticesStatutoryCapitalAndSurplusBalance",
+    }],
+    "InsuranceMinimumStatutoryCapital": [{
+        "concept": "us-gaap:StatutoryAccountingPracticesStatutoryCapitalAndSurplusRequired",
+    }],
+}
+
+# The rollforward's "beginning" balance is the prior-year 12-31 instant.
+_INSURANCE_XBRL_YEAR_SHIFTS = {"InsuranceUnpaidLossReservesBeginning": 1}
+
+
+# --- Life-insurance XBRL selectors (verified against MET/PRU 10-Ks) ---
+# Keyed by the parser's (metric, segment, capital_group) identity.
+_PRU_OPERATING_INCOME_CONCEPT = (
+    "us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"
+)
+
+
+def _pru_operating_income_part(segment_member: str, division_member: str | None) -> Dict[str, Any]:
+    dimensions = {
+        "srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember",
+        "us-gaap:StatementBusinessSegmentsAxis": segment_member,
+    }
+    if division_member:
+        dimensions["pru:DivisionAxis"] = division_member
+    return {"concept": _PRU_OPERATING_INCOME_CONCEPT, "dimensions": dimensions}
+
+
+_LIFE_XBRL_SELECTORS: Dict[Any, List[Dict[str, Any]]] = {
+    **{
+        ("adjusted_earnings_available_to_common", segment, None): [{
+            "concept": "us-gaap:OperatingIncomeLoss",
+            "dimensions": {
+                "srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember",
+                "us-gaap:StatementBusinessSegmentsAxis": member,
+            },
+        }]
+        for segment, member in (
+            ("Group Benefits", "met:GroupBenefitsSegmentMember"),
+            ("RIS", "met:RetirementAndIncomeSolutionsSegmentMember"),
+            ("Asia", "met:AsiaSegmentMember"),
+            ("Latin America", "met:LatinAmericaSegmentMember"),
+            ("EMEA", "met:EMEASegmentMember"),
+            ("MIM", "met:MetLifeInvestmentManagementSegmentMember"),
+        )
+    },
+    ("adjusted_earnings_available_to_common", "Corporate & Other", None): [
+        {
+            "concept": "us-gaap:OperatingIncomeLoss",
+            "dimensions": {"srt:ConsolidationItemsAxis": "us-gaap:CorporateNonSegmentMember"},
+        },
+        # preferred dividends are subtracted from the segment result
+        {"concept": "us-gaap:DividendsPreferredStock", "transform": "x-1"},
+    ],
+    **{
+        ("paid_upstream_dividend", None, company): [{
+            "concept": "us-gaap:CashDividendsPaidToParentCompanyByConsolidatedSubsidiaries",
+            "dimensions": {"dei:LegalEntityAxis": member},
+        }]
+        for company, member in (
+            ("Metropolitan Life Insurance Company", "met:MetropolitanLifeInsuranceCompanyMember"),
+            ("American Life Insurance Company", "met:AmericanLifeInsuranceCompanyMember"),
+            ("Metropolitan Tower Life Insurance Company", "met:MetropolitanTowerLifeInsuranceCompanyMember"),
+        )
+    },
+    **{
+        ("permitted_ordinary_dividend_without_approval", None, company): [{
+            "concept": "us-gaap:StatutoryAccountingPracticesStatutoryAmountAvailableForDividendPaymentsWithoutRegulatoryApproval",
+            "dimensions": {
+                "srt:StatementScenarioAxis": "srt:ScenarioForecastMember",
+                "dei:LegalEntityAxis": member,
+            },
+        }]
+        for company, member in (
+            ("Metropolitan Life Insurance Company", "met:MetropolitanLifeInsuranceCompanyMember"),
+            ("American Life Insurance Company", "met:AmericanLifeInsuranceCompanyMember"),
+            ("Metropolitan Tower Life Insurance Company", "met:MetropolitanTowerLifeInsuranceCompanyMember"),
+        )
+    },
+    ("adjusted_operating_income_pretax", "PGIM", None): [
+        _pru_operating_income_part("pru:PGIMMember", "pru:PGIMDivisionMember"),
+    ],
+    ("adjusted_operating_income_pretax", "Group Insurance", None): [
+        _pru_operating_income_part("pru:GroupInsuranceMember", "pru:USBusinessesDivisionMember"),
+    ],
+    ("adjusted_operating_income_pretax", "Individual Life", None): [
+        _pru_operating_income_part("pru:IndividualLifeMember", "pru:USBusinessesDivisionMember"),
+    ],
+    ("adjusted_operating_income_pretax", "International Businesses", None): [
+        _pru_operating_income_part("pru:InternationalBusinessesMember", "pru:InternationalInsuranceDivisionMember"),
+    ],
+    ("adjusted_operating_income_pretax", "Corporate and Other", None): [
+        _pru_operating_income_part("us-gaap:CorporateAndOtherMember", None),
+    ],
+    # PRU tags Retirement Strategies only at sub-business level.
+    ("adjusted_operating_income_pretax", "Retirement Strategies", None): [{
+        "concept": _PRU_OPERATING_INCOME_CONCEPT,
+        "dimensions": {
+            "srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember",
+            "us-gaap:StatementBusinessSegmentsAxis": "pru:RetirementStrategiesMember",
+            "pru:DivisionAxis": "pru:USBusinessesDivisionMember",
+            "pru:BusinessAxis": business,
+        },
+    } for business in (
+        "pru:IndividualRetirementStrategiesMember",
+        "pru:InstitutionalRetirementStrategiesMember",
+    )],
+    ("permitted_ordinary_dividend_without_approval", None, "PICA; New Jersey ordinary-dividend limit"): [{
+        "concept": "us-gaap:StatutoryAccountingPracticesStatutoryAmountAvailableForDividendPaymentsWithoutRegulatoryApproval",
+        "dimensions": {
+            "pru:PaymentPeriodAxis": "pru:PermittedToBePaidIn2026Member",
+            "dei:LegalEntityAxis": "pru:PrudentialInsuranceMember",
+        },
+    }],
+    ("statutory_capital_and_surplus", None, "PICA"): [{
+        "concept": "us-gaap:StatutoryAccountingPracticesStatutoryCapitalAndSurplusBalance",
+        "dimensions": {"dei:LegalEntityAxis": "pru:PrudentialInsuranceMember"},
+    }],
+    ("statutory_net_income", None, "PICA"): [{
+        "concept": "us-gaap:StatutoryAccountingPracticesStatutoryNetIncomeAmount",
+        "dimensions": {"dei:LegalEntityAxis": "pru:PrudentialInsuranceMember"},
+    }],
+}
+
+# The PICA "permitted to be paid in 2026" amount is tagged on the 2025-12-31
+# instant, so XBRL year 2025 carries the parser's FY2026 label.
+_LIFE_XBRL_YEAR_REMAPS: Dict[Any, Dict[int, int]] = {
+    ("permitted_ordinary_dividend_without_approval", None, "PICA; New Jersey ordinary-dividend limit"): {2025: 2026},
+}
+
+
+def _life_xbrl_overlay_key(fact: Dict[str, Any]) -> Any:
+    return (
+        (
+            str(fact.get("metric") or ""),
+            fact.get("segment"),
+            fact.get("capital_group"),
+        ),
+        int(fact.get("fiscal_year") or 0),
+    )
+
+
 async def _fetch_financial_institution_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
@@ -2287,6 +2584,21 @@ async def _fetch_financial_institution_filing_facts(
         )
     except Exception as exc:
         logger.warning("Life-insurance filing extraction unavailable for %s (%s)", ticker, type(exc).__name__)
+    xbrl = await xbrl_facts.load_xbrl_document(filing)
+    bank_facts = _overlay_specialist_xbrl(bank_facts, xbrl, _BANK_XBRL_SELECTORS)
+    insurance_facts = _overlay_specialist_xbrl(
+        insurance_facts,
+        xbrl,
+        _INSURANCE_XBRL_SELECTORS,
+        year_shifts=_INSURANCE_XBRL_YEAR_SHIFTS,
+    )
+    life_insurance_facts = _overlay_specialist_xbrl(
+        life_insurance_facts,
+        xbrl,
+        _LIFE_XBRL_SELECTORS,
+        key_fn=_life_xbrl_overlay_key,
+        year_remaps=_LIFE_XBRL_YEAR_REMAPS,
+    )
     return bank_facts, insurance_facts, life_insurance_facts
 
 
@@ -2599,6 +2911,190 @@ def _telecom_filing_facts_from_text(
     return sorted(output, key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
 
 
+# --- Telecom XBRL selectors (verified against AT&T FY2023-FY2025 filings) ---
+_TELECOM_CONSOLIDATED_SEGMENTS = "srt:ConsolidationItemsAxis"
+_TELECOM_OPERATING_SEGMENTS_MEMBER = "us-gaap:OperatingSegmentsMember"
+_TELECOM_BUSINESS_SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
+_TELECOM_SUBSEGMENT_AXIS = "us-gaap:SubsegmentsAxis"
+_TELECOM_PRODUCT_AXIS = "srt:ProductOrServiceAxis"
+
+
+def _telecom_segment_dimensions(
+    segment: str,
+    *,
+    subsegment: str | None = None,
+    product: str | None = None,
+) -> Dict[str, str]:
+    dimensions = {
+        _TELECOM_CONSOLIDATED_SEGMENTS: _TELECOM_OPERATING_SEGMENTS_MEMBER,
+        _TELECOM_BUSINESS_SEGMENT_AXIS: segment,
+    }
+    if subsegment:
+        dimensions[_TELECOM_SUBSEGMENT_AXIS] = subsegment
+    if product:
+        dimensions[_TELECOM_PRODUCT_AXIS] = product
+    return dimensions
+
+
+_TELECOM_MOBILITY = _telecom_segment_dimensions("t:MobilityMember")
+_TELECOM_COMMUNICATIONS = _telecom_segment_dimensions("t:CommunicationsMember")
+_TELECOM_BUSINESS_WIRELINE = _telecom_segment_dimensions("t:BusinessWirelineMember")
+_TELECOM_CONSUMER_WIRELINE = _telecom_segment_dimensions("t:ConsumerWirelineMember")
+_TELECOM_LATIN_AMERICA = _telecom_segment_dimensions("t:LatinAmericaBusinessSegmentMember")
+
+_TELECOM_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    "TelecomMobilityRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_MOBILITY}],
+    "TelecomMobilityReportedRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_MOBILITY}],
+    "TelecomBusinessWirelineRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_BUSINESS_WIRELINE}],
+    "TelecomConsumerWirelineRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_CONSUMER_WIRELINE}],
+    "TelecomCommunicationsRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_COMMUNICATIONS}],
+    "TelecomLatinAmericaRevenue": [{"concept": "us-gaap:Revenues", "dimensions": _TELECOM_LATIN_AMERICA}],
+    "TelecomMobilityOperatingIncome": [{"concept": "us-gaap:OperatingIncomeLoss", "dimensions": _TELECOM_MOBILITY}],
+    "TelecomBusinessWirelineOperatingIncome": [{"concept": "us-gaap:OperatingIncomeLoss", "dimensions": _TELECOM_BUSINESS_WIRELINE}],
+    "TelecomBusinessWirelineReportedOperatingIncome": [{"concept": "us-gaap:OperatingIncomeLoss", "dimensions": _TELECOM_BUSINESS_WIRELINE}],
+    "TelecomCommunicationsOperatingIncome": [{"concept": "us-gaap:OperatingIncomeLoss", "dimensions": _TELECOM_COMMUNICATIONS}],
+    "TelecomLatinAmericaOperatingIncome": [{"concept": "us-gaap:OperatingIncomeLoss", "dimensions": _TELECOM_LATIN_AMERICA}],
+    "TelecomMobilityServiceRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:CommunicationsMember", subsegment="t:MobilityMember", product="t:WirelessServiceMember",
+        ),
+    }],
+    "TelecomMobilityEquipmentRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:CommunicationsMember", subsegment="t:MobilityMember",
+            product="us-gaap:OtherCapitalizedPropertyPlantAndEquipmentMember",
+        ),
+    }],
+    "TelecomMobilityDepreciation": [{
+        "concept": "us-gaap:DepreciationDepletionAndAmortization",
+        "dimensions": _TELECOM_MOBILITY,
+    }],
+    "TelecomBusinessWirelineLegacyRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:BusinessWirelineMember", product="t:LegacyVoiceAndDataMember",
+        ),
+    }],
+    "TelecomBusinessWirelineFiberRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:BusinessWirelineMember", product="t:BusinessServiceMember",
+        ),
+    }],
+    "TelecomBusinessWirelineEquipmentRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:BusinessWirelineMember",
+            product="us-gaap:OtherCapitalizedPropertyPlantAndEquipmentMember",
+        ),
+    }],
+    "TelecomBusinessWirelineDepreciation": [{
+        "concept": "us-gaap:DepreciationDepletionAndAmortization",
+        "dimensions": _TELECOM_BUSINESS_WIRELINE,
+    }],
+    # Consumer Wireline broadband revenue sums its fiber/business-service and
+    # IP-broadband service lines; both must be tagged for the year to overlay.
+    "TelecomConsumerWirelineBroadbandRevenue": [
+        {
+            "concept": "us-gaap:Revenues",
+            "dimensions": _telecom_segment_dimensions(
+                "t:ConsumerWirelineMember", product="t:BusinessServiceMember",
+            ),
+        },
+        {
+            "concept": "us-gaap:Revenues",
+            "dimensions": _telecom_segment_dimensions(
+                "t:ConsumerWirelineMember", product="t:IPBroadbandMember",
+            ),
+        },
+    ],
+    "TelecomConsumerWirelineLegacyRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:ConsumerWirelineMember", product="t:LegacyVoiceAndDataMember",
+        ),
+    }],
+    "TelecomConsumerWirelineOtherRevenue": [{
+        "concept": "us-gaap:Revenues",
+        "dimensions": _telecom_segment_dimensions(
+            "t:ConsumerWirelineMember", product="t:OtherServiceMember",
+        ),
+    }],
+    "TelecomConsumerWirelineDepreciation": [{
+        "concept": "us-gaap:DepreciationDepletionAndAmortization",
+        "dimensions": _TELECOM_CONSUMER_WIRELINE,
+    }],
+    "TelecomConsumerWirelineOperatingIncome": [{
+        "concept": "us-gaap:OperatingIncomeLoss",
+        "dimensions": _TELECOM_CONSUMER_WIRELINE,
+    }],
+    "TelecomCapitalExpenditures": [{"concept": "us-gaap:PaymentsToAcquireProductiveAssets"}],
+    "TelecomInterestBearingDebt": [{
+        "concept": "us-gaap:LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
+    }],
+    "TelecomCostOfDebt": [{
+        "concept": "us-gaap:LongtermDebtWeightedAverageInterestRate",
+        "transform": "x100",
+        "unit": "percent",
+        "unit_scale": "percent",
+    }],
+    # WorkingCapitalChange mirrors the parser: the four operating-asset impacts
+    # are negated relative to their us-gaap cash-flow concepts (the concepts
+    # carry the inverse presentation sign), the payable/accrued impact is not.
+    "TelecomWorkingCapitalChange": [
+        {"concept": "us-gaap:IncreaseDecreaseInReceivables"},
+        {"concept": "t:IncreaseDecreaseInNetOperatingAssetsEquipInstallmentReceivablesAndRelatedAssetSales"},
+        {"concept": "t:IncreaseDecreaseInOperatingAssetsDeferredFulfillmentCosts"},
+        {"concept": "us-gaap:IncreaseDecreaseInOtherOperatingAssets"},
+        {"concept": "us-gaap:IncreaseDecreaseInOtherAccountsPayableAndAccruedLiabilities", "transform": "x-1"},
+    ],
+}
+
+
+def _overlay_specialist_xbrl(
+    facts: List[Dict[str, Any]],
+    xbrl: Any,
+    selectors: Dict[Any, Sequence[Dict[str, Any]]],
+    *,
+    key_fn: Callable[[Dict[str, Any]], Any] | None = None,
+    year_shifts: Dict[Any, int] | None = None,
+    year_remaps: Dict[Any, Dict[int, int]] | None = None,
+) -> List[Dict[str, Any]]:
+    """Overlay XBRL-sourced values for same-parse specialist metrics.
+
+    The narrative parser stays the fallback: a metric whose selector cannot
+    reproduce the parsed number (unmapped concept/identity, a part missing a
+    year) keeps its narrative value untouched. `year_shifts` handles metrics
+    whose parser year is uniformly offset from the XBRL fact year (a reserve
+    rollforward "beginning" balance is the prior-year instant); `year_remaps`
+    handles a specific XBRL year being relabelled (a dividend "permitted to be
+    paid in 2026" is tagged on the 2025-12-31 instant). `key_fn(fact)` returns
+    the lookup key; the default keys on the fact's concept and fiscal year.
+    """
+    if xbrl is None or not facts:
+        return facts
+    metric_rows = xbrl_facts.build_metric_rows(xbrl, selectors)
+    if not metric_rows:
+        return facts
+    shifts = year_shifts or {}
+    remaps = year_remaps or {}
+    rows: Dict[tuple, Dict[str, Any]] = {}
+    for metric, per_year in metric_rows.items():
+        remap = remaps.get(metric) or {}
+        shift = shifts.get(metric, 0)
+        for year, row in per_year.items():
+            rows[(metric, remap.get(year, year + shift))] = row
+    if key_fn is None:
+        key_fn = _default_xbrl_overlay_key
+    return xbrl_facts.overlay_xbrl_values(facts, rows, key_fn)
+
+
+def _default_xbrl_overlay_key(fact: Dict[str, Any]) -> Any:
+    return (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0))
+
+
 async def _fetch_telecom_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
@@ -2642,6 +3138,8 @@ async def _fetch_telecom_filing_facts(
             form=str(filing_record.get("form") or "10-K"),
             primary_document=filing_record.get("primary_document"),
         )
+        xbrl = await xbrl_facts.load_xbrl_document(filing)
+        parsed = _overlay_specialist_xbrl(parsed, xbrl, _TELECOM_XBRL_SELECTORS)
         for fact in parsed:
             key = (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0))
             existing = facts_by_period.get(key)
@@ -2653,6 +3151,7 @@ async def _fetch_telecom_filing_facts(
 async def _fetch_asset_manager_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
+    ticker: str | None = None,
 ) -> list[Dict[str, Any]]:
     filings_by_year: dict[int, Dict[str, Any]] = {}
     for filing in source_filings:
@@ -2694,6 +3193,10 @@ async def _fetch_asset_manager_filing_facts(
             form=str(filing_record.get("form") or "10-K"),
             primary_document=filing_record.get("primary_document"),
         )
+        selectors = _ASSET_MANAGER_XBRL_SELECTORS.get(str(ticker or "").upper(), {})
+        if selectors:
+            xbrl = await xbrl_facts.load_xbrl_document(filing)
+            parsed_facts = _overlay_specialist_xbrl(parsed_facts, xbrl, selectors)
         for fact in parsed_facts:
             key = (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0))
             existing = facts_by_period.get(key)
@@ -3227,7 +3730,7 @@ async def _fetch_pharma_filing_facts(
     except Exception as exc:
         logger.warning("Pharma SEC extraction unavailable for %s (%s)", getattr(company, "cik", "unknown CIK"), type(exc).__name__)
         return []
-    return _pharma_filing_facts_from_html(
+    facts = _pharma_filing_facts_from_html(
         html,
         report_date=str(filing_record.get("report_date") or ""),
         filing_date=str(filing_record.get("filing_date") or ""),
@@ -3235,6 +3738,67 @@ async def _fetch_pharma_filing_facts(
         form=str(filing_record.get("form") or "10-K"),
         primary_document=filing_record.get("primary_document"),
     )
+    if not facts:
+        return facts
+    xbrl = await xbrl_facts.load_xbrl_document(filing)
+    if xbrl is None:
+        return facts
+    fiscal_years = sorted({int(fact["fiscal_year"]) for fact in facts if fact.get("fiscal_year")})
+    product_rows = xbrl_facts.query_fact_rows(
+        xbrl, concept="us-gaap:Revenues", axis="ProductOrServiceAxis", fiscal_years=fiscal_years,
+    )
+    total_rows = xbrl_facts.query_fact_rows(
+        xbrl, concept="us-gaap:Revenues", dimensionless=True, fiscal_years=fiscal_years,
+    )
+    return _merge_pharma_xbrl_facts(facts, _pharma_xbrl_fact_index(product_rows, total_rows))
+
+
+def _pharma_xbrl_fact_index(
+    product_rows: list[Dict[str, Any]],
+    total_rows: list[Dict[str, Any]],
+) -> Dict[str, Dict[Any, Dict[str, Any]]]:
+    """Index the XBRL facts that replace narrative pharma values.
+
+    Product revenue keys on the normalized XBRL member label per fiscal year;
+    the reported total keys on the fiscal year alone (undimensioned Revenues).
+    """
+    products: Dict[str, Dict[Any, Dict[str, Any]]] = {}
+    for row in product_rows:
+        label = xbrl_facts.normalize_metric_label(str(row.get("member_label") or ""))
+        if not label or row.get("fiscal_year") is None:
+            continue
+        products.setdefault(label, {})[row["fiscal_year"]] = row
+    totals = {row["fiscal_year"]: row for row in total_rows if row.get("fiscal_year") is not None}
+    return {"products": products, "totals": totals}
+
+
+def _merge_pharma_xbrl_facts(
+    facts: list[Dict[str, Any]],
+    index: Dict[str, Dict[Any, Dict[str, Any]]],
+) -> list[Dict[str, Any]]:
+    """Overlay XBRL values on the narrative pharma facts.
+
+    Row sets, indications and patent disclosures stay narrative; the product
+    revenue and reported total values come from the filing's XBRL facts when
+    tagged. Unmatched facts keep their narrative value (the fallback path).
+    """
+    rows: Dict[tuple, Dict[str, Any]] = {}
+    for label, years in index["products"].items():
+        for year, row in years.items():
+            rows[("product", label, year)] = row
+    for year, row in index["totals"].items():
+        rows[("total", year)] = row
+
+    def key_fn(fact: Dict[str, Any]) -> tuple | None:
+        metric = str(fact.get("metric") or "")
+        year = int(fact.get("fiscal_year") or 0)
+        if metric == "product_revenue":
+            return ("product", xbrl_facts.normalize_metric_label(str(fact.get("product_name") or "")), year)
+        if metric == "reported_total_revenue":
+            return ("total", year)
+        return None
+
+    return xbrl_facts.overlay_xbrl_values(facts, rows, key_fn)
 
 
 def _biotech_pipeline_assets_from_html(
@@ -3760,6 +4324,97 @@ def _energy_filing_facts_from_html(
     return sorted(output, key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
 
 
+# --- Energy XBRL selectors (verified against XOM FY2025 10-K) ---
+_ENERGY_SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
+_ENERGY_GEOGRAPHY_AXIS = "srt:StatementGeographicalAxis"
+
+_ENERGY_SEGMENT_MEMBERS = {
+    "Upstream": "xom:UpstreamMember",
+    "EnergyProducts": "xom:EnergyProductsMember",
+    "ChemicalProducts": "xom:ChemicalProductsMember",
+    "SpecialtyProducts": "xom:SpecialtyProductsMember",
+}
+
+_ENERGY_OPERATIONAL_CASH_IMPACT_CONCEPTS = {
+    "EnergyOperationalReceivablesCashImpact": "us-gaap:IncreaseDecreaseInAccountsAndNotesReceivable",
+    "EnergyOperationalInventoryCashImpact": "us-gaap:IncreaseDecreaseInInventories",
+    "EnergyOperationalOtherCurrentAssetsCashImpact": "us-gaap:IncreaseDecreaseInOtherOperatingAssets",
+    "EnergyOperationalPayablesCashImpact": "us-gaap:IncreaseDecreaseInAccountsPayable",
+}
+
+# The MD&A working-capital table prints the receivables/inventory/other-asset
+# rows with the opposite sign from the corresponding us-gaap cash-flow
+# concepts (verified against XOM FY2022-FY2025); payables carry the same sign.
+_ENERGY_CASH_IMPACT_TRANSFORMS = {
+    "EnergyOperationalReceivablesCashImpact": "x-1",
+    "EnergyOperationalInventoryCashImpact": "x-1",
+    "EnergyOperationalOtherCurrentAssetsCashImpact": "x-1",
+    "EnergyOperationalPayablesCashImpact": None,
+}
+
+
+def _energy_segment_parts(concept: str, segment: str) -> List[Dict[str, Any]]:
+    """U.S. plus non-U.S. facts for one segment (the parser sums both)."""
+    return [
+        {
+            "concept": concept,
+            "dimensions": {
+                _ENERGY_SEGMENT_AXIS: _ENERGY_SEGMENT_MEMBERS[segment],
+                _ENERGY_GEOGRAPHY_AXIS: "country:US",
+            },
+        },
+        {
+            "concept": concept,
+            "dimensions": {
+                _ENERGY_SEGMENT_AXIS: _ENERGY_SEGMENT_MEMBERS[segment],
+                _ENERGY_GEOGRAPHY_AXIS: "us-gaap:NonUsMember",
+            },
+        },
+    ]
+
+
+_ENERGY_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    **{
+        f"Energy{segment}EarningsGAAP": _energy_segment_parts("us-gaap:NetIncomeLoss", segment)
+        for segment in _ENERGY_SEGMENT_MEMBERS
+    },
+    **{
+        f"Energy{segment}DandD": _energy_segment_parts(
+            "us-gaap:DepreciationDepletionAndAmortization", segment,
+        )
+        for segment in _ENERGY_SEGMENT_MEMBERS
+    },
+    **{
+        f"Energy{segment}PPEAdditions": _energy_segment_parts(
+            "us-gaap:SegmentExpenditureAdditionToLongLivedAssets", segment,
+        )
+        for segment in _ENERGY_SEGMENT_MEMBERS
+    },
+    "EnergyCorporateFinancingEarningsGAAP": [{
+        "concept": "us-gaap:NetIncomeLoss",
+        "dimensions": {"srt:ConsolidationItemsAxis": "us-gaap:CorporateNonSegmentMember"},
+    }],
+    **{
+        metric: [
+            {"concept": _ENERGY_OPERATIONAL_CASH_IMPACT_CONCEPTS[metric]}
+            | ({"transform": transform} if transform else {})
+        ]
+        for metric, transform in _ENERGY_CASH_IMPACT_TRANSFORMS.items()
+    },
+    # The parser derives the investment as the negated sum of the four
+    # as-printed cash-flow components: -(r + e + c + p) with the sign
+    # conventions above gives r + e + c - p in concept terms.
+    "EnergyWorkingCapitalInvestment": [
+        {"concept": "us-gaap:IncreaseDecreaseInAccountsAndNotesReceivable"},
+        {"concept": "us-gaap:IncreaseDecreaseInInventories"},
+        {"concept": "us-gaap:IncreaseDecreaseInOtherOperatingAssets"},
+        {"concept": "us-gaap:IncreaseDecreaseInAccountsPayable", "transform": "x-1"},
+    ],
+    "EnergyCurrentDebt": [{"concept": "us-gaap:DebtCurrent"}],
+    "EnergyLongTermDebt": [{"concept": "us-gaap:LongTermDebtAndCapitalLeaseObligations"}],
+}
+
+
 async def _fetch_energy_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
@@ -3804,12 +4459,15 @@ async def _fetch_energy_filing_facts(
             form=str(filing_record.get("form") or "10-K"),
             primary_document=filing_record.get("primary_document"),
         )
+        xbrl = await xbrl_facts.load_xbrl_document(filing)
+        parsed = _overlay_specialist_xbrl(parsed, xbrl, _ENERGY_XBRL_SELECTORS)
         for fact in parsed:
             key = (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0))
             existing = by_concept_period.get(key)
             if existing is None or str(fact.get("filing_date") or "") > str(existing.get("filing_date") or ""):
                 by_concept_period[key] = fact
     return sorted(by_concept_period.values(), key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
+
 
 def _company_sic_code(company: Any) -> int:
     digits = re.sub(r"\D", "", str(getattr(company, "sic", "") or ""))
@@ -3964,7 +4622,7 @@ async def _fetch_company_financials_native(normalized_ticker: str, periods: int)
         bank_filing_facts, insurance_filing_facts, life_insurance_filing_facts = [], [], []
     asset_manager_facts = []
     if _is_asset_manager_filer(company):
-        asset_manager_facts = await _fetch_asset_manager_filing_facts(company, source_filings)
+        asset_manager_facts = await _fetch_asset_manager_filing_facts(company, source_filings, normalized_ticker)
     telecom_facts = []
     if _is_telecom_filer(company):
         telecom_facts = await _fetch_telecom_filing_facts(company, source_filings)

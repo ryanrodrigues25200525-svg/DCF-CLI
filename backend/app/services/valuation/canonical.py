@@ -812,7 +812,11 @@ def _pharma_filing_line(fact: Dict[str, Any]) -> Dict[str, Any]:
     metric = str(fact.get("metric") or "")
     unit = str(fact.get("unit") or "").strip().lower()
     scale = str(fact.get("unit_scale") or "").strip().lower()
-    factor = 1_000_000.0 if unit == "usd" and scale == "millions" else 1.0 if unit == "calendar year" and scale == "actual" else None
+    factor = (
+        1_000_000.0 if unit == "usd" and scale == "millions"
+        else 1.0 if scale == "actual" and unit in {"usd", "calendar year"}
+        else None
+    )
     concept = metric
     if raw is None or factor is None:
         return _line(None, source="missing", confidence=0.0, method="unscaled_pfe_10k_product_or_patent_fact", concept=concept)
