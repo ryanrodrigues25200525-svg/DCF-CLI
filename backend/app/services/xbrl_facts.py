@@ -235,6 +235,21 @@ def sum_lookups(lookups: Sequence[Dict[int, Dict[str, Any]]]) -> Dict[int, Dict[
 
 _SELECTOR_TRANSFORMS = {"x100": 100.0, "x-1": -1.0}
 
+# Multipliers from an XBRL raw fact into the scale the narrative parsers store:
+# dollar amounts are kept in millions/thousands/billions, ratios, percentages,
+# per-share and count figures unscaled. A fact whose unit_scale is unknown
+# keeps its parsed value (fail closed).
+_UNIT_SCALE_FACTORS: Dict[str, float] = {
+    "actual": 1.0,
+    "units": 1.0,
+    "shares": 1.0,
+    "ratio": 1.0,
+    "percent": 1.0,
+    "thousands": 1e-3,
+    "millions": 1e-6,
+    "billions": 1e-9,
+}
+
 
 def _selector_note(part: Dict[str, Any], sample_row: Dict[str, Any]) -> str:
     note = _fact_origin(sample_row)
@@ -254,9 +269,10 @@ def metric_lookup(
     (exact axis->member map; omit for the consolidated figure), optional
     `transform` (`x100` for ratios the parser stores in percent points,
     `x-1` when the concept's sign convention is the inverse of the parsed
-    presentation) and optional `unit`/`unit_scale` overrides for non-USD
-    metrics. Part values sum. The metric is treated as unmapped (`{}`) as
-    soon as one part has no facts, so a partial sum never ships.
+    presentation) and optional `unit`/`unit_scale` declarations that the
+    overlay requires a matching fact to agree with. Part values sum. The
+    metric is treated as unmapped (`{}`) as soon as one part has no facts, so
+    a partial sum never ships.
     """
     part_lookups: List[Dict[int, Dict[str, Any]]] = []
     part_notes: List[str] = []
@@ -284,12 +300,14 @@ def metric_lookup(
         part_lookups.append(lookup)
         part_notes.append(_selector_note(part, next(iter(lookup.values()))))
     combined = sum_lookups(part_lookups)
-    unit = str(parts[0].get("unit") or "USD")
-    unit_scale = str(parts[0].get("unit_scale") or "actual")
     note = " + ".join(part_notes)
     for row in combined.values():
-        row["unit"] = unit
-        row["unit_scale"] = unit_scale
+        unit = parts[0].get("unit")
+        unit_scale = parts[0].get("unit_scale")
+        if unit:
+            row["unit"] = unit
+        if unit_scale:
+            row["unit_scale"] = unit_scale
         row["provenance"] = note
     return combined
 
@@ -331,6 +349,11 @@ def fact_provenance(row: Dict[str, Any]) -> str:
     return f"value from XBRL {_fact_origin(row)}"
 
 
+def _fact_unit_scale(row: Dict[str, Any]) -> float | None:
+    """Multiplier converting an XBRL raw value into the fact's stored scale."""
+    return _UNIT_SCALE_FACTORS.get(str(row.get("unit_scale") or "").strip().lower())
+
+
 def overlay_xbrl_values(
     facts: List[Dict[str, Any]],
     rows: Dict[tuple, Dict[str, Any]],
@@ -339,24 +362,38 @@ def overlay_xbrl_values(
     """Overlay XBRL values on narrative facts, keyed per fact.
 
     `key_fn(fact)` returns the lookup key into `rows` (or None to skip the
-    fact). Matched facts get the XBRL value, unit fidelity and XBRL
-    provenance; unmatched facts pass through unchanged - the fallback path.
-    Rows may carry `unit`/`unit_scale` when the fact is not a raw-dollar
-    amount (percent ratios, per-share figures).
+    fact). A matched fact is re-sourced from the filing's tagged fact: the
+    XBRL raw value is converted into the fact's own unit scale (the narrative
+    parser stores amounts in millions, thousands or billions, ratios and
+    per-share figures unscaled) and the fact keeps its `unit`/`unit_scale`
+    labels, so canonical builders, readiness contracts and workbook mappers
+    see the representation the parser produced. A row whose selector declares
+    `unit`/`unit_scale` must agree with the fact's labels, and a fact whose
+    `unit_scale` is missing from the conversion table keeps its narrative
+    value - the overlay only replaces verified duplicates. The fact keeps its
+    parsed `period_end` too: specialist parsers align it to the fiscal year
+    the fact belongs to (year-shifted rows such as an insurance reserve
+    beginning balance carry the report year, not the XBRL instant) and
+    canonical builders select facts by that year.
     """
     overlayed: List[Dict[str, Any]] = []
     for fact in facts:
         key = key_fn(fact)
         row = rows.get(key) if key is not None else None
-        if row is None:
+        factor = _fact_unit_scale(fact) if row is not None else None
+        if row is None or factor is None:
+            overlayed.append(fact)
+            continue
+        declared_unit = row.get("unit")
+        declared_scale = row.get("unit_scale")
+        if (declared_unit and str(declared_unit) != str(fact.get("unit"))) or (
+            declared_scale and str(declared_scale) != str(fact.get("unit_scale"))
+        ):
             overlayed.append(fact)
             continue
         overlayed.append({
             **fact,
-            "value": row["value"],
-            "unit": row.get("unit") or "USD",
-            "unit_scale": row.get("unit_scale") or "actual",
-            "period_end": str(row.get("period_end") or fact.get("period_end") or ""),
+            "value": float(row["value"]) * factor,
             "source_statement": f"{fact.get('source_statement')}; {fact_provenance(row)}",
         })
     return overlayed

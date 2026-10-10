@@ -94,6 +94,7 @@ def test_overlay_year_shift_maps_prior_instant_to_report_year():
     facts = [{
         "concept": "InsuranceUnpaidLossReservesBeginning", "fiscal_year": 2025,
         "value": 40_142.0, "unit": "USD", "unit_scale": "millions",
+        "period_end": "2025-12-31",
         "source_statement": "reserve rollforward",
     }, {
         "concept": "InsuranceCombinedRatio", "fiscal_year": 2025,
@@ -104,8 +105,10 @@ def test_overlay_year_shift_maps_prior_instant_to_report_year():
         facts, xbrl, edgar._INSURANCE_XBRL_SELECTORS,
         year_shifts=edgar._INSURANCE_XBRL_YEAR_SHIFTS,
     )
-    assert merged[0]["value"] == 40_142_000_000.0
-    assert merged[0]["unit_scale"] == "actual"
+    assert merged[0]["value"] == 40_142.0
+    assert merged[0]["unit_scale"] == "millions"
+    # the fact keeps the parsed fiscal-year period, not the shifted XBRL instant
+    assert merged[0]["period_end"] == "2025-12-31"
     assert "value from XBRL" in merged[0]["source_statement"]
     # unmapped metric keeps the narrative fact untouched
     assert merged[1] == facts[1]

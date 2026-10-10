@@ -102,8 +102,8 @@ def test_merge_overlays_xbrl_values_with_provenance():
     merged = edgar_svc._merge_pharma_xbrl_facts(facts, index)
 
     product = merged[0]
-    assert product["value"] == 907_000_000.0
-    assert product["unit"] == "USD" and product["unit_scale"] == "actual"
+    assert product["value"] == 907.0
+    assert product["unit"] == "USD" and product["unit_scale"] == "millions"
     assert product["period_end"] == "2025-12-31"
     assert product["indication"] == "Oncology"
     assert product["source_statement"].endswith(
@@ -111,7 +111,7 @@ def test_merge_overlays_xbrl_values_with_provenance():
     )
 
     total = merged[1]
-    assert total["value"] == 62_579_000_000.0
+    assert total["value"] == 62_579.0
     assert total["source_statement"].endswith("value from XBRL us-gaap:Revenues (consolidated, no dimension)")
 
     patent = merged[2]
@@ -124,17 +124,13 @@ def test_merge_keeps_narrative_value_when_product_not_tagged():
     assert merged == facts
 
 
-def test_pharma_filing_line_accepts_raw_xbrl_dollars():
-    line = _pharma_filing_line(_narrative_fact(
-        "product_revenue", "Adcetris", 907_000_000.0, unit="USD", unit_scale="actual",
-    ))
-    assert line["value"] == 907_000_000.0
-    assert line["source"] == "sec_native"
-
+def test_pharma_filing_line_scales_only_source_ready_units():
     millions = _pharma_filing_line(_narrative_fact("product_revenue", "Adcetris", 907.0))
     assert millions["value"] == 907_000_000.0
+    assert millions["source"] == "sec_native"
 
-    unscalable = _pharma_filing_line(_narrative_fact(
-        "product_revenue", "Adcetris", 907.0, unit="USD", unit_scale="thousands",
-    ))
-    assert unscalable["value"] is None
+    for unit_scale in ("actual", "thousands"):
+        unscalable = _pharma_filing_line(_narrative_fact(
+            "product_revenue", "Adcetris", 907.0, unit="USD", unit_scale=unit_scale,
+        ))
+        assert unscalable["value"] is None

@@ -84,40 +84,81 @@ def test_sum_lookups_keeps_only_years_all_parts_cover():
     assert "us-gaap:NonUsMember" in summed[2025]["provenance"]
 
 
-def test_overlay_applies_unit_overrides_and_precomputed_provenance():
+def test_overlay_converts_xbrl_values_into_the_parsed_fact_scale():
     facts = [{
+        "metric": "BankMinimumCet1Ratio", "value": 11.8, "unit": "percent",
+        "unit_scale": "percent", "period_end": "2025-12-31",
+        "source_statement": "filing narrative",
+    }, {
+        "metric": "TelecomMobilityRevenue", "value": 89_482.0, "unit": "USD",
+        "unit_scale": "millions", "period_end": "2025-12-31",
+        "source_statement": "filing narrative",
+    }, {
+        "metric": "TelecomBroadbandConnections", "value": 14_704.0, "unit": "subscribers",
+        "unit_scale": "thousands", "period_end": "2025-12-31",
+        "source_statement": "filing narrative",
+    }, {
+        "metric": "EnergyCrudeOilRealizedPrice", "value": 63.42, "unit": "USD per barrel",
+        "unit_scale": "actual", "period_end": "2025-12-31",
+        "source_statement": "filing narrative",
+    }, {
+        "metric": "InsuranceCombinedRatio", "value": 90.1, "unit": "percent",
+        "unit_scale": "percent", "period_end": "2025-12-31",
+        "source_statement": "filing narrative",
+    }, {
         "metric": "TelecomCostOfDebt", "value": 4.2, "unit": "percent",
-        "unit_scale": "actual", "period_end": "2025-12-31",
-        "source_statement": "filing narrative",
-    }, {
-        "metric": "TelecomMobilityRevenue", "value": 89_482_000_000.0, "unit": "USD",
-        "unit_scale": "actual", "period_end": "2025-12-31",
-        "source_statement": "filing narrative",
-    }, {
-        "metric": "TelecomSubscribers", "value": 250.0, "unit": "millions",
-        "unit_scale": "actual", "period_end": "2025-12-31",
+        "unit_scale": "annual", "period_end": "2025-12-31",
         "source_statement": "filing narrative",
     }]
     rows = {
-        ("TelecomCostOfDebt", 2025): {
-            "value": 4.2, "unit": "percent", "unit_scale": "actual",
+        ("BankMinimumCet1Ratio", 2025): {
+            "value": 11.8, "unit": "percent", "unit_scale": "percent",
             "period_end": "2025-12-31",
-            "provenance": "us-gaap:LongtermDebtWeightedAverageInterestRate (consolidated, no dimension) x100",
+            "provenance": "us-gaap:CapitalAdequacyMinimum (consolidated, no dimension) x100",
         },
         ("TelecomMobilityRevenue", 2025): {
             "value": 89_482_000_000.0, "period_end": "2025-12-31",
             "provenance": "us-gaap:Revenues @ us-gaap:SubsegmentsAxis (t:MobilityMember)",
         },
+        ("TelecomBroadbandConnections", 2025): {
+            "value": 14_704_000.0, "unit": "subscribers", "unit_scale": "thousands",
+            "period_end": "2025-12-31",
+            "provenance": "t:BroadbandConnections (consolidated, no dimension)",
+        },
+        ("EnergyCrudeOilRealizedPrice", 2025): {
+            "value": 63.42, "period_end": "2025-12-31",
+            "provenance": "us-gaap:CrudeOilRealizedPrice (consolidated, no dimension)",
+        },
+        ("InsuranceCombinedRatio", 2025): {
+            "value": 90.1, "unit": "ratio", "unit_scale": "ratio",
+            "period_end": "2025-12-31",
+            "provenance": "us-gaap:CombinedRatio (consolidated, no dimension) x100",
+        },
+        ("TelecomCostOfDebt", 2025): {
+            "value": 4.2, "period_end": "2025-12-31",
+            "provenance": "us-gaap:LongtermDebtWeightedAverageInterestRate (consolidated, no dimension)",
+        },
     }
     merged = xbrl_facts.overlay_xbrl_values(
         facts, rows, lambda fact: (fact["metric"], 2025),
     )
-    assert merged[0]["unit"] == "percent"
-    assert "LongtermDebtWeightedAverageInterestRate" in merged[0]["source_statement"]
-    assert merged[1]["value"] == 89_482_000_000.0
-    assert merged[1]["unit_scale"] == "actual"
-    # unmatched facts pass through untouched
-    assert merged[2] == facts[2]
+    # declared percent/percent selector agrees with the percent fact
+    assert merged[0]["value"] == 11.8
+    assert merged[0]["unit"] == "percent" and merged[0]["unit_scale"] == "percent"
+    assert "value from XBRL" in merged[0]["source_statement"]
+    # raw dollars convert into the fact's millions scale
+    assert merged[1]["value"] == 89_482.0
+    assert merged[1]["unit_scale"] == "millions"
+    # raw counts convert into the fact's thousands scale
+    assert merged[2]["value"] == 14_704.0
+    assert merged[2]["unit_scale"] == "thousands"
+    # unscaled figures (per-barrel prices) keep their value
+    assert merged[3]["value"] == 63.42
+    assert "value from XBRL" in merged[3]["source_statement"]
+    # a selector declaring ratio must not replace a percent-point fact
+    assert merged[4] == facts[4]
+    # a fact whose unit_scale is not in the conversion table keeps its value
+    assert merged[5] == facts[5]
 
 
 class _FakeQuery:
