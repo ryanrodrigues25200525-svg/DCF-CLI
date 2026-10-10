@@ -557,9 +557,12 @@ export function getPrecedentTransactionsBySector(sector: string): PrecedentTrans
         'COMMUNICATIONS': 'INTERNET',
     };
 
-    const mappedSector = sectorMap[upperSector] || 'SOFTWARE';
+    const mappedSector = sectorMap[upperSector];
+    if (!mappedSector || !PRECEDENT_TRANSACTIONS_DATABASE[mappedSector]) {
+        return [];
+    }
 
     // Return copy with all marked as selected by default
-    return (PRECEDENT_TRANSACTIONS_DATABASE[mappedSector] || PRECEDENT_TRANSACTIONS_DATABASE['SOFTWARE'])
+    return PRECEDENT_TRANSACTIONS_DATABASE[mappedSector]
         .map(t => ({ ...t, isSelected: true }));
 }

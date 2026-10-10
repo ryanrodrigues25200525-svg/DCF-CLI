@@ -2383,6 +2383,7 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         )
     source_filings = native_financials.get("source_filings")
     source_filings = source_filings if isinstance(source_filings, list) else []
+    preferred_concept_keys = {_norm(concept) for concept in PREFERRED_EQUITY_CONCEPTS}
     for idx, year in enumerate(years):
         if preferred_equity[idx]["source"] != "missing":
             continue
@@ -2392,11 +2393,20 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
             and _norm(str(fact.get("concept") or "").split(":")[-1]) in {_norm(concept) for concept in PREFERRED_EQUITY_CONCEPTS}
             and str(fact.get("period_end") or "").startswith(str(year))
         ]
+        has_preferred_row = any(
+            _norm(str(row.get("concept") or row.get("standard_concept") or "")) in preferred_concept_keys
+            and _value_for_year(row, year) is not None
+            for row in balance_rows
+        )
         filing = next((
             item for item in source_filings
-            if isinstance(item, dict) and str(item.get("report_date") or "").startswith(str(year))
+            if isinstance(item, dict)
+            and str(item.get("report_date") or "").startswith(str(year))
+            and str(item.get("form") or "") in {"10-K", "10-K/A"}
+            and item.get("accession_number")
+            and item.get("filing_date")
         ), None)
-        if not preferred_facts and filing is not None:
+        if not preferred_facts and not has_preferred_row and filing is not None:
             preferred_equity[idx] = _line(
                 None,
                 source="not_applicable",

@@ -1,5 +1,5 @@
 import type { Assumptions, AssetManagerHistoricalData, ComparableCompany, CompanyProfile, DCFResults, EnergyHistoricalData, HistoricalData, MortgageReitHistoricalData, PharmaHistoricalData, TelecomHistoricalData } from '@/core/types';
-import type { CanonicalFinancialLine, NativeUnifiedPayload } from '@/core/types/native';
+import type { CanonicalFinancialLine, ModelEligibility, NativeUnifiedPayload } from '@/core/types/native';
 import {isProductionModelRoute, type ProductionValuationModel} from '@/core/types/native';
 import type { BackendPort } from '@/api/backend-client';
 import { getPrecedentTransactionsBySector } from '@/core/data/precedent-transactions';
@@ -65,6 +65,16 @@ import { buildSourcedIncompleteMaturePharmaModelAssumptions, buildSourcedMatureP
 import type { MaturePharmaModelAssumptions } from '@/services/valuation/mature-pharma-model';
 import { buildIncompleteMaturePharmaModelExportData, buildMaturePharmaModelExportPayload } from '@/services/exporters/excel/mature-pharma-payload';
 import { selectBiotechAssetsForRnpv, selectOtherBiotechAssetsForRnpv } from '@/services/valuation/biotech-rnpv-model';
+import type { BiotechRnpvAssumptions } from '@/services/valuation/biotech-rnpv-model';
+import type { LifeInsuranceDcfAssumptions } from '@/services/valuation/life-insurance-model';
+import type { UtilityModelAssumptions } from '@/services/valuation/utility-model';
+import {
+  buildSourcedBiotechRnpvAssumptions,
+  buildSourcedLifeInsuranceAssumptions,
+  buildSourcedUtilityModelAssumptions,
+} from '@/services/valuation/specialist-ready-assumptions.js';
+import { buildBiotechModelExportPayload } from '@/services/exporters/excel/biotech-payload';
+import { buildUtilityModelExportPayload } from '@/services/exporters/excel/utility-payload';
 import { buildIncompleteLifeInsuranceModelExportData } from '@/services/exporters/excel/life-insurance-payload';
 import { median } from '@/services/valuation/source-guards';
 
@@ -89,6 +99,40 @@ export interface IncompleteValuationJobResult extends ValuationJobResultBase {
 }
 
 export type ValuationJobResult = ReadyValuationJobResult | IncompleteValuationJobResult;
+
+/** Fail closed instead of wall-clock-dating sources when the backend omits its valuation date (#55). */
+export function requireValuationAsOfDate(data: Pick<NativeUnifiedPayload, 'valuation_context'>): string {
+  const asOfDate = data.valuation_context.as_of_date;
+  if (!asOfDate || !/^20\d{2}-\d{2}-\d{2}$/.test(asOfDate)) {
+    throw new Error('Export requires a dated valuation context; refusing to wall-clock-date sources.');
+  }
+  return asOfDate;
+}
+
+/** Ready-path specialist workbook warnings exist for every specialist model, not just asset managers (#47). */
+export function specialistModelWarnings(exportPayload: DcfExportPayload, hasSpecialistModel: boolean): string[] {
+  if (!hasSpecialistModel) return [];
+  return exportPayload.uiMeta?.warnings ?? [];
+}
+
+const OPERATING_DIAGNOSTIC_MODELS: ReadonlySet<string> = new Set(['unlevered_dcf', 'ev_ebitda', 'revenue_multiple']);
+
+/** Model-aware ready-path failure diagnostic: operating internals only for operating routes (#56). */
+export function valuationFailureMessage(
+  ticker: string,
+  eligibility: ModelEligibility,
+  results: DCFResults,
+  assumptions: Assumptions,
+): string {
+  const reason = eligibility.blocked_models.find((item) => item.reason)?.reason
+    ?? results.modelWarning
+    ?? results.sectorWarning;
+  if (reason) return reason;
+  if (OPERATING_DIAGNOSTIC_MODELS.has(eligibility.preferred_model)) {
+    return `The DCF engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; WACC=${assumptions.wacc}; tax=${assumptions.taxRate}; EBIT margin=${assumptions.ebitMargin}; CapEx ratio=${assumptions.capexRatio}; NWC residual=${assumptions.nwcChangeRatio}; first FCFF=${results.forecasts[0]?.fcff}; final FCFF=${results.forecasts.at(-1)?.fcff}; terminal value=${results.terminalValue}; terminal growth value=${results.terminalValueGordon}).`;
+  }
+  return `The ${eligibility.preferred_model} engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; forecasts=${results.forecasts.length}; terminal value=${results.terminalValue}).`;
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -1649,7 +1693,7 @@ export function buildIncompleteExportPayload(
       cik: profile.cik,
       currency: historicals.currency || 'USD',
       unitsScale: 'millions',
-      asOfDate: data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10),
+      asOfDate: requireValuationAsOfDate(data),
       fiscalYearEnd: profile.fiscalYearEnd,
       sector: profile.sector,
       industry: profile.industry,
@@ -1809,7 +1853,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
     const latestAnnualRecord = asRecord(latestAnnual);
     const filedShares = asRecord(latestAnnualRecord.shares);
     const filedShareSource = asRecord(Array.isArray(filedShares.sources) ? filedShares.sources[0] : undefined);
-    const utilityAsOfDate = data.valuation_context.as_of_date || new Date().toISOString().slice(0, 10);
+    const utilityAsOfDate = requireValuationAsOfDate(data);
     const utilityReadiness = eligibility.required_input_readiness ?? {};
     const incompleteUtilityModel: IncompleteUtilityModelExportData | undefined = eligibility.preferred_model === 'utility_dcf'
       ? {
@@ -1900,7 +1944,7 @@ export async function runValuationJob(ticker: string, backend: BackendPort): Pro
   }
 
   const {profile, historicals, peers} = buildModelInputs(data, ticker, {
-    requirePositiveRevenue: !['mortgage_reit_residual_income', 'integrated_energy_dcf'].includes(eligibility.preferred_model),
+    requirePositiveRevenue: !['mortgage_reit_residual_income', 'integrated_energy_dcf', 'biotech_pipeline_rnpv', 'life_insurer_distributable_earnings_dcf'].includes(eligibility.preferred_model),
     allowCurrentMarketShareCount: eligibility.preferred_model === 'integrated_energy_dcf',
   });
   let assumptions: Assumptions;
@@ -2111,6 +2155,15 @@ let comparablePeerTickers: string[] | undefined;
   const pharmaAssumptions: MaturePharmaModelAssumptions | undefined = pharmaHistorical
     ? buildSourcedMaturePharmaModelAssumptions(data, pharmaHistorical)
     : undefined;
+  const utilityAssumptions: UtilityModelAssumptions | undefined = eligibility.preferred_model === 'utility_dcf'
+    ? buildSourcedUtilityModelAssumptions(data)
+    : undefined;
+  const biotechAssumptions: BiotechRnpvAssumptions | undefined = eligibility.preferred_model === 'biotech_pipeline_rnpv'
+    ? buildSourcedBiotechRnpvAssumptions(data)
+    : undefined;
+  const lifeAssumptions: LifeInsuranceDcfAssumptions | undefined = eligibility.preferred_model === 'life_insurer_distributable_earnings_dcf'
+    ? buildSourcedLifeInsuranceAssumptions(data)
+    : undefined;
   const results = calculateRoutedValuation(
     historicals,
     assumptions,
@@ -2141,16 +2194,16 @@ let comparablePeerTickers: string[] | undefined;
     pharmaHistorical && pharmaAssumptions
       ? {historical: pharmaHistorical, assumptions: pharmaAssumptions}
       : undefined,
+    utilityAssumptions,
+    biotechAssumptions,
+    lifeAssumptions ? {assumptions: lifeAssumptions} : undefined,
   );
   if (
     !results.isValuationSupported
     || !Number.isFinite(results.impliedSharePrice)
     || results.impliedSharePrice <= 0
   ) {
-    const reason = eligibility.blocked_models.find((item) => item.reason)?.reason
-      ?? results.modelWarning
-      ?? results.sectorWarning;
-    throw new Error(reason || `The DCF engine could not produce a valid valuation for ${ticker} (supported=${results.isValuationSupported}; EV=${results.enterpriseValue}; common equity=${results.equityValue}; shares=${results.shareCount}; implied share price=${results.impliedSharePrice}; WACC=${assumptions.wacc}; tax=${assumptions.taxRate}; EBIT margin=${assumptions.ebitMargin}; CapEx ratio=${assumptions.capexRatio}; NWC residual=${assumptions.nwcChangeRatio}; first FCFF=${results.forecasts[0]?.fcff}; final FCFF=${results.forecasts.at(-1)?.fcff}; terminal value=${results.terminalValue}; terminal growth value=${results.terminalValueGordon}).`);
+    throw new Error(valuationFailureMessage(ticker, eligibility, results, assumptions));
   }
 
   let exportPayload: DcfExportPayload;
@@ -2170,12 +2223,30 @@ let comparablePeerTickers: string[] | undefined;
     exportPayload = buildIntegratedEnergyModelExportPayload(profile, energyHistorical, energyAssumptions);
   } else if (pharmaHistorical && pharmaAssumptions) {
     exportPayload = buildMaturePharmaModelExportPayload(profile, pharmaHistorical, pharmaAssumptions);
+  } else if (utilityAssumptions) {
+    exportPayload = buildUtilityModelExportPayload(profile, {
+      ...utilityAssumptions,
+      asOfDate: requireValuationAsOfDate(data),
+      assumptionSources: {},
+    }, results.forecasts);
+  } else if (biotechAssumptions) {
+    const pipelineAssets = Array.isArray(data.financials_native.pipeline_assets)
+      ? data.financials_native.pipeline_assets
+      : [];
+    exportPayload = buildBiotechModelExportPayload(profile, biotechAssumptions, pipelineAssets, results.forecasts, requireValuationAsOfDate(data));
+  } else if (lifeAssumptions) {
+    throw new Error(
+      'Life-insurer ready export requires an analyst-completed input-required workbook; '
+      + 'the backend ships no complete life-insurance workbook mapper yet, so the ready life route '
+      + 'stays behind the analyst-input acceptance workflow.',
+    );
   } else {
     exportPayload = buildExportPayload(
       profile,
       historicals,
       assumptions,
       results,
+      requireValuationAsOfDate(data),
       comparablePeerTickers && comparablePeerTickers.length > 0
         ? peers.filter((peer) => comparablePeerTickers!.includes(peer.ticker))
         : peers,
@@ -2214,7 +2285,12 @@ let comparablePeerTickers: string[] | undefined;
   enrichSourceNotes(exportPayload, data, historicals, bankHistorical || insuranceHistorical || reitHistorical || assetManagerHistorical ? [] : operatingSourceNotes);
   exportPayload = {...exportPayload, buildStatus: 'ready', requiredInputs: []};
   const workbookBytes = await backend.exportDcf(exportPayload);
-  const modelWarnings = assetManagerHistorical ? exportPayload.uiMeta?.warnings ?? [] : [];
+  const hasSpecialistModel = Boolean(
+    bankHistorical || insuranceHistorical || reitHistorical || assetManagerHistorical
+    || telecomHistorical || mortgageReitHistorical || energyHistorical || pharmaHistorical
+    || utilityAssumptions || biotechAssumptions || lifeAssumptions,
+  );
+  const modelWarnings = specialistModelWarnings(exportPayload, hasSpecialistModel);
   const warnings = [...qualityWarnings(data), ...modelWarnings, results.sectorWarning]
     .filter((warning): warning is string => Boolean(warning));
 

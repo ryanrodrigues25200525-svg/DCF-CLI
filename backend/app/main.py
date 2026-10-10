@@ -28,6 +28,29 @@ logging.basicConfig(
 logger = logging.getLogger("sec-service")
 
 
+async def build_general_exception_response(request: Request, exc: Exception) -> JSONResponse:
+    """Opaque-by-default 500 with a triage-safe exception kind and request id (#53).
+
+    The message stays generic (no internals leak), but `kind` lets operators
+    distinguish an escaped data bug (ValueError) from a runtime failure, and
+    `request_id` correlates to the server log line.
+    """
+    request_id = getattr(request.state, "request_id", str(uuid4()))
+    logger.exception("Unhandled exception request_id=%s: %s", request_id, str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected error occurred. Please try again later.",
+                "kind": type(exc).__name__,
+            },
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
+
 def create_app(services: RuntimeServices | None = None) -> FastAPI:
     runtime_services = services or create_default_runtime_services()
 
@@ -150,19 +173,7 @@ def create_app(services: RuntimeServices | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
-        request_id = getattr(request.state, "request_id", str(uuid4()))
-        logger.exception("Unhandled exception request_id=%s: %s", request_id, str(exc))
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_SERVER_ERROR",
-                    "message": "An unexpected error occurred. Please try again later.",
-                },
-                "request_id": request_id,
-            },
-            headers={"X-Request-ID": request_id},
-        )
+        return await build_general_exception_response(request, exc)
 
     app.include_router(financials_router.router, prefix="/api/company", tags=["Company"])
     app.include_router(search.router, prefix="/api/search", tags=["Search"])

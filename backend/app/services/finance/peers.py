@@ -395,6 +395,14 @@ def _rank_peer_details(
 
     return sorted(peers, key=score, reverse=True)
 
+def _is_fallback_peer_source(candidate_source: str, used_symbol_fallback: bool, weak_derived_set: bool) -> bool:
+    return bool(
+        used_symbol_fallback
+        or weak_derived_set
+        or candidate_source in {"sector_industry_table", "default_symbols", "unavailable", "symbol_only_fallback"}
+    )
+
+
 def _build_symbol_fallback(symbol: str) -> Dict[str, Any]:
     return {
         "symbol": symbol,
@@ -522,7 +530,7 @@ async def _fetch_peer_data_bundle(ticker: str) -> Dict[str, Any]:
             return {
                 "peers": top,
                 "source": candidate_source,
-                "fallback_used": used_symbol_fallback or weak_derived_set or candidate_source in {"default_symbols", "unavailable"},
+                "fallback_used": _is_fallback_peer_source(candidate_source, used_symbol_fallback, weak_derived_set),
                 "notes": " ".join(notes_parts) or None,
                 "fetched_at_ms": int(time.time() * 1000),
             }

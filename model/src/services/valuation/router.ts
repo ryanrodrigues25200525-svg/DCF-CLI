@@ -12,6 +12,8 @@ import { calculateMaturePharmaValuation, type MaturePharmaModelAssumptions } fro
 import { calculateComparableValuation, type ComparableValuationInput } from '@/services/valuation/multiple-model';
 import { calculateUtilityValuation, type UtilityModelAssumptions } from '@/services/valuation/utility-model';
 import { calculateBiotechRnpv, type BiotechRnpvAssumptions } from '@/services/valuation/biotech-rnpv-model';
+import { calculateLifeInsuranceDistributableEarnings, type LifeInsuranceDcfAssumptions } from '@/services/valuation/life-insurance-model';
+import { mapBiotechForecasts, mapLifeForecasts, mapTelecomForecasts, mapUtilityForecasts } from '@/services/valuation/specialist-forecasts.js';
 
 function safePrice(historicals: HistoricalData): number {
   const price = historicals.price ?? 0;
@@ -87,6 +89,7 @@ export function calculateRoutedValuation(
   maturePharmaModelInput?: {historical: PharmaHistoricalData; assumptions: MaturePharmaModelAssumptions},
   utilityModelInput?: UtilityModelAssumptions,
   biotechModelInput?: BiotechRnpvAssumptions,
+  lifeModelInput?: {assumptions: LifeInsuranceDcfAssumptions},
 ): DCFResults {
   if (eligibility.preferred_model === 'mature_pharma_product_dcf') {
     if (!eligibility.supported_by_current_engine || !isProductionModelRoute(eligibility.preferred_model)
@@ -181,12 +184,16 @@ export function calculateRoutedValuation(
     }
     case 'telecom_subscriber_dcf': {
       if (!telecomModelInput) return unsupportedResult(historicals, assumptions, eligibility);
+      const telecomResult = calculateTelecomValuation(telecomModelInput.historical, telecomModelInput.assumptions);
+      const telecomForecasts = mapTelecomForecasts(telecomResult.telecomForecasts);
+      const telecomSupported = telecomForecasts.length > 0;
       return {
-        ...calculateTelecomValuation(telecomModelInput.historical, telecomModelInput.assumptions),
+        ...telecomResult,
+        forecasts: telecomForecasts,
         companyType: eligibility.company_type,
         preferredModel: eligibility.preferred_model,
-        isValuationSupported: true,
-        isSensitivitySupported: true,
+        isValuationSupported: telecomSupported,
+        isSensitivitySupported: telecomSupported,
       };
     }
     case 'ev_ebitda':
@@ -215,13 +222,45 @@ export function calculateRoutedValuation(
     }
     case 'utility_dcf': {
       if (!utilityModelInput) return unsupportedResult(historicals, assumptions, eligibility);
-      const result = calculateUtilityValuation(utilityModelInput);
-      return {...result, forecasts: []};
+      const utilityResult = calculateUtilityValuation(utilityModelInput);
+      const utilityForecasts = mapUtilityForecasts(utilityResult.forecasts);
+      const utilitySupported = utilityForecasts.length > 0;
+      return {
+        ...utilityResult,
+        forecasts: utilityForecasts,
+        companyType: eligibility.company_type,
+        preferredModel: eligibility.preferred_model,
+        isValuationSupported: utilitySupported,
+        isSensitivitySupported: utilitySupported,
+      };
     }
     case 'biotech_pipeline_rnpv': {
       if (!biotechModelInput) return unsupportedResult(historicals, assumptions, eligibility);
-      const result = calculateBiotechRnpv(biotechModelInput);
-      return {...result, forecasts: []};
+      const biotechResult = calculateBiotechRnpv(biotechModelInput);
+      const biotechForecasts = mapBiotechForecasts(biotechResult.forecasts);
+      const biotechSupported = biotechForecasts.length > 0;
+      return {
+        ...biotechResult,
+        forecasts: biotechForecasts,
+        companyType: eligibility.company_type,
+        preferredModel: eligibility.preferred_model,
+        isValuationSupported: biotechSupported,
+        isSensitivitySupported: biotechSupported,
+      };
+    }
+    case 'life_insurer_distributable_earnings_dcf': {
+      if (!lifeModelInput) return unsupportedResult(historicals, assumptions, eligibility);
+      const lifeResult = calculateLifeInsuranceDistributableEarnings(lifeModelInput.assumptions);
+      const lifeForecasts = mapLifeForecasts(lifeResult.lifeInsuranceForecasts);
+      const lifeSupported = lifeForecasts.length > 0;
+      return {
+        ...lifeResult,
+        forecasts: lifeForecasts,
+        companyType: eligibility.company_type,
+        preferredModel: eligibility.preferred_model,
+        isValuationSupported: lifeSupported,
+        isSensitivitySupported: lifeSupported,
+      };
     }
     default:
       return unsupportedResult(historicals, assumptions, eligibility);
