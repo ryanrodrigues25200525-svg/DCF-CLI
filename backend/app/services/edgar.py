@@ -3209,6 +3209,52 @@ async def _fetch_asset_manager_filing_facts(
     return sorted(facts_by_period.values(), key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
 
 
+# --- Equity-REIT XBRL selectors (verified against the PLD 10-Ks) ---
+# Only the capex cash-flow lines and the segment table are tagged with the
+# same numbers the narrative parser reads: the segment "NOI" is
+# us-gaap:OperatingIncomeLoss in the segment-total context
+# (ConsolidationItems = OperatingSegments + StatementBusinessSegments). The
+# NAREIT/Modified/Core FFO bridge, the FFO-table depreciation line
+# (us-gaap:DepreciationAndAmortization carries the wider consolidated scope),
+# same-store NOI, and occupancy are non-GAAP or tagged at a different scope,
+# so they stay narrative-only.
+_REIT_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    "ReitCommonDistributions": [{
+        "concept": "us-gaap:PaymentsOfDividends",
+        "unit": "USD",
+        "unit_scale": "thousands",
+    }],
+    "ReitPropertyImprovements": [{
+        "concept": "pld:PaymentForPropertyImprovements",
+        "unit": "USD",
+        "unit_scale": "thousands",
+    }],
+    "ReitRealEstateSegmentNOI": [{
+        "concept": "us-gaap:OperatingIncomeLoss",
+        "dimensions": {
+            "srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember",
+            "us-gaap:StatementBusinessSegmentsAxis": "pld:RealEstateOperationsSegmentMember",
+        },
+        "unit": "USD",
+        "unit_scale": "thousands",
+    }],
+    "ReitStrategicCapitalSegmentNOI": [{
+        "concept": "us-gaap:OperatingIncomeLoss",
+        "dimensions": {
+            "srt:ConsolidationItemsAxis": "us-gaap:OperatingSegmentsMember",
+            "us-gaap:StatementBusinessSegmentsAxis": "pld:StrategicCapitalSegmentMember",
+        },
+        "unit": "USD",
+        "unit_scale": "thousands",
+    }],
+    "ReitTenantImprovementsAndLeaseCommissions": [{
+        "concept": "us-gaap:PaymentsForLeasingCostsCommissionsAndTenantImprovements",
+        "unit": "USD",
+        "unit_scale": "thousands",
+    }],
+}
+
+
 async def _fetch_reit_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
@@ -3242,14 +3288,17 @@ async def _fetch_reit_filing_facts(
         except Exception as exc:
             logger.warning("REIT filing-table extraction unavailable for %s (%s)", filing_record.get("report_date", "unknown period"), type(exc).__name__)
             continue
-        output.extend(_reit_filing_facts_from_text(
+        parsed_facts = _reit_filing_facts_from_text(
             filing_text,
             report_date=str(filing_record.get("report_date") or ""),
             filing_date=str(filing_record.get("filing_date") or ""),
             accession_number=str(filing_record.get("accession_number") or ""),
             form=str(filing_record.get("form") or "10-K"),
             primary_document=filing_record.get("primary_document"),
-        ))
+        )
+        xbrl = await xbrl_facts.load_xbrl_document(filing)
+        parsed_facts = _overlay_specialist_xbrl(parsed_facts, xbrl, _REIT_XBRL_SELECTORS)
+        output.extend(parsed_facts)
     return output
 
 
@@ -3515,6 +3564,107 @@ def _mortgage_reit_filing_facts_from_text(
     return sorted(output, key=lambda fact: (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0)))
 
 
+# --- Mortgage-REIT XBRL selectors (verified against the AGNC 10-Ks) ---
+# AGNC tags its GAAP income statements, comprehensive income statement, and
+# balance sheet; the MD&A average-balance table (average asset yield, cost of
+# funds, net interest spread, leverage, economic interest income/expense) is
+# non-GAAP or tagged at a different measure (the portfolio weighted-average
+# life yield 4.93% is not the reported average asset yield 4.90%), the
+# per-share book values are untagged, and the repo-and-other-debt balance is a
+# roll-up of repo borrowings plus other secured debt, so all of those stay
+# narrative-only. Preferred-stock instants are tagged only on the equity
+# statement's first/last columns, so the untagged years keep their narrative
+# values too.
+_MORTGAGE_REIT_XBRL_SELECTORS: Dict[str, List[Dict[str, Any]]] = {
+    "MortgageReitCommonDividendsPerShareDeclared": [{
+        "concept": "us-gaap:CommonStockDividendsPerShareDeclared",
+        "unit": "USD per share",
+        "unit_scale": "actual",
+    }],
+    "MortgageReitComprehensiveIncomeAvailableToCommon": [{
+        "concept": "agnc:ComprehensiveIncomeAvailableToCommonShareholders",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitGAAPInterestExpense": [{
+        "concept": "us-gaap:InterestExpenseOperating",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitGAAPInterestIncome": [{
+        "concept": "us-gaap:InterestIncomeOperating",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitGAAPNetInterestIncome": [{
+        "concept": "us-gaap:InterestIncomeExpenseNet",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitNetIncome": [{
+        "concept": "us-gaap:NetIncomeLoss",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitNetIncomeAvailableToCommon": [{
+        "concept": "us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitOperatingExpenses": [{
+        "concept": "us-gaap:OperatingExpenses",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitOtherComprehensiveIncome": [{
+        "concept": "us-gaap:OtherComprehensiveIncomeUnrealizedHoldingGainLossOnSecuritiesArisingDuringPeriodNetOfTax",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitOtherGainNet": [{
+        "concept": "us-gaap:NonoperatingIncomeExpense",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitPeriodEndCommonShares": [{
+        "concept": "us-gaap:CommonStockSharesOutstanding",
+        "unit": "shares",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitPreferredDividends": [{
+        "concept": "us-gaap:PreferredStockDividendsIncomeStatementImpact",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitPreferredEquityCarryingValue": [{
+        "concept": "us-gaap:StockholdersEquity",
+        "dimensions": {"us-gaap:StatementEquityComponentsAxis": "us-gaap:PreferredStockMember"},
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitPreferredEquityLiquidationPreference": [{
+        "concept": "us-gaap:PreferredStockLiquidationPreferenceValue",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitTotalAssets": [{
+        "concept": "us-gaap:Assets",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitTotalLiabilities": [{
+        "concept": "us-gaap:Liabilities",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+    "MortgageReitTotalStockholdersEquity": [{
+        "concept": "us-gaap:StockholdersEquity",
+        "unit": "USD",
+        "unit_scale": "millions",
+    }],
+}
+
+
 async def _fetch_mortgage_reit_filing_facts(
     company: Any,
     source_filings: list[Dict[str, Any]],
@@ -3557,6 +3707,8 @@ async def _fetch_mortgage_reit_filing_facts(
             form=str(filing_record.get("form") or "10-K"),
             primary_document=filing_record.get("primary_document"),
         )
+        xbrl = await xbrl_facts.load_xbrl_document(filing)
+        parsed = _overlay_specialist_xbrl(parsed, xbrl, _MORTGAGE_REIT_XBRL_SELECTORS)
         for fact in parsed:
             key = (str(fact.get("concept") or ""), int(fact.get("fiscal_year") or 0))
             existing = by_concept_period.get(key)
