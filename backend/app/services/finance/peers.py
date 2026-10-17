@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -101,6 +102,296 @@ def _sector_slug(sector: str) -> Optional[str]:
     return _SECTOR_SLUG_BY_DISPLAY.get(str(sector or "").strip().lower())
 
 
+# Industry vocabulary translation: Yahoo display names and filing SIC descriptions /
+# codes translated into screener-accepted industry slugs. This bridges human-readable
+# and filing-derived classifications to the screener's strict vocabulary without
+# hardcoding ticker lists (#65).
+_INDUSTRY_SLUG_BY_DISPLAY: Dict[str, str] = {
+    # Consumer Cyclical / Discretionary
+    "home improvement": "home_improvement_retail",
+    "home improvement retail": "home_improvement_retail",
+    "home improvement stores": "home_improvement_retail",
+    "internet retail": "internet_retail",
+    "auto manufacturers": "auto_manufacturers",
+    "automobiles": "automobiles",
+    "auto parts": "auto_parts",
+    "auto components": "auto_components",
+    "auto & truck dealerships": "auto_truck_dealerships",
+    "auto and truck dealerships": "auto_truck_dealerships",
+    "restaurants": "restaurants",
+    "apparel retail": "apparel_retail",
+    "apparel manufacturing": "apparel_manufacturing",
+    "footwear & accessories": "footwear_accessories",
+    "footwear and accessories": "footwear_accessories",
+    "specialty retail": "specialty_retail",
+    "department stores": "department_stores",
+    "retailing": "retailing",
+    "residential construction": "residential_construction",
+    "lodging": "lodging",
+    "travel services": "travel_services",
+    "resorts & casinos": "resorts_casinos",
+    "resorts and casinos": "resorts_casinos",
+    "gambling": "gambling",
+    "leisure": "leisure",
+    "luxury goods": "luxury_goods",
+    "packaging & containers": "packaging_containers",
+    "packaging and containers": "packaging_containers",
+    "furnishings, fixtures & appliances": "furnishings_fixtures_appliances",
+    "furnishings, fixtures and appliances": "furnishings_fixtures_appliances",
+    "recreational vehicles": "recreational_vehicles",
+    "textiles & apparel": "textiles_apparel",
+    "textiles and apparel": "textiles_apparel",
+    "personal services": "personal_services",
+    "consumer durables": "consumer_durables",
+    "consumer services": "consumer_services",
+
+    # Consumer Defensive / Staples
+    "discount stores": "discount_stores",
+    "household products": "household_products",
+    "household & personal products": "household_personal_products",
+    "household and personal products": "household_personal_products",
+    "packaged foods": "packaged_foods",
+    "confectioners": "confectioners",
+    "grocery stores": "grocery_stores",
+    "farm products": "farm_products",
+    "food distribution": "food_distribution",
+    "food products": "food_products",
+    "food retailers": "food_retailers",
+    "tobacco": "tobacco",
+    "education & training services": "education_training_services",
+    "education and training services": "education_training_services",
+
+    # Technology
+    "semiconductors": "semiconductors",
+    "semiconductor equipment & materials": "semiconductor_equipment_materials",
+    "semiconductor equipment and materials": "semiconductor_equipment_materials",
+    "software": "software_and_services",
+    "software & services": "software_and_services",
+    "software and services": "software_and_services",
+    "software - application": "software_and_services",
+    "software - infrastructure": "software_and_services",
+    "consumer electronics": "consumer_electronics",
+    "computer hardware": "computer_hardware",
+    "communication equipment": "communication_equipment",
+    "information technology services": "information_technology_services",
+    "it services": "information_technology_services",
+    "electronic components": "electronic_components",
+    "scientific & technical instruments": "scientific_technical_instruments",
+    "scientific and technical instruments": "scientific_technical_instruments",
+    "solar": "solar",
+    "technology hardware": "technology_hardware",
+    "electronics & computer distribution": "electronics_computer_distribution",
+    "electronics and computer distribution": "electronics_computer_distribution",
+
+    # Communication Services
+    "telecom": "telecom_services",
+    "telecom services": "telecom_services",
+    "telecommunications": "telecom_services",
+    "telecommunication services": "telecom_services",
+    "internet content & information": "internet_content_information",
+    "internet content and information": "internet_content_information",
+    "entertainment": "entertainment",
+    "media": "media",
+    "electronic gaming & multimedia": "electronic_gaming_multimedia",
+    "electronic gaming and multimedia": "electronic_gaming_multimedia",
+    "advertising agencies": "advertising_agencies",
+    "publishing": "publishing",
+    "broadcasting": "broadcasting",
+
+    # Energy
+    "oil & gas integrated": "oil_gas_integrated",
+    "oil and gas integrated": "oil_gas_integrated",
+    "integrated oil & gas": "oil_gas_integrated",
+    "oil & gas e&p": "oil_gas_e_p",
+    "oil and gas e&p": "oil_gas_e_p",
+    "oil & gas exploration & production": "oil_gas_e_p",
+    "oil & gas midstream": "oil_gas_midstream",
+    "oil and gas midstream": "oil_gas_midstream",
+    "oil & gas refining & marketing": "oil_gas_refining_marketing",
+    "oil and gas refining and marketing": "oil_gas_refining_marketing",
+    "oil & gas equipment & services": "oil_gas_equipment_services",
+    "oil and gas equipment and services": "oil_gas_equipment_services",
+    "oil & gas drilling": "oil_gas_drilling",
+    "oil and gas drilling": "oil_gas_drilling",
+    "oil & gas producers": "oil_gas_producers",
+    "oil and gas producers": "oil_gas_producers",
+    "energy services": "energy_services",
+    "thermal coal": "thermal_coal",
+    "uranium": "uranium",
+
+    # Financials
+    "banks": "banks",
+    "banks - diversified": "banks",
+    "banks - regional": "banks",
+    "commercial banks": "banks",
+    "regional banks": "banks",
+    "diversified banks": "banks",
+    "asset management": "asset_management",
+    "capital markets": "capital_markets",
+    "credit services": "credit_services",
+    "diversified financials": "diversified_financials",
+    "financial data & stock exchanges": "financial_data_stock_exchanges",
+    "financial data and stock exchanges": "financial_data_stock_exchanges",
+    "financial conglomerates": "financial_conglomerates",
+    "insurance": "insurance",
+    "insurance - diversified": "insurance",
+    "insurance - life": "insurance",
+    "insurance - property & casualty": "insurance",
+    "insurance - specialty": "insurance",
+    "insurance - reinsurance": "insurance",
+    "insurance brokers": "insurance",
+    "mortgage finance": "mortgage_finance",
+
+    # Healthcare
+    "biotechnology": "biotechnology",
+    "biotech": "biotechnology",
+    "medical devices": "medical_devices",
+    "healthcare plans": "healthcare_plans",
+    "health care plans": "healthcare_plans",
+    "diagnostics & research": "diagnostics_research",
+    "diagnostics and research": "diagnostics_research",
+    "medical instruments & supplies": "medical_instruments_supplies",
+    "medical instruments and supplies": "medical_instruments_supplies",
+    "medical care facilities": "medical_care_facilities",
+    "medical distribution": "medical_distribution",
+    "health information services": "health_information_services",
+    "pharmaceutical retailers": "pharmaceutical_retailers",
+
+    # Industrials
+    "aerospace & defense": "aerospace_defense",
+    "aerospace and defense": "aerospace_defense",
+    "airlines": "airlines",
+    "airports & air services": "airports_air_services",
+    "airports and air services": "airports_air_services",
+    "railroads": "railroads",
+    "trucking": "trucking",
+    "marine shipping": "marine_shipping",
+    "integrated freight & logistics": "integrated_freight_logistics",
+    "integrated freight and logistics": "integrated_freight_logistics",
+    "transportation": "transportation",
+    "transportation infrastructure": "transportation_infrastructure",
+    "building products": "building_products",
+    "building products & equipment": "building_products_equipment",
+    "building products and equipment": "building_products_equipment",
+    "farm & heavy construction machinery": "farm_heavy_construction_machinery",
+    "farm and heavy construction machinery": "farm_heavy_construction_machinery",
+    "specialty industrial machinery": "specialty_industrial_machinery",
+    "machinery": "machinery",
+    "engineering & construction": "engineering_construction",
+    "engineering and construction": "engineering_construction",
+    "electrical equipment": "electrical_equipment",
+    "electrical equipment & parts": "electrical_equipment_parts",
+    "electrical equipment and parts": "electrical_equipment_parts",
+    "industrial conglomerates": "industrial_conglomerates",
+    "industrial distribution": "industrial_distribution",
+    "waste management": "waste_management",
+    "commercial services": "commercial_services",
+    "specialty business services": "specialty_business_services",
+    "consulting services": "consulting_services",
+    "rental & leasing services": "rental_leasing_services",
+    "rental and leasing services": "rental_leasing_services",
+    "security & protection services": "security_protection_services",
+    "security and protection services": "security_protection_services",
+    "staffing & employment services": "staffing_employment_services",
+    "staffing and employment services": "staffing_employment_services",
+    "metal fabrication": "metal_fabrication",
+    "pollution & treatment controls": "pollution_treatment_controls",
+    "pollution and treatment controls": "pollution_treatment_controls",
+    "tools & accessories": "tools_accessories",
+    "tools and accessories": "tools_accessories",
+
+    # Basic Materials
+    "chemicals": "chemicals",
+    "specialty chemicals": "specialty_chemicals",
+    "building materials": "building_materials",
+    "steel": "steel",
+    "copper": "copper",
+    "aluminum": "aluminum",
+    "gold": "gold",
+    "silver": "silver",
+    "precious metals": "precious_metals",
+    "agricultural inputs": "agricultural_inputs",
+    "other industrial metals & mining": "other_industrial_metals_mining",
+    "other industrial metals and mining": "other_industrial_metals_mining",
+    "lumber & wood production": "lumber_wood_production",
+    "lumber and wood production": "lumber_wood_production",
+    "paper & forestry": "paper_forestry",
+    "paper and forestry": "paper_forestry",
+
+    # Real Estate & Utilities
+    "real estate": "real_estate",
+    "home builders": "home_builders",
+    "homebuilders": "home_builders",
+    "utilities": "utilities",
+
+    # SIC codes and SIC descriptions for auditable candidate set derivation (#65)
+    "5211": "home_improvement_retail",
+    "lumber & other building materials dealers": "home_improvement_retail",
+    "3674": "semiconductors",
+    "semiconductors & related devices": "semiconductors",
+    "7372": "software_and_services",
+    "prepackaged software": "software_and_services",
+    "7370": "software_and_services",
+    "computer programming, data processing, etc.": "software_and_services",
+    "4813": "telecom_services",
+    "4812": "telecom_services",
+    "telephone communications (no radiotelephone)": "telecom_services",
+    "radiotelephone communications": "telecom_services",
+    "6021": "banks",
+    "6022": "banks",
+    "national commercial banks": "banks",
+    "state commercial banks": "banks",
+    "1311": "oil_gas_e_p",
+    "crude petroleum & natural gas": "oil_gas_e_p",
+    "2911": "oil_gas_refining_marketing",
+    "petroleum refining": "oil_gas_refining_marketing",
+    "2834": "biotechnology",
+    "pharmaceutical preparations": "biotechnology",
+    "2836": "biotechnology",
+    "biological products (no diagnostic substances)": "biotechnology",
+    "4512": "airlines",
+    "air transportation, scheduled": "airlines",
+    "3721": "aerospace_defense",
+    "aircraft": "aerospace_defense",
+    "3724": "aerospace_defense",
+    "aircraft engines & engine parts": "aerospace_defense",
+    "5331": "discount_stores",
+    "variety stores": "discount_stores",
+    "5411": "grocery_stores",
+    "5812": "restaurants",
+    "eating places": "restaurants",
+    "6311": "insurance",
+    "life insurance": "insurance",
+    "6331": "insurance",
+    "fire, marine & casualty insurance": "insurance",
+    "6798": "real_estate",
+    "real estate investment trusts": "real_estate",
+    "4911": "utilities",
+    "electric services": "utilities",
+}
+
+_VALID_SCREENER_INDUSTRIES: frozenset[str] = frozenset(_INDUSTRY_SLUG_BY_DISPLAY.values())
+
+
+def _industry_slug(industry: str) -> Optional[str]:
+    raw = str(industry or "").strip().lower()
+    if not raw:
+        return None
+    if raw in _INDUSTRY_SLUG_BY_DISPLAY:
+        return _INDUSTRY_SLUG_BY_DISPLAY[raw]
+    raw_and = raw.replace("&", "and")
+    if raw_and in _INDUSTRY_SLUG_BY_DISPLAY:
+        return _INDUSTRY_SLUG_BY_DISPLAY[raw_and]
+    if " - " in raw:
+        prefix = raw.split(" - ")[0].strip()
+        if prefix in _INDUSTRY_SLUG_BY_DISPLAY:
+            return _INDUSTRY_SLUG_BY_DISPLAY[prefix]
+    slugified = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    if slugified in _VALID_SCREENER_INDUSTRIES:
+        return slugified
+    return None
+
+
 def _looks_like_operating_peer(symbol: str) -> bool:
     """Cheap shape check only.
 
@@ -159,12 +450,20 @@ def _industry_match_count(peers: List[Dict[str, Any]], target_industry: str) -> 
     target = str(target_industry or "").strip().lower()
     if not target:
         return 0
+    target_slug = _industry_slug(target)
     matches = 0
     for peer in peers or []:
         if not isinstance(peer, dict):
             continue
         industry = str(peer.get("industry") or "").strip().lower()
-        if industry and (industry == target or target in industry or industry in target):
+        if not industry:
+            continue
+        if (
+            industry == target
+            or target in industry
+            or industry in target
+            or (target_slug is not None and _industry_slug(industry) == target_slug)
+        ):
             matches += 1
     return matches
 
@@ -204,54 +503,94 @@ async def _derive_peer_symbols_from_screener(
     sector: str,
     target_market_cap: float,
     limit: int,
+    industry: Optional[str] = None,
 ) -> List[str]:
     """Derive a peer set from the installed screener instead of a hardcoded list.
 
-    Ranks same-sector candidates by how close their market cap is to the target's,
-    so a $400B retailer gets $100-500B peers rather than microcaps. Returns an empty
-    list when the screener is unavailable or the sector is unknown; callers then
-    fall through to the existing tables.
+    When an industry is specified and translates into the screener's vocabulary
+    (or auditable SIC equivalent), candidates from that specific industry are
+    prioritized and ranked by market-cap proximity to the target. If the industry
+    yields fewer than the requested limit, same-sector peers supplement the candidate
+    pool. Falls back to same-sector candidates when the industry vocabulary is
+    unmapped or the industry screener is unavailable (#65).
     """
     slug = _sector_slug(sector)
     if not slug:
         return []
 
-    def _query() -> List[Dict[str, Any]]:
+    target_log = _safe_log10(target_market_cap)
+    if target_log is None:
+        return []
+
+    ind_slug = _industry_slug(industry) if industry else None
+
+    def _query() -> List[str]:
         from openbb import obb  # Imported lazily: heavy, and optional at runtime.
 
-        result = obb.equity.screener(
-            provider="yfinance", region="us", sector=slug, limit=max(limit * 8, 60)
-        )
-        frame = result.to_df()
         filers = _sec_filer_tickers()
-        rows: List[Dict[str, Any]] = []
-        for record in frame.reset_index().to_dict("records"):
-            symbol = str(record.get("symbol") or record.get("index") or "").strip().upper()
-            cap = _to_positive_float(record.get("market_cap"))
-            if not (symbol and cap) or symbol == ticker.upper():
-                continue
-            if not _looks_like_operating_peer(symbol):
-                continue
-            # An empty filer set means the lookup failed; don't silently drop everything.
-            if filers and symbol not in filers:
-                continue
-            rows.append({"symbol": symbol, "market_cap": cap})
-        return rows
+
+        def _collect(frame: Any) -> List[Dict[str, Any]]:
+            rows: List[Dict[str, Any]] = []
+            for record in frame.reset_index().to_dict("records"):
+                symbol = str(record.get("symbol") or record.get("index") or "").strip().upper()
+                cap = _to_positive_float(record.get("market_cap"))
+                if not (symbol and cap) or symbol == ticker.upper():
+                    continue
+                if not _looks_like_operating_peer(symbol):
+                    continue
+                # An empty filer set means the lookup failed; don't silently drop everything.
+                if filers and symbol not in filers:
+                    continue
+                rows.append({"symbol": symbol, "market_cap": cap})
+            return rows
+
+        industry_candidates: List[Dict[str, Any]] = []
+        if ind_slug:
+            try:
+                res = obb.equity.screener(
+                    provider="yfinance",
+                    region="us",
+                    sector=slug,
+                    industry=ind_slug,
+                    limit=max(limit * 8, 60),
+                )
+                industry_candidates = _collect(res.to_df())
+                industry_candidates.sort(key=lambda row: abs(_safe_log10(row["market_cap"]) - target_log))
+            except Exception as e:
+                logger.info(f"Industry screener query failed for {ticker} ({sector}/{ind_slug}): {e}")
+                industry_candidates = []
+
+        if len(industry_candidates) >= limit:
+            return [row["symbol"] for row in industry_candidates[:limit]]
+
+        try:
+            sector_res = obb.equity.screener(
+                provider="yfinance", region="us", sector=slug, limit=max(limit * 8, 60)
+            )
+            sector_candidates = _collect(sector_res.to_df())
+            sector_candidates.sort(key=lambda row: abs(_safe_log10(row["market_cap"]) - target_log))
+        except Exception as e:
+            logger.warning(f"Sector screener query failed for {ticker} ({sector}): {e}")
+            sector_candidates = []
+
+        seen_symbols = {ticker.upper(), *(row["symbol"] for row in industry_candidates)}
+        combined = list(industry_candidates)
+        for row in sector_candidates:
+            if row["symbol"] not in seen_symbols:
+                seen_symbols.add(row["symbol"])
+                combined.append(row)
+                if len(combined) >= limit:
+                    break
+
+        return [row["symbol"] for row in combined[:limit]]
 
     try:
-        candidates = await asyncio.wait_for(asyncio.to_thread(_query), timeout=6.0)
+        candidates = await asyncio.wait_for(asyncio.to_thread(_query), timeout=10.0)
     except Exception as e:  # provider down, empty result, or an unexpected schema
         logger.warning(f"Screener peer derivation failed for {ticker} ({sector}): {e}")
         return []
 
-    if not candidates:
-        return []
-
-    target_log = _safe_log10(target_market_cap)
-    if target_log is None:
-        return []
-    candidates.sort(key=lambda row: abs(_safe_log10(row["market_cap"]) - target_log))
-    return [row["symbol"] for row in candidates[:limit]]
+    return candidates
 PEER_DETAILS_MAX_CONCURRENCY = max(1, int(os.getenv("PEER_DETAILS_MAX_CONCURRENCY", "4")))
 _PEER_BUNDLE_INFLIGHT: Dict[str, asyncio.Task] = {}
 _PEER_BUNDLE_INFLIGHT_LOCK = asyncio.Lock()
@@ -302,6 +641,9 @@ async def _resolve_peer_symbols(
         except Exception:
             pass
 
+    if not industry and market_data:
+        industry = str(market_data.get("sic_description") or market_data.get("sic") or "").strip().lower()
+
     candidates: List[str] = []
     seen = {normalized_ticker}
 
@@ -311,7 +653,7 @@ async def _resolve_peer_symbols(
     derived: List[str] = []
     if sector and target_market_cap > 0:
         derived = await _derive_peer_symbols_from_screener(
-            normalized_ticker, sector, target_market_cap, limit=8
+            normalized_ticker, sector, target_market_cap, limit=8, industry=industry
         )
         for symbol in derived:
             upper = str(symbol).strip().upper()
@@ -356,6 +698,7 @@ def _rank_peer_details(
 ) -> List[Dict[str, Any]]:
     target_sector_norm = str(target_sector or "").strip().lower()
     target_industry_norm = str(target_industry or "").strip().lower()
+    target_industry_slug = _industry_slug(target_industry_norm) if target_industry_norm else None
     target_log_mcap = _safe_log10(target_market_cap)
 
     def score(peer: Dict[str, Any]) -> float:
@@ -374,6 +717,8 @@ def _rank_peer_details(
                 s += 2.4
             elif target_industry_norm in peer_industry or peer_industry in target_industry_norm:
                 s += 1.6
+            elif target_industry_slug and _industry_slug(peer_industry) == target_industry_slug:
+                s += 2.0
 
         if target_sector_norm and peer_sector:
             if target_sector_norm == peer_sector:

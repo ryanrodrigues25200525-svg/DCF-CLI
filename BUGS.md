@@ -7,17 +7,18 @@ product change; it is separate from model-coverage limits listed in
 
 ## GitHub tracker snapshot
 
-Checked on **10 October 2026**: all issues #40–#63 are closed with evidence
-comments; PR #64 is merged to `main` as 2.2.0 (`1f6df8d`). Remaining: draft RFC
-PR #34 (decision pending) and enhancement #65 (derived-peer recall). Each
-confirmed bug below has a matching GitHub issue. This file remains the local
-summary; the GitHub tracker holds the work items. [Open the issue
+Checked on **17 October 2026**: all issues #40–#63 and #65 are closed with
+evidence comments; PR #64 is merged to `main` as 2.2.0 (`1f6df8d`). Remaining:
+draft RFC PR #34 (decision pending). Each confirmed bug below has a matching
+GitHub issue. This file remains the local summary; the GitHub tracker holds the
+work items. [Open the issue
 tracker](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues).
 
 ## Fixed in this update
 
 | Issue | Status | Evidence |
 | --- | --- | --- |
+| Derived peer recall selected peers by coarse sector only, leading to non-comparable peer sets (e.g. `HD` matching `DASH`, `RCL`, `TSLA`). | Fixed in `backend/app/services/finance/peers.py`: `_INDUSTRY_SLUG_BY_DISPLAY` and SIC codes map human-readable and filing classifications to screener industry slugs; candidates prioritize business-comparable peers (`LOW`, `FND`), while zero-industry-match sets continue to fail closed. | [#65](https://github.com/ryanrodrigues25200525-svg/DCF-CLI/issues/65); `test_derived_peer_recall.py` 8/8 |
 | Filing sync discarded valid issuer reports whenever the accession prefix differed from the issuer CIK. The prefix identifies the submitting account and may belong to a filing agent. | Fixed in `model/src/watch/source-sync.ts` | Live AAPL check failed before the fix on accession `0001140361-26-035325` (issuer CIK `0000320193`) and passed after the fix. Endpoint CIK/ticker checks remain. |
 | The live workbook suite embedded a developer-specific LibreOffice path. | Fixed in `model/src/cli.live.test.ts` | The suite now uses the shared `findSoffice()` discovery and a clear `SOFFICE_PATH` setup error. |
 | The public-repo staging helper copied ignored workbooks, database files, and runtime-only files, and omitted useful CLI operations docs. | Fixed in `scripts/prepare_public_repo.sh` | The helper now excludes local artifacts and keeps the checked-in Excel template and project docs. |

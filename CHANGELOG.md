@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
+- Derived comparable peer recall now uses an industry vocabulary translation
+  table (`_INDUSTRY_SLUG_BY_DISPLAY`) and filing SIC codes to prioritize
+  business-comparable candidates in the screener before ranking by market cap
+  (e.g. `HD` matches home-improvement peers like `LOW` and `FND` rather than
+  cruise lines and food delivery), while retaining fallback flagging for
+  zero-industry-match sets (#65).
 - Specialist 10-K facts are now sourced from the filing's XBRL document
   (`xbrl_facts` selectors) for every metric whose tagged fact reproduces the
   parsed value: telecom (AT&T), integrated energy (Exxon), bank (JPMorgan),
