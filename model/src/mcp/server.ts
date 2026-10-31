@@ -274,7 +274,27 @@ async function toolWorkbookReadCells(args: Row): Promise<unknown> {
     return {sheet: (sheet as string).trim(), cell: (cell as string).trim().toUpperCase()};
   });
   const modelsDir = await resolveModelsDir();
-  const workbookPath = join(modelsDir, 'companies', ticker, 'current.xlsx');
+  const target = args['target'] ?? 'accepted';
+  if (target !== 'accepted' && target !== 'candidate') throw err('INVALID_TARGET', 'target must be accepted or candidate');
+  let workbookPath = join(modelsDir, 'companies', ticker, 'current.xlsx');
+  if (target === 'candidate') {
+    if (!libraryDbPresent(modelsDir)) throw err('MODEL_NOT_FOUND', `No pending candidate for ticker ${ticker}`);
+    const { lib } = await loadCandidateStack(modelsDir);
+    try {
+      const candidate = lib.getPendingCandidate(ticker);
+      const id = candidate?.['id'];
+      const hash = candidate?.['workbook_hash'];
+      if (typeof id !== 'string' || !/^cand_[a-zA-Z0-9]+$/.test(id) || typeof hash !== 'string') {
+        throw err('MODEL_NOT_FOUND', `No pending candidate for ticker ${ticker}`);
+      }
+      workbookPath = join(modelsDir, 'companies', ticker, 'candidates', id, 'candidate.xlsx');
+      if (!existsSync(workbookPath) || createHash('sha256').update(readFileSync(workbookPath)).digest('hex') !== hash) {
+        throw err('INVALID_CANDIDATE', 'Candidate workbook is missing or differs from its staged hash');
+      }
+    } finally {
+      closeLib(lib);
+    }
+  }
   if (!existsSync(workbookPath)) throw err('MODEL_NOT_FOUND', `No saved workbook for ticker ${ticker}`);
   try {
     const mod = await import('../workbook/xlsx.js') as {
@@ -917,9 +937,10 @@ const TOOLS: ToolDef[] = [
       offset: { type: 'integer', description: 'Start character within the payload' },
       maxChars: { type: 'integer', description: 'Characters to return (1-20000, default 4000)' },
     }, required: ['ticker'], additionalProperties: false } },
-  { name: 'workbook_read_cells', description: 'Read live workbook values (cached) and formulas for up to 50 sheet/cell refs. Read-only.',
+  { name: 'workbook_read_cells', description: 'Read cached values and formulas for up to 50 cells from the accepted workbook or the pending candidate. Read-only.',
     inputSchema: { type: 'object', properties: {
       ...tickerProp,
+      target: { type: 'string', enum: ['accepted', 'candidate'], description: 'Workbook to read; defaults to accepted' },
       refs: { type: 'array', maxItems: 50, items: {
         type: 'object',
         properties: { sheet: { type: 'string' }, cell: { type: 'string' } },

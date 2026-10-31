@@ -160,12 +160,14 @@ export async function runBuildStaging(args: {
   try {
     const baseUrl = await backend.start();
     const client = new BackendApiClient(baseUrl);
-    unified = await client.getUnifiedCompany(ticker, 5);
-    try {
-      filings = await client.getRecentFilings(ticker, 50);
-    } catch (error) {
-      filings = null;
+    const filingsRequest = client.getRecentFilings(ticker, 50).catch((error: unknown) => {
       stderr.push(`Warning: filings list unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    try {
+      unified = await client.getUnifiedCompany(ticker, 5);
+    } finally {
+      filings = await filingsRequest;
     }
     const cached: BackendPort = {
       getUnifiedCompany: async () => unified,
@@ -177,6 +179,10 @@ export async function runBuildStaging(args: {
     args.hooks?.onBackendStop?.();
   }
   const meta = manifestMeta(unified);
+  if (result.status === 'ready' && result.results.bsImbalanceWarning) {
+    meta.readiness = 'review_required';
+    stderr.push(`Warning: ${result.results.bsImbalanceWarning}`);
+  }
   const built = buildSourceSnapshot(unified);
   const fullSnapshotJson = JSON.stringify({ ...built.snapshot, _ticker: ticker, _fetchedAt: utcNow() });
   // Build gate: stage a pending candidate for AI review + human approval.
@@ -211,10 +217,15 @@ export async function runBuildStaging(args: {
   } else {
     stdout.push('The accepted library copy is unchanged until approval.');
   }
-  stdout.push('Review the export, then record the AI review and approve:');
-  stdout.push(`  dcf model candidate ${ticker}`);
-  stdout.push(`  dcf model candidate-verify ${staged.candidateId} --verification "<freshness, sources, formulas, summary>" --by <name>`);
-  stdout.push(`  dcf model accept ${staged.candidateId} --approve [--by <name>]`);
+  if (meta.readiness === 'review_required') {
+    stdout.push('Resolve the model integrity warning and rebuild before acceptance:');
+    stdout.push(`  dcf model candidate ${ticker}`);
+  } else {
+    stdout.push('Review the export, then record the AI review and approve:');
+    stdout.push(`  dcf model candidate ${ticker}`);
+    stdout.push(`  dcf model candidate-verify ${staged.candidateId} --verification "<freshness, sources, formulas, summary>" --by <name>`);
+    stdout.push(`  dcf model accept ${staged.candidateId} --approve [--by <name>]`);
+  }
   if (meta.accession) stdout.push(`Source: accession ${meta.accession}, filed ${meta.filedDate ?? 'unknown'}.`);
   // The candidate carries the fact-source accession represented by the workbook.
   // If the SEC filings list has something newer, queue it on watch only.

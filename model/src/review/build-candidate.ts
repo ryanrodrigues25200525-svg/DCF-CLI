@@ -396,6 +396,7 @@ export function formatCandidateMarkdown(view: CandidateView): string {
     lines.push(`- Auto-review: ${insp.sheets.length} sheets (${insp.sheets.join(', ') || 'none'}), ${insp.formulaCount} formulas, cached errors: ${insp.cachedErrorCells.length === 0 ? 'none' : insp.cachedErrorCells.slice(0, 10).join(', ')}`);
     if (insp.hasInputRequiredSheet) lines.push(`- Auto-review: Input Required status ${insp.inputRequiredStatus ?? 'blank'}; outputs stay blank while inputs fail`);
     lines.push(`- Auto-review: Data Review rows: ${insp.dataReviewRows}`);
+    for (const note of insp.reviewNotes) lines.push(`- ${note.status} (${note.area || 'Model'}): ${note.note}`);
   } else {
     lines.push('- Auto-review: workbook inspection unavailable (engines missing); review the export directly');
   }
@@ -413,7 +414,9 @@ export function formatCandidateMarkdown(view: CandidateView): string {
     lines.push(`This candidate is ${view.status}; it cannot be verified or accepted.`);
     return lines.join('\n');
   }
-  if (!p.verification) {
+  if (p.readiness === 'review_required') {
+    lines.push('Next: resolve the model integrity warning and rebuild; this candidate cannot be accepted.');
+  } else if (!p.verification) {
     lines.push('Next: record the AI review, then approve:');
     lines.push(`  dcf model candidate-verify ${view.id} --verification "<freshness, sources, formulas, summary>" --by <name>`);
     lines.push(`  dcf model accept ${view.id} --approve [--by <name>]`);
@@ -487,6 +490,9 @@ export async function acceptCandidate(
   if (record.status !== 'pending') throw new Error(`Candidate ${candidateId} is ${record.status}; only pending candidates can be accepted.`);
   const payload = parsePayload(record);
   const ticker = record.ticker;
+  if (payload.readiness === 'review_required') {
+    throw new Error(`Candidate ${candidateId} has a material model integrity warning; resolve it and rebuild before acceptance.`);
+  }
   if (!payload.verification) {
     throw new Error(
       `Candidate ${candidateId} has no recorded AI verification; run \`dcf model candidate-verify ${candidateId} --verification \"...\" --by <name>\` first.`,
