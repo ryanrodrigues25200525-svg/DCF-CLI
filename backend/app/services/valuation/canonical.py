@@ -1395,6 +1395,7 @@ def _filed_absence_line(
     ):
         presented = any(
             _norm(str(row.get("concept") or row.get("standard_concept") or "")) in concept_keys
+            and row.get("is_missing") is not True  # canonical placeholders are expected-absence, not presentation
             for row in rows
         )
         if presented:
@@ -2467,6 +2468,7 @@ def build_canonical_financials(native_financials: Dict[str, Any] | None, market:
         )
         has_nci_row = any(
             _norm(str(row.get("concept") or row.get("standard_concept") or "")) in nci_concept_keys
+            and row.get("is_missing") is not True  # canonical placeholders are expected-absence, not presentation
             for row in balance_rows
         )
         filing = next((

@@ -5,6 +5,47 @@ All notable changes to **DCF CLI** are documented in this file. Early entries de
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Specialist 10-K facts are now sourced from the filing's XBRL document
+  (`xbrl_facts` selectors) for every metric whose tagged fact reproduces the
+  parsed value: telecom (AT&T), integrated energy (Exxon), bank (JPMorgan),
+  P&C insurance (AIG), life insurance (MET/PRU), mature pharma, equity REITs
+  (Prologis), mortgage REITs (AGNC), and asset managers (BLK/TROW, per-ticker
+  member sets). Overlaid facts carry
+  `value from XBRL (<concept> @ <axes>)` provenance in `source_statement` and
+  are converted into the parsed fact's own unit scale (millions, thousands,
+  percent, ratio), so canonical builders, readiness contracts and workbook
+  mappers keep the representation the narrative parser produced; the narrative
+  parser stays the value source for metrics with no reproducing tagged fact
+  (AUM-rollforward lines, FFO bridges, same-store NOI, repo-borrowing tables,
+  subscriber counts), so the overlay can replace but never fabricate.
+- Absence-aware statement rows: `financials_native.statements` now carry
+  `is_missing: true` placeholder rows for canonical concepts the latest annual
+  filing does not report (edgartools structured statements with
+  `include_missing`), each with concept, section, and template occurrence rate.
+  Display grids still use the stitched multi-period faces, absence proofs treat
+  placeholders as expected absence (never as presentation), and canonical
+  output is unchanged.
+
+### Changed
+
+- edgartools upgraded to 5.61.1 with lxml 6.1.3 (native FactQuery columns,
+  `include_missing` statements, attached footnote markers in table labels).
+
+### Fixed
+
+- Statement source facts carry their true per-fact provenance - accession,
+  filing date, and form - read from the edgartools FactQuery columns instead
+  of a year-keyed newest-filing guess, so a comparative year cites both the
+  original filing and the comparative 10-K that repeated it (frames without
+  native columns keep the old fallback).
+- edgartools 5.61 attaches table footnote markers to row labels
+  (`Total Mobility Subscribers1`); the telecom parser now accepts attached and
+  separated markers, restoring AT&T subscriber/churn/broadband extraction.
+
 ## [2.2.0] — 2026-10-08
 
 ### Added
@@ -224,9 +265,9 @@ Initial public desktop release. Published as installers on GitHub Releases (row 
 
 ## Links
 
-- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
+- [Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.2.0...HEAD
 - [2.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v1.3.0...v2.0.0
 - [1.3.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/1.0.0...v1.3.0
 - [1.0.0]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/releases/tag/1.0.0
 
-[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ryanrodrigues25200525-svg/DCF-CLI/compare/v2.2.0...HEAD

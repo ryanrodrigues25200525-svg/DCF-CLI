@@ -6734,7 +6734,7 @@ print(json.dumps({
       const interestExpenseRow = payload.financials_native.statements.income_statement.find(
         (row) => /interest.{0,20}expense/i.test(String(row.concept || row.label || ''))
           && row.concept !== 'NonoperatingIncomeExpense'
-          && row[yearKey] !== null,
+          && typeof row[yearKey] === 'number',
       );
       expect(interestExpenseRow, 'AAPL FY2025 has no separately reported interest-expense row').toBeUndefined();
       expect(canonical.latest.interest_expense?.value, 'missing interest expense remains null').toBeNull();

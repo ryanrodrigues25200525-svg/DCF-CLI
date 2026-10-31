@@ -8,6 +8,13 @@ export interface NativeStatementRow {
     standard_concept?: string | null;
     level?: number | null;
     decimals?: number | null;
+    row_id?: string | null;
+    statement?: string | null;
+    /** True for canonical placeholders: concepts the annual filing is expected
+     * to report but does not. Display grids never contain these rows. */
+    is_missing?: boolean;
+    /** Occurrence rate of the canonical concept in the learned template. */
+    confidence?: number | null;
     [key: string]: NativeStatementCell | undefined;
 }
 
