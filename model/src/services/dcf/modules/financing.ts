@@ -125,7 +125,7 @@ export function calculateFinancing(params: FinancingParams): FinancingResult {
         } else if (loopCash > maxCashBalance && loopDebt > 0) {
             const excess = loopCash - maxCashBalance;
             const repayment = Math.min(excess, loopDebt);
-            debtRepayment = repayment;
+            debtRepayment += repayment;
             loopDebt -= repayment;
             loopCash -= repayment;
         }

@@ -179,8 +179,8 @@ export function calculateDCF(
         // Total Assets
         const totalAssetsComponent = totalCurrentAssetsComponent + nonCurrentAssetsComponent;
 
-        // Current Liabilities = AP + Deferred Revenue + Other Current
-        const currentLiabilitiesComponent = accountsPayableComponent + deferredRevenueComponent + otherCurrentLiabilitiesComponent;
+        // Current liabilities include the current portion of debt.
+        const currentLiabilitiesComponent = shortTermDebtComponent + accountsPayableComponent + deferredRevenueComponent + otherCurrentLiabilitiesComponent;
         // Non-Current Liabilities = LT Debt + Other Non-Current
         const nonCurrentLiabilitiesComponent = longTermDebtComponent + otherLiabilitiesComponent;
         // Total Liabilities = Current + Non-Current

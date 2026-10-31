@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Forecast current liabilities now include current debt, and reported debt repayment includes scheduled amortization when excess cash also repays debt. Candidates with a material projected balance-sheet imbalance are marked `review_required` and cannot be accepted until rebuilt without the integrity warning.
+- MCP `workbook_read_cells` can read the hash-checked pending candidate, so an assistant can inspect formulas before acceptance.
+- Candidate inspection surfaces warning rows from standard three-column Data Review sheets; this is not a substitute for AI or financial review.
+- Build staging overlaps the independent company-data and filings-list requests while retaining filing identity checks and warning on filing-list failures.
 - Derived comparable peer recall now uses an industry vocabulary translation
   table (`_INDUSTRY_SLUG_BY_DISPLAY`) and filing SIC codes to prioritize
   business-comparable candidates in the screener before ranking by market cap
