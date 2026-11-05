@@ -183,6 +183,11 @@ export async function runBuildStaging(args: {
     meta.readiness = 'review_required';
     stderr.push(`Warning: ${result.results.bsImbalanceWarning}`);
   }
+  if (result.status === 'unsupported') {
+    // A refused issuer still stages a reviewable status workbook, but a
+    // valuation-less model must never be promoted: keep the acceptance gate closed.
+    meta.readiness = 'review_required';
+  }
   const built = buildSourceSnapshot(unified);
   const fullSnapshotJson = JSON.stringify({ ...built.snapshot, _ticker: ticker, _fetchedAt: utcNow() });
   // Build gate: stage a pending candidate for AI review + human approval.
@@ -218,8 +223,13 @@ export async function runBuildStaging(args: {
     stdout.push('The accepted library copy is unchanged until approval.');
   }
   if (meta.readiness === 'review_required') {
-    stdout.push('Resolve the model integrity warning and rebuild before acceptance:');
-    stdout.push(`  dcf model candidate ${ticker}`);
+    if (result.status === 'unsupported') {
+      stdout.push('This issuer has no production valuation route; the staged workbook records the refusal and cannot be accepted:');
+      stdout.push(`  ${result.unsupported.reason}`);
+    } else {
+      stdout.push('Resolve the model integrity warning and rebuild before acceptance:');
+      stdout.push(`  dcf model candidate ${ticker}`);
+    }
   } else {
     stdout.push('Review the export, then record the AI review and approve:');
     stdout.push(`  dcf model candidate ${ticker}`);

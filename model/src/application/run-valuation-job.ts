@@ -22,6 +22,8 @@ import type {
   IncompleteBiotechModelExportData,
   IncompleteLifeInsuranceModelExportData,
   IncompleteDcfExportPayload,
+  UnsupportedDcfExportPayload,
+  UnsupportedExportClassification,
   ModelAssumptions,
   WorkbookInputRequirement,
 } from '@/services/exporters/excel/types';
@@ -37,7 +39,7 @@ import {
   mapCanonicalPharmaFinancialsToHistoricals,
   mapNativeProfile,
 } from '@/services/integration/sec/native-normalizer';
-import { formatCliInputRequiredSuccess, formatCliSuccess, getAnnualHistoryDisclosure, getRevenueHistoryError } from '@/services/cli-preflight';
+import { formatCliInputRequiredSuccess, formatCliSuccess, formatCliUnsupportedSuccess, getAnnualHistoryDisclosure, getRevenueHistoryError } from '@/services/cli-preflight';
 import { calculateRoutedValuation } from '@/services/valuation/router';
 import {resolveLifeSourceContract} from '@/services/valuation/life-source-contract.js';
 import { buildOperatingModelProfile } from '@/services/valuation/operating-model';
@@ -98,7 +100,21 @@ export interface IncompleteValuationJobResult extends ValuationJobResultBase {
   exportPayload: IncompleteDcfExportPayload;
 }
 
-export type ValuationJobResult = ReadyValuationJobResult | IncompleteValuationJobResult;
+/**
+ * The engine produced no valuation because the issuer has no production route.
+ *
+ * Fail-closed is not the same as silent: the candidate still stages a workbook
+ * that records the classification, the refused model, and the reason, so the
+ * gap is reviewable instead of appearing as a missing ticker.
+ */
+export interface UnsupportedValuationJobResult extends ValuationJobResultBase {
+  status: 'unsupported';
+  results: null;
+  unsupported: UnsupportedExportClassification;
+  exportPayload: UnsupportedDcfExportPayload;
+}
+
+export type ValuationJobResult = ReadyValuationJobResult | IncompleteValuationJobResult | UnsupportedValuationJobResult;
 
 /** Fail closed instead of wall-clock-dating sources when the backend omits its valuation date (#55). */
 export function requireValuationAsOfDate(data: Pick<NativeUnifiedPayload, 'valuation_context'>): string {
@@ -1743,12 +1759,81 @@ export function buildIncompleteExportPayload(
   };
 }
 
+/**
+ * Classification the workbook and CLI both report for an issuer the engine
+ * refuses to value: never a silent skip, never a substitute model.
+ */
+export function buildUnsupportedClassification(eligibility: ModelEligibility): UnsupportedExportClassification {
+  const reason = eligibility.blocked_models.find((item) => item.reason?.trim())?.reason?.trim()
+    || `${eligibility.company_type} companies are not supported by the current DCF model.`;
+  return {
+    companyType: eligibility.company_type,
+    ...(eligibility.subtype ? {subtype: eligibility.subtype} : {}),
+    attemptedModel: eligibility.preferred_model,
+    reason,
+  };
+}
+
+/** Single Data Review sentence shared by the workbook warning and CLI output. */
+export function unsupportedReviewNote(classification: UnsupportedExportClassification): string {
+  const reason = classification.reason.trim().replace(/\.+$/, '');
+  return `Model status: no valuation produced. ${reason || 'This issuer has no production valuation route'}. `
+    + `The ${classification.attemptedModel} workbook was not built and no substitute model was applied.`;
+}
+
+/** Status-only workbook: records why no valuation exists instead of dropping the issuer. */
+export function buildUnsupportedExportPayload(
+  data: NativeUnifiedPayload,
+  profile: CompanyProfile,
+  eligibility: ModelEligibility,
+): UnsupportedDcfExportPayload {
+  const unsupported = buildUnsupportedClassification(eligibility);
+  const contextDate = data.valuation_context.as_of_date;
+  const asOfDate = contextDate && /^20\d{2}-\d{2}-\d{2}$/.test(contextDate)
+    ? contextDate
+    // A status record cites no valuation source, so it carries the record date;
+    // this is not a sourced date and never back-dates market or filing data.
+    : new Date().toISOString().slice(0, 10);
+  return {
+    buildStatus: 'unsupported',
+    company: {
+      name: profile.name,
+      ticker: profile.ticker,
+      exchange: profile.exchange,
+      cik: profile.cik,
+      currency: profile.currency || data.canonical_financials.currency || 'USD',
+      unitsScale: 'millions',
+      asOfDate,
+      fiscalYearEnd: profile.fiscalYearEnd,
+      sector: profile.sector,
+      industry: profile.industry,
+      operatingArchetype: profile.operatingArchetype,
+    },
+    unsupported,
+    uiMeta: {
+      printDate: asOfDate,
+      warnings: [unsupportedReviewNote(unsupported)],
+    },
+  };
+}
+
 export async function runValuationJob(ticker: string, backend: BackendPort): Promise<ValuationJobResult> {
   const data = await backend.getUnifiedCompany(ticker, 5);
   const eligibility = data.model_eligibility;
   if (eligibility.status === 'unsupported') {
-    const reason = eligibility.blocked_models.find((item) => item.reason)?.reason;
-    throw new Error(reason || `${eligibility.company_type} companies are not supported by the current DCF model.`);
+    const profile = mapNativeProfile(data.profile, data.financials_native, data.market);
+    if (!profile.ticker) throw new Error(`The backend returned no usable profile for ${ticker}.`);
+    const exportPayload = buildUnsupportedExportPayload(data, profile, eligibility);
+    const workbookBytes = await backend.exportDcf(exportPayload);
+    return {
+      status: 'unsupported',
+      profile,
+      results: null,
+      unsupported: exportPayload.unsupported,
+      exportPayload,
+      workbookBytes,
+      warnings: [unsupportedReviewNote(exportPayload.unsupported)],
+    };
   }
 
   if (eligibility.status === 'input_required') {
@@ -2298,6 +2383,15 @@ let comparablePeerTickers: string[] | undefined;
 }
 
 export function formatValuationJobSuccess(result: ValuationJobResult, outputPath: string): string {
+  if (result.status === 'unsupported') {
+    return formatCliUnsupportedSuccess(
+      result.profile.name,
+      result.profile.ticker,
+      outputPath,
+      result.unsupported.reason,
+      result.unsupported.attemptedModel,
+    );
+  }
   if (result.status === 'input_required') {
     return formatCliInputRequiredSuccess(
       result.profile.name,

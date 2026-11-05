@@ -82,6 +82,13 @@ GENERIC_OPERATING_ARCHETYPES = frozenset({
 # workbook mappers all consume this (mirrors TS COMPARABLE_VALUATION_METHODS).
 COMPARABLE_VALUATION_METHODS = frozenset({"ev_ebitda", "revenue_multiple"})
 
+# Specialist subtypes whose business model has no production route at all. The
+# classifier records the preferred model for auditability, but an input-required
+# shell is wrong for them: an analyst filling in "commercial bank" readiness
+# fields would be modelling a business the issuer does not run. They stay
+# unsupported, and the workbook reports the gap instead of inviting inputs.
+EXPLICITLY_UNSUPPORTED_SUBTYPES = frozenset({"investment_bank", "other_financial"})
+
 
 class BlockedModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -207,7 +214,10 @@ class ModelEligibility(BaseModel):
                         value["missing_input_gaps"] = gaps
                         route_available = True
                         value["model_route_available"] = True
-                elif current_preferred in PRODUCTION_MODEL_ROUTES:
+                elif (
+                    current_preferred in PRODUCTION_MODEL_ROUTES
+                    and value.get("subtype") not in EXPLICITLY_UNSUPPORTED_SUBTYPES
+                ):
                     if current_preferred not in allowed_models:
                         value["allowed_models"] = [*allowed_models, current_preferred]
                     gaps = value.get("missing_input_gaps")

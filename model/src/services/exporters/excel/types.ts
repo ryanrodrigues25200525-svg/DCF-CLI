@@ -506,7 +506,29 @@ export interface IncompleteDcfExportPayload {
     uiMeta?: UiMeta;
 }
 
-export type DcfWorkbookPayload = DcfExportPayload | IncompleteDcfExportPayload;
+export type DcfWorkbookPayload = DcfExportPayload | IncompleteDcfExportPayload | UnsupportedDcfExportPayload;
+
+/**
+ * Why the engine produced no valuation for this issuer.
+ *
+ * An issuer whose business model has no production route is reported as
+ * unsupported; the workbook records the classification and the model that was
+ * refused instead of a value.
+ */
+export interface UnsupportedExportClassification {
+    companyType: string;
+    subtype?: string;
+    attemptedModel: PreferredValuationModel;
+    reason: string;
+}
+
+export interface UnsupportedDcfExportPayload {
+    buildStatus: 'unsupported';
+    requiredInputs?: [];
+    company: CompanyInfo;
+    unsupported: UnsupportedExportClassification;
+    uiMeta?: UiMeta;
+}
 
 export interface ComparableModelExportData {
     method: 'ev_ebitda' | 'revenue_multiple';

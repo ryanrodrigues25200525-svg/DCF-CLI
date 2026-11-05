@@ -44,12 +44,15 @@ def _strip_cell_comments(workbook: Workbook) -> None:
 
 def export_dcf_excel(payload: dict) -> bytes:
     """Build an Excel workbook from the validated template and DCF payload."""
+    build_status = payload.get("buildStatus", "ready")
     incomplete_operating_dcf = (
-        payload.get("buildStatus", "ready") == "input_required"
+        build_status == "input_required"
         and payload.get("valuationModel") == "unlevered_dcf"
         and isinstance(payload.get("assumptions"), dict)
     )
-    if payload.get("buildStatus", "ready") == "input_required" and not incomplete_operating_dcf:
+    # An unsupported issuer gets a status-only workbook: loading the DCF
+    # template would leave a full model with no inputs behind the status sheet.
+    if build_status in {"input_required", "unsupported"} and not incomplete_operating_dcf:
         workbook = Workbook()
         loop_mode = "current_equity"
     else:
