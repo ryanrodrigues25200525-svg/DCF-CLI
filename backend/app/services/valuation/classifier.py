@@ -1061,11 +1061,22 @@ def classify_company(
             supported_by_current_engine=eligible,
         )
 
-    if metadata.get("is_financial_institution") or any(token in text for token in ("bank", "depository", "commercial banks", "savings institution", "credit services")):
-        investment_bank = any(token in text for token in (
-            "investment bank", "investment banking", "capital markets", "security brokers",
-            "securities brokers", "broker-dealer", "broker dealer", "investment services",
-        ))
+    # Broker-dealers carry no deposit vocabulary: their SEC industry and SIC
+    # description name securities underwriting/trading ("Capital Markets",
+    # "Security Brokers, Dealers, and Flotation Companies"). Without these
+    # tokens a broker-dealer skips the financial-institution branch entirely and
+    # is handed an operating-company DCF that its capital structure invalidates.
+    _BROKER_DEALER_TOKENS = (
+        "investment bank", "investment banking", "capital markets", "security brokers",
+        "securities brokers", "broker-dealer", "broker dealer", "brokerage",
+        "investment services",
+    )
+    if (
+        metadata.get("is_financial_institution")
+        or sic_code == 6211  # SEC SIC: Security Brokers, Dealers, and Flotation Companies
+        or any(token in text for token in ("bank", "depository", "commercial banks", "savings institution", "credit services", *_BROKER_DEALER_TOKENS))
+    ):
+        investment_bank = any(token in text for token in _BROKER_DEALER_TOKENS)
         has_deposits = isinstance((latest.get("bank") or {}).get("deposits"), dict) and (latest.get("bank") or {}).get("deposits", {}).get("value") is not None
         subtype = "investment_bank" if investment_bank else "commercial_bank" if has_deposits or any(
             token in text for token in ("commercial bank", "commercial banking", "national bank", "regional bank", "money center")
@@ -1118,13 +1129,19 @@ def classify_company(
         readiness["dated_market_context"] = bool(
             re.fullmatch(r"20\d{2}-\d{2}-\d{2}", str(valuation_context.get("as_of_date") or ""))
         )
+        missing_inputs = [name for name, ready in readiness.items() if not ready]
         if subtype == "investment_bank":
             blocked_reason = "Investment-bank valuation is unsupported; the commercial-bank operating and capital model does not apply to broker-dealers."
         elif subtype != "commercial_bank":
             blocked_reason = "This financial-institution subtype is unsupported by the commercial-bank model."
         else:
-            missing_inputs = [name for name, ready in readiness.items() if not ready]
             blocked_reason = "Commercial bank model is blocked because required filed or live inputs are incomplete: " + ", ".join(missing_inputs) + "." if missing_inputs else ""
+        commercial_ready = subtype == "commercial_bank" and not missing_inputs
+        # An unsupported subtype is declared unsupported, not forwarded as an
+        # input-required commercial bank: there is no bank route to complete.
+        # Every other status is derived centrally in ModelEligibility so its
+        # route-offering invariant stays in one place.
+        unsupported = subtype != "commercial_bank"
         if subtype == "other_financial":
             # Payment networks and credit-services issuers are operating
             # companies at their core; when the commercial-bank model's inputs
@@ -1152,13 +1169,14 @@ def classify_company(
             company_type="bank",
             preferred_model="bank_residual_income",
             subtype=subtype,
+            **({"status": "unsupported"} if unsupported else {}),
             required_input_readiness=readiness,
-            allowed_models=["bank_residual_income"] if subtype == "commercial_bank" and not missing_inputs else [],
-            blocked_models=[] if subtype == "commercial_bank" and not missing_inputs else [
+            allowed_models=["bank_residual_income"] if commercial_ready else [],
+            blocked_models=[] if commercial_ready else [
                 BlockedModel(model="bank_residual_income", reason=blocked_reason),
                 BlockedModel(model="unlevered_dcf", reason="Bank debt is operating capital; FCFF enterprise-value DCF is not appropriate."),
             ],
-            supported_by_current_engine=subtype == "commercial_bank" and not missing_inputs,
+            supported_by_current_engine=commercial_ready,
         )
 
     if any(token in text for token in ("reit", "real estate investment trust")):

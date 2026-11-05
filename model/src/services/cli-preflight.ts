@@ -26,6 +26,22 @@ export function formatCliSuccess(companyName: string, ticker: string, outputPath
   return `${companyName} (${ticker})\nWorkbook: ${outputPath}`;
 }
 
+export function formatCliUnsupportedSuccess(
+  companyName: string,
+  ticker: string,
+  outputPath: string,
+  reason: string,
+  attemptedModel: string,
+): string {
+  return [
+    `${companyName} (${ticker})`,
+    `Workbook: ${outputPath}`,
+    'Status: UNSUPPORTED — no valuation was calculated.',
+    `Reason: ${reason}`,
+    `Model refused: ${attemptedModel}. No substitute model was applied.`,
+  ].join('\n');
+}
+
 export function formatCliInputRequiredSuccess(
   companyName: string,
   ticker: string,

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Issuers with no production valuation route (broker-dealers such as `GS`/`MS`,
+  and other financial-institution subtypes) now build a status-only workbook
+  instead of failing the run: a `Model Status` sheet records the company type,
+  subtype, refused model, and blocking reason, `Data Review` carries the same
+  sentence as a review note, and the CLI prints `Status: UNSUPPORTED` rather
+  than a valuation summary. The staged candidate is always `review_required`,
+  so a workbook with no valuation can never be accepted. Unsupported export
+  payloads reject any valuation model, market, historicals, assumptions, or
+  forecasts.
+- The classifier recognises broker-dealers by SEC SIC 6211 and by
+  capital-markets/underwriting vocabulary (`Capital Markets`, `Security Brokers,
+  Dealers, and Flotation Companies`), so they are classified `unsupported`
+  instead of being handed an operating-company DCF; commercial banks keep their
+  `input_required` route.
+
+- Forecast current liabilities now include current debt, and reported debt repayment includes scheduled amortization when excess cash also repays debt. Candidates with a material projected balance-sheet imbalance are marked `review_required` and cannot be accepted until rebuilt without the integrity warning.
+- MCP `workbook_read_cells` can read the hash-checked pending candidate, so an assistant can inspect formulas before acceptance.
+- Candidate inspection surfaces warning rows from standard three-column Data Review sheets; this is not a substitute for AI or financial review.
+- Build staging overlaps the independent company-data and filings-list requests while retaining filing identity checks and warning on filing-list failures.
 - Derived comparable peer recall now uses an industry vocabulary translation
   table (`_INDUSTRY_SLUG_BY_DISPLAY`) and filing SIC codes to prioritize
   business-comparable candidates in the screener before ranking by market cap
@@ -41,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Forecast balance sheets now carry the filed net residual of asset and
+  liability lines the engine does not roll forward (intangibles, ROU assets,
+  operating-lease liabilities, memo overlaps), so the projected balance sheet
+  anchors to filed totals instead of opening with a structural gap. Debt is
+  measured against `initialDebt`, matching `normalizeAssumptions` when it
+  rebases filed debt to a leverage-implied level.
+- Marketable securities now roll from their filed balance and their change is
+  an investing cash flow, so a growing securities balance is funded rather than
+  appearing from nowhere; the working-capital intensity overlay is carried on
+  the balance sheet instead of being left as a phantom liability.
 - Statement source facts carry their true per-fact provenance - accession,
   filing date, and form - read from the edgartools FactQuery columns instead
   of a year-keyed newest-filing guess, so a comparative year cites both the

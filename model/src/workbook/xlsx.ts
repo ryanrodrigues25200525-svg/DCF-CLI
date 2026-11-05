@@ -29,6 +29,7 @@ export interface WorkbookInspection {
   /** cached B3 value if sheet present */
   inputRequiredStatus: string | null;
   dataReviewRows: number;
+  reviewNotes: Array<{ status: string; area: string; note: string }>;
 }
 
 const CELL_RE = /^[A-Z]{1,3}[1-9][0-9]{0,6}$/i;
@@ -206,6 +207,7 @@ sheets = list(wb.sheetnames)
 formula_count = 0
 input_b3_formula = None
 data_review_rows = 0
+review_notes = []
 for ws in wb.worksheets:
     for row in ws.iter_rows():
         for c in row:
@@ -227,6 +229,10 @@ if "Data Review" in wb.sheetnames:
                     n += 1
                     break
         data_review_rows = n
+        for row in ws.iter_rows(min_col=1, max_col=3, values_only=True):
+            status, area, note = row
+            if isinstance(status, str) and status.strip().upper() in ("REVIEW", "WARNING", "ERROR", "INPUT REQUIRED", "SOURCE REQUIRED") and isinstance(note, str) and note.strip():
+                review_notes.append({"status": status.strip(), "area": str(area or ""), "note": note.strip()})
     except Exception:
         data_review_rows = 0
 wb.close()
@@ -260,6 +266,7 @@ print(json.dumps({
     "cachedErrorCells": errors,
     "hasInputRequiredSheet": has_input,
     "inputRequiredStatus": status,
+    "reviewNotes": review_notes,
     "dataReviewRows": data_review_rows,
 }))
 `;
@@ -403,7 +410,8 @@ function isInspection(o: unknown): o is WorkbookInspection {
     Array.isArray(r["cachedErrorCells"]) &&
     typeof r["hasInputRequiredSheet"] === "boolean" &&
     (typeof r["inputRequiredStatus"] === "string" || r["inputRequiredStatus"] === null) &&
-    typeof r["dataReviewRows"] === "number"
+    typeof r["dataReviewRows"] === "number" &&
+    Array.isArray(r["reviewNotes"])
   );
 }
 

@@ -67,10 +67,13 @@ export function calculateDCF(
 
     let state = {
         cash: safeGet(historicals.cash, lastIdx, 0),
+        marketableSecurities: safeGet(historicals.marketableSecurities, lastIdx, 0),
         debt: initialDebt,
+        // Days-based filed NWC only: the intensity overlay accrues through
+        // funded forecast flows from a zero starting level, so it never opens
+        // an unfunded gap in the balance-sheet check.
         nwc: (safeGet(historicals.accountsReceivable, lastIdx, 0) + safeGet(historicals.inventory, lastIdx, 0))
-            - safeGet(historicals.accountsPayable, lastIdx, 0)
-            + (assumptions.nwcChangeRatio ?? 0) * safeGet(historicals.revenue, lastIdx, 0),
+            - safeGet(historicals.accountsPayable, lastIdx, 0),
         ppeNet: safeGet(historicals.ppeNet, lastIdx, 0),
         retainedEarnings: safeGet(historicals.retainedEarnings, lastIdx, 0),
         cumulativeBuybacks: 0,
@@ -81,6 +84,25 @@ export function calculateDCF(
         prevInvestedCapital: (safeGet(historicals.ppeNet, lastIdx, 0) + ((safeGet(historicals.accountsReceivable, lastIdx, 0) + safeGet(historicals.inventory, lastIdx, 0)) - safeGet(historicals.accountsPayable, lastIdx, 0))) + safeGet(historicals.otherAssets, lastIdx, 0) - safeGet(historicals.otherLiabilities, lastIdx, 0)
     };
 
+    // Anchor the forecast balance sheet to filed totals. Asset and liability
+    // line items the engine does not roll forward (intangibles, ROU assets,
+    // operating-lease liabilities, memo overlaps) are carried as a single fixed
+    // net residual on non-current assets. Debt is measured at the engine's
+    // starting debt (initialDebt): normalizeAssumptions may rebase filed debt
+    // to a leverage-implied level, and the residual must share the forecast's
+    // starting basis or the check opens by the rebase amount.
+    const filedResidualNetAssets =
+        (safeGet(historicals.totalAssets, lastIdx, 0)
+        - safeGet(historicals.cash, lastIdx, 0)
+        - safeGet(historicals.marketableSecurities, lastIdx, 0)
+        - (safeGet(historicals.accountsReceivable, lastIdx, 0) + safeGet(historicals.inventory, lastIdx, 0))
+        - safeGet(historicals.otherCurrentAssets, lastIdx, 0)
+        - safeGet(historicals.ppeNet, lastIdx, 0)
+        - safeGet(historicals.otherAssets, lastIdx, 0))
+        - (safeGet(historicals.totalLiabilities, lastIdx, 0)
+        - (safeGet(historicals.accountsPayable, lastIdx, 0) + safeGet(historicals.deferredRevenue, lastIdx, 0) + safeGet(historicals.otherCurrentLiabilities, lastIdx, 0))
+        - initialDebt
+        - safeGet(historicals.otherLiabilities, lastIdx, 0));
     // Get beginning equity directly from historicals to ensure balance sheet balances
     const beginningEquity = safeGet(historicals.shareholdersEquity, lastIdx, 0);
     const beginningRetainedEarnings = safeGet(historicals.retainedEarnings, lastIdx, 0);
@@ -116,6 +138,11 @@ export function calculateDCF(
         // Module 3: Working Capital
         const wc = projectWorkingCapital(is.revenue, is.costOfRevenue, assumptions, state.nwc);
 
+        // Marketable-securities roll: the revenue-scaled balance is an investing
+        // cash event (purchase when growing, sale when shrinking).
+        const marketableSecuritiesBalance = is.revenue * marketableSecuritiesRatio;
+        const marketableSecuritiesChange = marketableSecuritiesBalance - state.marketableSecurities;
+
         // SBC Logic (Shared for now)
         const sbcPct = safeGet(historicals.stockBasedComp, lastIdx, 0) / safeGet(historicals.revenue, lastIdx, 1);
         const sbc = is.revenue * (sbcPct || 0.02);
@@ -126,7 +153,7 @@ export function calculateDCF(
             depreciation: fa.depreciation,
             stockBasedComp: sbc,
             nwcChange: wc.nwcChange,
-            cfi: -fa.capex,
+            cfi: -fa.capex - marketableSecuritiesChange,
             beginningDebt: state.debt,
             beginningCash: state.cash,
             beginningRetainedEarnings: state.retainedEarnings,
@@ -158,7 +185,7 @@ export function calculateDCF(
         // === BALANCE SHEET CALCULATIONS ===
         // Calculate components first
         const cashComponent = finance.finalCash;
-        const marketableSecuritiesComponent = is.revenue * marketableSecuritiesRatio;
+        const marketableSecuritiesComponent = marketableSecuritiesBalance;
         const accountsReceivableComponent = wc.accountsReceivable;
         const inventoryComponent = wc.inventory;
         const otherCurrentAssetsComponent = safeGet(historicals.otherCurrentAssets, lastIdx, 0);
@@ -172,15 +199,18 @@ export function calculateDCF(
         const longTermDebtComponent = finance.longTermDebt;
         const otherLiabilitiesComponent = safeGet(historicals.otherLiabilities, lastIdx, 0);
 
-        // Current Assets = Cash + AR + Inventory + Other Current
-        const totalCurrentAssetsComponent = cashComponent + marketableSecuritiesComponent + accountsReceivableComponent + inventoryComponent + otherCurrentAssetsComponent;
+        // Current Assets = Cash + Securities + AR + Inventory + Other Current.
+        // The NWC intensity overlay is an operating-capital commitment funded
+        // through CFO, so its level is carried here instead of left phantom.
+        const nwcOverlayComponent = wc.intensityOverlay ?? 0;
+        const totalCurrentAssetsComponent = cashComponent + marketableSecuritiesComponent + accountsReceivableComponent + inventoryComponent + otherCurrentAssetsComponent + nwcOverlayComponent;
         // Non-Current Assets = PPE + Other Non-Current
-        const nonCurrentAssetsComponent = ppeNetComponent + otherAssetsComponent;
+        const nonCurrentAssetsComponent = ppeNetComponent + otherAssetsComponent + filedResidualNetAssets;
         // Total Assets
         const totalAssetsComponent = totalCurrentAssetsComponent + nonCurrentAssetsComponent;
 
-        // Current Liabilities = AP + Deferred Revenue + Other Current
-        const currentLiabilitiesComponent = accountsPayableComponent + deferredRevenueComponent + otherCurrentLiabilitiesComponent;
+        // Current liabilities include the current portion of debt.
+        const currentLiabilitiesComponent = shortTermDebtComponent + accountsPayableComponent + deferredRevenueComponent + otherCurrentLiabilitiesComponent;
         // Non-Current Liabilities = LT Debt + Other Non-Current
         const nonCurrentLiabilitiesComponent = longTermDebtComponent + otherLiabilitiesComponent;
         // Total Liabilities = Current + Non-Current
@@ -294,6 +324,7 @@ export function calculateDCF(
         // Update state
         state = {
             cash: finance.finalCash,
+            marketableSecurities: marketableSecuritiesBalance,
             debt: finance.totalDebt,
             nwc: wc.nwc,
             ppeNet: fa.endingPpeNet,

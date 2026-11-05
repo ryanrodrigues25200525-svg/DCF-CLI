@@ -265,5 +265,8 @@ async def _enrich_peers_if_needed(payload: dict[str, Any], services: RuntimeServ
 
 
 async def export_workbook(payload: dict[str, Any], services: RuntimeServices) -> bytes:
+    if payload.get("buildStatus") == "unsupported":
+        # No valuation means no peer set: enriching one would imply a comps route.
+        return await asyncio.to_thread(services.workbook.export, payload)
     enriched = await _enrich_peers_if_needed(payload, services)
     return await asyncio.to_thread(services.workbook.export, enriched)

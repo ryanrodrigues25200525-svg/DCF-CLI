@@ -1603,6 +1603,21 @@ class ExportUiMeta(ExportWireModel):
     source_notes: list[str] | None = None
 
 
+class UnsupportedExport(ExportWireModel):
+    """Why the engine produced no valuation for this issuer.
+
+    An issuer whose business model has no production route is reported as
+    unsupported rather than forced through a model that does not describe it.
+    The exported workbook records the classification and the reason instead of
+    a value, and names the model that was refused.
+    """
+
+    company_type: str = Field(min_length=1)
+    subtype: str | None = None
+    attempted_model: PreferredModel
+    reason: str = Field(min_length=1)
+
+
 class WorkbookInputRequirement(ExportWireModel):
     key: str = Field(min_length=1)
     label: str = Field(min_length=1)
@@ -1901,9 +1916,10 @@ def _biotech_model_other_asset(asset: PipelineAssetNativeFact) -> bool:
 
 
 class DcfExportRequest(ExportWireModel):
-    build_status: Literal["ready", "input_required"] = "ready"
+    build_status: Literal["ready", "input_required", "unsupported"] = "ready"
     required_inputs: list[WorkbookInputRequirement] = Field(default_factory=list)
     company: ExportCompany
+    unsupported: UnsupportedExport | None = None
     market: ExportMarket | None = None
     historicals: HistoricalFinancials | None = None
     canonical_financials: CanonicalFinancials | None = None
@@ -1931,6 +1947,25 @@ class DcfExportRequest(ExportWireModel):
 
     @model_validator(mode="after")
     def require_standard_dcf_forecasts(self) -> DcfExportRequest:
+        if self.build_status == "unsupported":
+            # No valuation: the request records the classification and refuses
+            # to carry the inputs a valuation would have used, so nothing
+            # downstream can quietly calculate one.
+            if self.unsupported is None:
+                raise ValueError("unsupported exports must record company type, attempted model, and reason")
+            if self.required_inputs:
+                raise ValueError("unsupported exports cannot request workbook inputs")
+            if self.valuation_model is not None:
+                raise ValueError("unsupported exports cannot select a valuation model")
+            if self.assumptions is not None or self.market is not None:
+                raise ValueError("unsupported exports cannot carry valuation inputs")
+            if any(any(value is not None for value in (
+                forecast.revenue, forecast.ebit, forecast.ebitda, forecast.ufcf, forecast.fcff,
+            )) for forecast in self.forecasts):
+                raise ValueError("unsupported exports cannot include forecast values")
+            return self
+        if self.unsupported is not None:
+            raise ValueError("unsupported classification is only valid with buildStatus=unsupported")
         if self.build_status == "input_required":
             if self.valuation_model is None or self.valuation_model not in PRODUCTION_MODEL_ROUTES:
                 raise ValueError("input-required exports need an implemented production model route")

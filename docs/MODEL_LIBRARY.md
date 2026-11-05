@@ -58,7 +58,7 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf model preview <proposal-id>` | Reviews a proposal without publishing: edits a copy, recalculates, validates, and records the reviewed changes hash. Must precede apply for the same edits |
 | `dcf model apply <id> --approve [--by name]` | Promotes exactly the previewed edits as a new revision (fails closed without a matching preview). Retains route/readiness/source context with rollback on failure |
 | `dcf model reject <id> [--reason text]` | Status-only rejection; workbook unchanged |
-| `dcf model candidate <ticker>` | Shows the pending build/update candidate: staged hash, route/readiness, source accession, mapped period, base revision, verification status |
+| `dcf model candidate <ticker>` | Shows the pending build/update candidate: staged hash, route/readiness, source accession, mapped period, base revision, verification status, and warning notes from standard three-column Data Review sheets. These notes are not an AI review or a financial correctness guarantee. |
 | `dcf model candidate-verify <id> --verification <text> --by <name>` | Records the AI review result (freshness, sources, formulas, summary; minimum 40 chars). Does not publish |
 | `dcf model accept <id> --approve [--by name]` | Promotes a verified pending candidate to the accepted revision. Requires recorded verification; stale bases and manual edits fail closed |
 | `dcf model candidate-reject <id> [--reason text]` | Status-only candidate rejection; the accepted library is never touched |
@@ -71,6 +71,10 @@ Each company lives under `companies/<TICKER>/`:
 | `dcf watch pause <ticker>` / `dcf watch resume <ticker>` | Pause/resume flagging without losing state |
 | `dcf config models-dir [--set <dir>]` | Show or persist the library root |
 | `dcf mcp` | Start the local stdio MCP server |
+
+Build candidates with a material projected balance-sheet imbalance are marked
+`review_required` and include the warning in CLI output. They cannot be
+accepted; resolve the integrity issue and rebuild first.
 
 The legacy `dcfbuild [<ticker>]` form (no library subcommand) keeps the
 standalone-file behavior and never touches the library. Its default Downloads
@@ -112,7 +116,7 @@ Start with `npm --prefix model run dcf-mcp` (or `dcf mcp`).
 | `model_inspect` | Manifest + company row + revision count + snapshot; includes `manifestHashMatch` and a `workbookSummary` (sheets, formula count, cached errors, input gate) |
 | `filings_sync` | Shared service: live backend fetch (unified model data + SEC filings list via `GET /api/company/{ticker}/filings`), latest filing selected from the filings list for watch/update-ready reporting, normalized snapshot stored, watch updated; never writes workbooks |
 | `filing_latest` | Latest stored snapshot / update-ready flag plus `fetchedAt`, `ageHours`, `stale` (>24h), `lastCheck`; read-only, no network |
-| `workbook_read_cells` | Live cached values + formulas for up to 50 `{sheet, cell}` refs; read-only |
+| `workbook_read_cells` | Cached values + formulas for up to 50 `{sheet, cell}` refs from the accepted workbook, or the hash-checked pending candidate with `target: "candidate"`; read-only |
 | `workbook_validate` | Full xlsx inspection (same helper as CLI review): manifest/hash match, sheet + formula counts, cached formula errors, Input Required gate status. Reports `fullValidation: false` with a reason when the inspection engine is unavailable instead of pretending a hash check is full validation; read-only, no network |
 | `source_snapshot` | Stored normalized snapshot, paged (`offset`, `maxChars` 1–20000, default 4000; returns `totalChars`, `nextOffset`, `truncated`); read-only, no network |
 | `proposal_create` | Validates (exactly one of `proposedValue`/`proposedFormula`, `=`-prefixed formulas rejected in favor of explicit formula edits), defaults the base to the manifest hash and refuses stale bases, captures each cell's current literal/formula as `priorValue`/`priorFormula`, inserts with status `proposed` |

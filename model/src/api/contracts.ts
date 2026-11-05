@@ -38,7 +38,7 @@ import type {
 } from '@/core/types';
 import {isProductionModelRoute} from '@/core/types/native';
 import {selectBiotechAssetsForRnpv, selectOtherBiotechAssetsForRnpv} from '@/services/valuation/biotech-rnpv-model';
-import type { AssetManagerModelExportData, BiotechModelExportData, BankModelExportData, CompData, DcfExportPayload, DcfWorkbookPayload, IncompleteAssetManagerModelExportData, IncompleteBankModelExportData, IncompleteBiotechModelExportData, IncompleteComparableModelExportData, IncompleteDcfExportPayload, IncompleteIntegratedEnergyModelExportData, IncompleteInsuranceModelExportData, IncompleteLifeInsuranceModelExportData, IncompleteMaturePharmaModelExportData, IncompleteMortgageReitModelExportData, IncompleteReitModelExportData, IncompleteTelecomModelExportData, IncompleteUtilityModelExportData, IntegratedEnergyModelExportData, InsuranceModelExportData, MaturePharmaModelExportData, ModelAssumptions, MortgageReitModelExportData, ReitModelExportData, TelecomModelExportData, UtilityModelExportData, WorkbookInputRequirement } from '@/services/exporters/excel/types';
+import type { AssetManagerModelExportData, BiotechModelExportData, BankModelExportData, CompData, DcfExportPayload, DcfWorkbookPayload, IncompleteAssetManagerModelExportData, IncompleteBankModelExportData, IncompleteBiotechModelExportData, IncompleteComparableModelExportData, IncompleteDcfExportPayload, IncompleteIntegratedEnergyModelExportData, IncompleteInsuranceModelExportData, IncompleteLifeInsuranceModelExportData, IncompleteMaturePharmaModelExportData, IncompleteMortgageReitModelExportData, IncompleteReitModelExportData, IncompleteTelecomModelExportData, IncompleteUtilityModelExportData, IntegratedEnergyModelExportData, InsuranceModelExportData, MaturePharmaModelExportData, ModelAssumptions, MortgageReitModelExportData, ReitModelExportData, UnsupportedDcfExportPayload, UnsupportedExportClassification, TelecomModelExportData, UtilityModelExportData, WorkbookInputRequirement } from '@/services/exporters/excel/types';
 import type { BankModelAssumptions } from '@/services/valuation/bank-model';
 import type { InsuranceModelAssumptions } from '@/services/valuation/insurance-model';
 import type { ReitModelAssumptions } from '@/services/valuation/reit-model';
@@ -1916,6 +1916,44 @@ function parseIncompleteLifeInsuranceModelExportData(
   };
 }
 
+/** Status-only export: no valuation inputs may travel with a refused issuer. */
+function parseUnsupportedDcfExportPayload(payload: Record<string, unknown>): UnsupportedDcfExportPayload {
+  const company = requireRecord(requireExportField(payload, 'company', 'export'), 'export.company');
+  for (const field of ['name', 'ticker', 'currency', 'unitsScale', 'asOfDate']) {
+    requireString(company[field], `export.company.${field}`);
+  }
+  if (!['units', 'thousands', 'millions', 'billions'].includes(String(company.unitsScale))) {
+    throw new TypeError('export.company.unitsScale is not a supported scale');
+  }
+  const unsupported = requireRecord(requireExportField(payload, 'unsupported', 'export'), 'export.unsupported');
+  const classification: UnsupportedExportClassification = {
+    companyType: requireString(unsupported.companyType, 'export.unsupported.companyType'),
+    ...(unsupported.subtype === undefined || unsupported.subtype === null
+      ? {}
+      : {subtype: requireString(unsupported.subtype, 'export.unsupported.subtype')}),
+    attemptedModel: parseEnum(unsupported.attemptedModel, PREFERRED_MODELS, 'export.unsupported.attemptedModel'),
+    reason: requireString(unsupported.reason, 'export.unsupported.reason'),
+  };
+  if (payload.requiredInputs !== undefined && payload.requiredInputs !== null) {
+    if (!Array.isArray(payload.requiredInputs) || payload.requiredInputs.length > 0) {
+      throw new TypeError('unsupported exports cannot request workbook inputs');
+    }
+  }
+  for (const field of ['valuationModel', 'market', 'historicals', 'assumptions', 'forecasts']) {
+    if (payload[field] !== undefined && payload[field] !== null) {
+      throw new TypeError(`unsupported exports cannot carry ${field}`);
+    }
+  }
+  const uiMeta = payload.uiMeta === undefined || payload.uiMeta === null ? undefined : requireRecord(payload.uiMeta, 'export.uiMeta');
+  if (uiMeta?.warnings !== undefined) requireStringArray(uiMeta.warnings, 'export.uiMeta.warnings');
+  return {
+    buildStatus: 'unsupported',
+    company: company as unknown as UnsupportedDcfExportPayload['company'],
+    unsupported: classification,
+    ...(uiMeta ? {uiMeta: uiMeta as unknown as UnsupportedDcfExportPayload['uiMeta']} : {}),
+  };
+}
+
 function parseIncompleteDcfExportPayload(payload: Record<string, unknown>): IncompleteDcfExportPayload {
   const company = requireRecord(requireExportField(payload, 'company', 'export'), 'export.company');
   for (const field of ['name', 'ticker', 'currency', 'unitsScale', 'asOfDate']) {
@@ -2340,8 +2378,9 @@ function parseIncompleteDcfExportPayload(payload: Record<string, unknown>): Inco
 export function parseDcfExportPayload(value: unknown): DcfWorkbookPayload {
   const payload = requireRecord(value, 'export');
   const buildStatus = payload.buildStatus ?? 'ready';
+  if (buildStatus === 'unsupported') return parseUnsupportedDcfExportPayload(payload);
   if (buildStatus === 'input_required') return parseIncompleteDcfExportPayload(payload);
-  if (buildStatus !== 'ready') throw new TypeError('export.buildStatus must be ready or input_required');
+  if (buildStatus !== 'ready') throw new TypeError('export.buildStatus must be ready, input_required, or unsupported');
   const requiredInputs = payload.requiredInputs === undefined
     ? []
     : parseWorkbookInputRequirements(payload.requiredInputs);

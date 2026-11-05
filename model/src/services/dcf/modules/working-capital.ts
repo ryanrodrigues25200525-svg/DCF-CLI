@@ -7,6 +7,7 @@ export interface WorkingCapitalResult {
     accountsPayable: number;
     nwc: number;
     nwcChange: number;
+    intensityOverlay: number;
 }
 
 /**
@@ -35,6 +36,7 @@ export function projectWorkingCapital(
         inventory,
         accountsPayable,
         nwc,
-        nwcChange
+        nwcChange,
+        intensityOverlay
     };
 }

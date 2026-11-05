@@ -45,6 +45,7 @@ from .dcf import (
 )
 from .review import _map_data_review_sheet
 from .incomplete import apply_incomplete_workbook
+from .unsupported import apply_unsupported_workbook
 from app.services.valuation.model_eligibility import COMPARABLE_VALUATION_METHODS, PRODUCTION_MODEL_ROUTES
 from .utils import (
     SHEET_COMPS,
@@ -235,8 +236,11 @@ def apply_payload_to_workbook(workbook: Workbook, payload: dict[str, Any]) -> No
     ):
         apply_incomplete_workbook(workbook, payload)
         return
-    if build_status not in {"ready", "input_required"}:
+    if build_status not in {"ready", "input_required", "unsupported"}:
         raise ValueError(f"Unsupported workbook build status: {build_status}.")
+    if build_status == "unsupported":
+        apply_unsupported_workbook(workbook, payload)
+        return
 
     valuation_model = payload.get("valuationModel")
     if valuation_model is not None and valuation_model not in PRODUCTION_MODEL_ROUTES:

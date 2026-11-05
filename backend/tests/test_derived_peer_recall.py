@@ -8,7 +8,9 @@ sector screener and zero-industry-match sets continue to fail closed.
 
 from __future__ import annotations
 
-from typing import Any
+import sys
+import types
+from typing import Any, Callable, ContextManager
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -22,6 +24,20 @@ from app.services.finance.peers import (
     _rank_peer_details,
     fetch_peer_data_bundle,
 )
+
+
+def _fake_openbb(screener: Callable[..., MagicMock]) -> ContextManager[Any]:
+    """Inject a stand-in `openbb` SDK so the screener path runs without it.
+
+    `peers` imports `openbb` lazily and treats it as optional at runtime; the
+    real package drags every provider router, so the tests exercise the same
+    call shape with a stub instead of depending on an installed SDK.
+    """
+    module = types.ModuleType("openbb")
+    module.obb = types.SimpleNamespace(  # type: ignore[attr-defined]
+        equity=types.SimpleNamespace(screener=screener)
+    )
+    return patch.dict(sys.modules, {"openbb": module})
 
 
 def test_industry_slug_mapping_display_names() -> None:
@@ -88,9 +104,7 @@ async def test_derive_peer_symbols_prioritizes_industry_candidates() -> None:
         {"symbol": "LOW", "market_cap": 110_000_000_000.0},
     ])
 
-    import openbb.package.equity
-
-    def mock_screener(self: Any, *args: Any, **kwargs: Any) -> MagicMock:
+    def mock_screener(*args: Any, **kwargs: Any) -> MagicMock:
         res = MagicMock()
         if kwargs.get("industry") == "home_improvement_retail":
             res.to_df.return_value = ind_df
@@ -98,7 +112,7 @@ async def test_derive_peer_symbols_prioritizes_industry_candidates() -> None:
             res.to_df.return_value = sec_df
         return res
 
-    with patch.object(openbb.package.equity.ROUTER_equity, "screener", mock_screener):
+    with _fake_openbb(mock_screener):
         with patch.object(peers_module, "_sec_filer_tickers", return_value={"LOW", "HD", "FND", "TSLA", "RCL", "DASH", "VIK", "CCL", "GPC"}):
             symbols = await _derive_peer_symbols_from_screener(
                 ticker="HD",
@@ -124,15 +138,13 @@ async def test_derive_peer_symbols_fallback_when_unmapped() -> None:
         {"symbol": "MNST", "market_cap": 50_000_000_000.0},
     ])
 
-    import openbb.package.equity
-
-    def mock_screener(self: Any, *args: Any, **kwargs: Any) -> MagicMock:
+    def mock_screener(*args: Any, **kwargs: Any) -> MagicMock:
         assert "industry" not in kwargs or kwargs["industry"] is None
         res = MagicMock()
         res.to_df.return_value = sec_df
         return res
 
-    with patch.object(openbb.package.equity.ROUTER_equity, "screener", mock_screener):
+    with _fake_openbb(mock_screener):
         with patch.object(peers_module, "_sec_filer_tickers", return_value={"KO", "PEP", "MNST"}):
             symbols = await _derive_peer_symbols_from_screener(
                 ticker="KO",

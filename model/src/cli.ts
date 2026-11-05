@@ -814,7 +814,9 @@ async function cmdCandidateVerify(candidateIdRaw: string | undefined, flags: Glo
   try {
     const view = await recordCandidateVerification(lib, root, candidateIdRaw, flags.verification, flags.approvedBy);
     console.log(`Recorded AI verification for candidate ${view.id} (reviewed by ${flags.approvedBy}).`);
-    console.log(`Promote with explicit human approval: \`dcf model accept ${view.id} --approve [--by <name>]\`.`);
+    console.log(view.payload.readiness === 'review_required'
+      ? 'Resolve the model integrity warning and rebuild before acceptance.'
+      : `Promote with explicit human approval: \`dcf model accept ${view.id} --approve [--by <name>]\`.`);
   } finally {
     lib.close();
   }
